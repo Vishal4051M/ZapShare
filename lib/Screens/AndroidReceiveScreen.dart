@@ -15,7 +15,7 @@ class DownloadTask {
 }
 
 class AndroidReceiveScreen extends StatefulWidget {
-  const AndroidReceiveScreen({Key? key}) : super(key: key);
+  const AndroidReceiveScreen({super.key});
   @override
   State<AndroidReceiveScreen> createState() => _AndroidReceiveScreenState();
 }
@@ -26,7 +26,7 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
   List<DownloadTask> _tasks = [];
   bool _downloading = false;
   int _activeDownloads = 0;
-  int _maxParallel = 2;
+  final int _maxParallel = 2;
   String? _serverIp;
   List<Map<String, dynamic>> _fileList = [];
 
@@ -59,10 +59,8 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
 
   Future<void> _pickSaveFolder() async {
     String? result = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Select Folder to Save');
-    if (result != null) {
-      setState(() => _saveFolder = result);
+    setState(() => _saveFolder = result);
     }
-  }
 
   bool _decodeCode(String code) {
     try {
@@ -93,7 +91,7 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
         final List files = jsonDecode(resp.body);
         _fileList = files.cast<Map<String, dynamic>>();
         _tasks = _fileList.map((f) => DownloadTask(
-          url: 'http://$_serverIp:8080/file/' + f['index'].toString(),
+          url: 'http://$_serverIp:8080/file/${f['index']}',
           savePath: '',
           progress: 0.0,
           status: 'Waiting',
@@ -181,7 +179,6 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('ZapShare - Receive'),
-        backgroundColor: Colors.black,
       ),
       body: Padding(
         padding: const EdgeInsets.all(24.0),

@@ -8,7 +8,7 @@ import 'dart:convert';
 const Color kAccentYellow = Color(0xFFFFD600);
 
 class WindowsFileShareScreen extends StatefulWidget {
-  const WindowsFileShareScreen({Key? key}) : super(key: key);
+  const WindowsFileShareScreen({super.key});
   @override
   State<WindowsFileShareScreen> createState() => _WindowsFileShareScreenState();
 }
@@ -41,19 +41,6 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
   Future<void> _fetchLocalIp() async {
     final info = NetworkInfo();
     String? ip = await info.getWifiIP();
-    if (ip == null) {
-      // Fallback: get first non-loopback IPv4 from all interfaces (Ethernet support)
-      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4, includeLoopback: false);
-      for (final interface in interfaces) {
-        for (final addr in interface.addresses) {
-          if (!addr.isLoopback && addr.type == InternetAddressType.IPv4) {
-            ip = addr.address;
-            break;
-          }
-        }
-        if (ip != null) break;
-      }
-    }
     setState(() {
       _localIp = ip;
       _displayCode = ip != null ? _ipToCode(ip) : null;
@@ -75,20 +62,19 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
 
   Future<void> _pickFolder() async {
     String? folderPath = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Select Folder to Share');
-    if (folderPath != null) {
-      final dir = Directory(folderPath);
-      final files = await dir.list(recursive: true, followLinks: false).where((e) => e is File).toList();
-      setState(() {
-        _files = files.map((e) => PlatformFile(
-          name: e.uri.pathSegments.last,
-          path: e.path,
-          size: File(e.path).lengthSync(),
-        )).toList();
-        _progressList = List.filled(_files.length, 0.0);
-        if (_localIp != null) _displayCode = _ipToCode(_localIp!);
-      });
+    if (folderPath == null) return;
+    final dir = Directory(folderPath);
+    final files = await dir.list(recursive: true, followLinks: false).where((e) => e is File).toList();
+    setState(() {
+      _files = files.map((e) => PlatformFile(
+        name: e.uri.pathSegments.last,
+        path: e.path,
+        size: File(e.path).lengthSync(),
+      )).toList();
+      _progressList = List.filled(_files.length, 0.0);
+      if (_localIp != null) _displayCode = _ipToCode(_localIp!);
+    });
     }
-  }
 
   Future<void> _startServer() async {
     if (_files.isEmpty) return;
@@ -166,125 +152,225 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ZapShare'),
-        backgroundColor: Colors.black,
+        title: const Text('ZapShare',textAlign: TextAlign.center,style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold), ),
       ),
-      body: Center(
-        child: _loading
-            ? CircularProgressIndicator(color: kAccentYellow)
-            : _localIp == null
-                ? Padding(
-                    padding: const EdgeInsets.all(24.0),
-                    child: Text(
-                      "No network connection detected. Please connect to WiFi or Ethernet.",
-                      style: TextStyle(color: Colors.red, fontSize: 16, fontWeight: FontWeight.bold),
-                      textAlign: TextAlign.center,
-                    ),
-                  )
-                : _files.isEmpty
-                    ? const Text("No file selected", style: TextStyle(color: Colors.white))
-                    : Column(
-                        mainAxisAlignment: MainAxisAlignment.start,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          if (_isSharing && _displayCode != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 32, bottom: 12),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  SelectableText(
-                                    _displayCode!,
-                                    style: TextStyle(fontSize: 32, color: kAccentYellow, fontWeight: FontWeight.bold, letterSpacing: 2, shadows: [Shadow(color: Colors.black26, blurRadius: 6)]),
+      body: Stack(
+        children: [
+          // Main content
+          Center(
+            child: _loading
+                ? CircularProgressIndicator(color: kAccentYellow)
+                : _localIp == null
+                    ? Padding(
+                        padding: const EdgeInsets.all(24.0),
+                        child: Text(
+                          "No network connection detected. Please connect to WiFi or Ethernet.",
+                          style: TextStyle(color: Colors.red, fontSize: 16, fontWeight: FontWeight.bold),
+                          textAlign: TextAlign.center,
+                        ),
+                      )
+                    : _files.isEmpty
+                        ? const Text("No file selected", style: TextStyle(color: Colors.white))
+                        : Column(
+                            mainAxisAlignment: MainAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              if (_isSharing && _displayCode != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 32, bottom: 12),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      SelectableText(
+                                        _displayCode!,
+                                        style: TextStyle(fontSize: 32, color: kAccentYellow, fontWeight: FontWeight.bold, letterSpacing: 2, shadows: [Shadow(color: Colors.black26, blurRadius: 6)]),
+                                      ),
+                                      IconButton(
+                                        icon: Icon(Icons.copy, color: Colors.black),
+                                        tooltip: "Copy Code",
+                                        onPressed: () {
+                                          Clipboard.setData(ClipboardData(text: _displayCode!));
+                                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Code copied!")));
+                                        },
+                                      ),
+                                    ],
                                   ),
-                                  IconButton(
-                                    icon: Icon(Icons.copy, color: Colors.black),
-                                    tooltip: "Copy Code",
-                                    onPressed: () {
-                                      Clipboard.setData(ClipboardData(text: _displayCode!));
-                                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Code copied!")));
-                                    },
+                                ),
+                              if (_isSharing && _displayCode != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 16),
+                                  child: Text(
+                                    "Share this code with the receiver.",
+                                    style: TextStyle(fontSize: 15, color: Colors.black87),
+                                    textAlign: TextAlign.center,
                                   ),
-                                ],
+                                ),
+                              Expanded(
+                                child: ListView.builder(
+                                  itemCount: _files.length,
+                                  itemBuilder: (context, index) {
+                                    return Card(
+                                      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 24),
+                                      child: ListTile(
+                                        title: Text(_files[index].name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                                        subtitle: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(_files[index].size != null ? '${_files[index].size} bytes' : '', style: const TextStyle(fontSize: 12)),
+                                            if (_isSharing)
+                                              Padding(
+                                                padding: const EdgeInsets.only(top: 6),
+                                                child: LinearProgressIndicator(
+                                                  value: _progressList.length > index ? _progressList[index] : 0.0,
+                                                  backgroundColor: Colors.black.withOpacity(0.12),
+                                                  color: Colors.black,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
                               ),
-                            ),
-                          if (_isSharing && _displayCode != null)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 16),
-                              child: Text(
-                                "Share this code with the receiver.",
-                                style: TextStyle(fontSize: 15, color: Colors.black87),
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                          Expanded(
-                            child: ListView.builder(
-                              itemCount: _files.length,
-                              itemBuilder: (context, index) {
-                                return Card(
-                                  margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 24),
-                                  child: ListTile(
-                                    title: Text(_files[index].name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                                    subtitle: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(_files[index].size != null ? _files[index].size.toString() + ' bytes' : '', style: const TextStyle(fontSize: 12)),
-                                        if (_isSharing)
-                                          Padding(
-                                            padding: const EdgeInsets.only(top: 6),
-                                            child: LinearProgressIndicator(
-                                              value: _progressList.length > index ? _progressList[index] : 0.0,
-                                              backgroundColor: Colors.black.withOpacity(0.12),
-                                              color: Colors.black,
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
+                            ],
                           ),
-                        ],
-                      ),
+          ),
+          
+          // Left side panel
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            child: Container(
+              width: 80,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _buildSideIcon(
+                    icon: Icons.attach_file_rounded,
+                    tooltip: "Pick Files",
+                    onPressed: _pickFiles,
+                    color: kAccentYellow,
+                  ),
+                  const SizedBox(height: 16),
+                  _buildSideIcon(
+                    icon: Icons.folder_rounded,
+                    tooltip: "Pick Folder",
+                    onPressed: _pickFolder,
+                    color: kAccentYellow,
+                  ),
+                  const SizedBox(height: 16),
+                  _buildSideIcon(
+                    icon: Icons.refresh_rounded,
+                    tooltip: "Refresh Network",
+                    onPressed: _fetchLocalIp,
+                    color: Colors.blue,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          // Right side panel
+          Positioned(
+            right: 0,
+            top: 0,
+            bottom: 0,
+            child: Container(
+              width: 80,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _buildSideIcon(
+                    icon: _isSharing ? Icons.stop_rounded : Icons.send_rounded,
+                    tooltip: _isSharing ? "Stop Sharing" : "Start Sharing",
+                    onPressed: (_files.isEmpty || _loading || _localIp == null)
+                        ? null
+                        : _isSharing
+                            ? _stopServer
+                            : _startServer,
+                    color: _files.isEmpty
+                        ? Colors.grey
+                        : _isSharing
+                            ? Colors.red
+                            : kAccentYellow,
+                  ),
+                  const SizedBox(height: 16),
+                  _buildSideIcon(
+                    icon: Icons.clear_all_rounded,
+                    tooltip: "Clear Files",
+                    onPressed: _files.isEmpty ? null : () {
+                      setState(() {
+                        _files.clear();
+                        _progressList.clear();
+                      });
+                    },
+                    color: _files.isEmpty ? Colors.grey : Colors.orange,
+                  ),
+                  const SizedBox(height: 16),
+                  _buildSideIcon(
+                    icon: Icons.info_outline_rounded,
+                    tooltip: "App Info",
+                    onPressed: () {
+                      showDialog(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: Text('ZapShare Info'),
+                          content: Text('Version 1.0.0\n\nA fast and secure file sharing app.'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: Text('OK'),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                    color: Colors.green,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 28, right: 12),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            FloatingActionButton(
-              onPressed: _pickFiles,
-              backgroundColor: kAccentYellow,
-              tooltip: "Pick Files",
-              child: Icon(Icons.attach_file_rounded, color: Colors.black, size: 28, shadows: [Shadow(color: kAccentYellow.withOpacity(0.4), blurRadius: 8)]),
-              elevation: 6,
+    );
+  }
+
+  Widget _buildSideIcon({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onPressed,
+    required Color color,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: onPressed,
+            child: Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: onPressed != null ? color.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: onPressed != null ? color.withOpacity(0.3) : Colors.grey.withOpacity(0.3),
+                  width: 1,
+                ),
+              ),
+              child: Icon(
+                icon,
+                color: onPressed != null ? color : Colors.grey,
+                size: 24,
+              ),
             ),
-            SizedBox(height: 12),
-            FloatingActionButton(
-              onPressed: _pickFolder,
-              backgroundColor: kAccentYellow,
-              tooltip: "Pick Folder",
-              child: Icon(Icons.folder, color: Colors.black, size: 28, shadows: [Shadow(color: kAccentYellow.withOpacity(0.4), blurRadius: 8)]),
-              elevation: 6,
-            ),
-            SizedBox(height: 12),
-            FloatingActionButton(
-              onPressed: (_files.isEmpty || _loading || _localIp == null)
-                  ? null
-                  : _isSharing
-                      ? _stopServer
-                      : _startServer,
-              backgroundColor: _files.isEmpty
-                  ? Colors.grey
-                  : _isSharing
-                      ? Colors.red
-                      : kAccentYellow,
-              tooltip: _isSharing ? "Stop Sharing" : "Send Files",
-              child: Icon(_isSharing ? Icons.stop_circle_rounded : Icons.send_rounded, color: Colors.black, size: 28, shadows: [Shadow(color: kAccentYellow.withOpacity(0.4), blurRadius: 8)]),
-              elevation: 6,
-            ),
-          ],
+          ),
         ),
       ),
     );

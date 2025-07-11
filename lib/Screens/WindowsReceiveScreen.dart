@@ -7,7 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
 
 class WindowsReceiveScreen extends StatefulWidget {
-  const WindowsReceiveScreen({Key? key}) : super(key: key);
+  const WindowsReceiveScreen({super.key});
   @override
   State<WindowsReceiveScreen> createState() => _WindowsReceiveScreenState();
 }
@@ -26,7 +26,7 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
   List<DownloadTask> _tasks = [];
   bool _downloading = false;
   int _activeDownloads = 0;
-  int _maxParallel = 2;
+  final int _maxParallel = 2;
   String? _serverIp;
   List<Map<String, dynamic>> _fileList = [];
 
@@ -59,10 +59,8 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
 
   Future<void> _pickSaveFolder() async {
     String? result = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Select Folder to Save');
-    if (result != null) {
-      setState(() => _saveFolder = result);
+    setState(() => _saveFolder = result);
     }
-  }
 
   bool _decodeCode(String code) {
     try {
@@ -93,7 +91,7 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
         final List files = jsonDecode(resp.body);
         _fileList = files.cast<Map<String, dynamic>>();
         _tasks = _fileList.map((f) => DownloadTask(
-          url: 'http://$_serverIp:8080/file/' + f['index'].toString(),
+          url: 'http://$_serverIp:8080/file/${f['index']}',
           savePath: '',
           progress: 0.0,
           status: 'Waiting',
@@ -172,7 +170,6 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('ZapShare - Receive (Windows)'),
-        backgroundColor: Colors.black,
       ),
       body: Padding(
         padding: const EdgeInsets.all(24.0),

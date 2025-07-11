@@ -13,6 +13,8 @@ import 'dart:convert';
 const Color kAndroidAccentYellow = Color(0xFFFFF176); // lighter yellow for Android
 
 class HttpFileShareScreen extends StatefulWidget {
+  const HttpFileShareScreen({super.key});
+
   @override
   _HttpFileShareScreenState createState() => _HttpFileShareScreenState();
 }
@@ -30,7 +32,7 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
   bool _loading = false;
   String? initialUri;
   List<String>? mimeTypes;
-  bool _multipleFiles = true;
+  final bool _multipleFiles = true;
 
   // Per-file progress and pause state for parallel transfers
   List<ValueNotifier<double>> _progressList = [];
@@ -882,7 +884,6 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text("ZapShare"),
-        backgroundColor: Colors.black,
       ),
       body: Center(
         child: _loading
@@ -966,16 +967,16 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
               onPressed: _selectFiles,
               backgroundColor: kAndroidAccentYellow,
               tooltip: "Pick Files",
-              child: Icon(Icons.attach_file_rounded, color: Colors.black, size: 28, shadows: [Shadow(color: kAndroidAccentYellow.withOpacity(0.4), blurRadius: 8)]),
               elevation: 6,
+              child: Icon(Icons.attach_file_rounded, color: Colors.black, size: 28, shadows: [Shadow(color: kAndroidAccentYellow.withOpacity(0.4), blurRadius: 8)]),
             ),
             SizedBox(height: 12),
             FloatingActionButton(
               onPressed: _pickFolder,
               backgroundColor: kAndroidAccentYellow,
               tooltip: "Pick Folder",
-              child: Icon(Icons.folder, color: Colors.black, size: 28, shadows: [Shadow(color: kAndroidAccentYellow.withOpacity(0.4), blurRadius: 8)]),
               elevation: 6,
+              child: Icon(Icons.folder, color: Colors.black, size: 28, shadows: [Shadow(color: kAndroidAccentYellow.withOpacity(0.4), blurRadius: 8)]),
             ),
             SizedBox(height: 12),
             FloatingActionButton(
@@ -990,8 +991,8 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
                       ? Colors.red
                       : kAndroidAccentYellow,
               tooltip: _isSharing ? "Stop Sharing" : "Send Files",
-              child: Icon(_isSharing ? Icons.stop_circle_rounded : Icons.send_rounded, color: Colors.black, size: 28, shadows: [Shadow(color: kAndroidAccentYellow.withOpacity(0.4), blurRadius: 8)]),
               elevation: 6,
+              child: Icon(_isSharing ? Icons.stop_circle_rounded : Icons.send_rounded, color: Colors.black, size: 28, shadows: [Shadow(color: kAndroidAccentYellow.withOpacity(0.4), blurRadius: 8)]),
             ),
           ],
         ),

@@ -35,7 +35,7 @@ class TransferHistoryEntry {
 }
 
 class TransferHistoryScreen extends StatefulWidget {
-  const TransferHistoryScreen({Key? key}) : super(key: key);
+  const TransferHistoryScreen({super.key});
   @override
   State<TransferHistoryScreen> createState() => _TransferHistoryScreenState();
 }

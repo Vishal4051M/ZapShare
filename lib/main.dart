@@ -80,19 +80,124 @@ class DataRushApp extends StatelessWidget {
     return MaterialApp(
       theme: ThemeData(
         brightness: Brightness.dark,
-        primaryColor: Colors.yellow,
+        primaryColor: const Color(0xFFFFD600),
         scaffoldBackgroundColor: Colors.black,
-        bottomNavigationBarTheme: const BottomNavigationBarThemeData(
+        appBarTheme: const AppBarTheme(
           backgroundColor: Colors.black,
-          selectedItemColor: Colors.yellow,
-          unselectedItemColor: Colors.white,
+          elevation: 0,
+          centerTitle: true,
+          titleTextStyle: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.5,
+          ),
+        ),
+        cardTheme: CardTheme(
+          color: const Color(0xFF1A1A1A),
+          elevation: 8,
+          shadowColor: Colors.black.withOpacity(0.3),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFFFD600),
+            foregroundColor: Colors.black,
+            elevation: 4,
+            shadowColor: const Color(0xFFFFD600).withOpacity(0.3),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            textStyle: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ),
+        floatingActionButtonTheme: const FloatingActionButtonThemeData(
+          backgroundColor: Color(0xFFFFD600),
+          foregroundColor: Colors.black,
+          elevation: 8,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(16)),
+          ),
+        ),
+        bottomNavigationBarTheme: const BottomNavigationBarThemeData(
+          backgroundColor: Color(0xFF1A1A1A),
+          selectedItemColor: Color(0xFFFFD600),
+          unselectedItemColor: Colors.white70,
+          type: BottomNavigationBarType.fixed,
+          elevation: 8,
+        ),
+        textTheme: const TextTheme(
+          headlineLarge: TextStyle(
+            color: Colors.white,
+            fontSize: 32,
+            fontWeight: FontWeight.bold,
+            letterSpacing: -0.5,
+          ),
+          headlineMedium: TextStyle(
+            color: Colors.white,
+            fontSize: 24,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.25,
+          ),
+          titleLarge: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0,
+          ),
+          titleMedium: TextStyle(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 0.15,
+          ),
+          bodyLarge: TextStyle(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.normal,
+            letterSpacing: 0.5,
+          ),
+          bodyMedium: TextStyle(
+            color: Colors.white70,
+            fontSize: 14,
+            fontWeight: FontWeight.normal,
+            letterSpacing: 0.25,
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: const Color(0xFF2A2A2A),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Color(0xFFFFD600), width: 2),
+          ),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          hintStyle: TextStyle(
+            color: Colors.white.withOpacity(0.5),
+            fontSize: 16,
+          ),
         ),
       ),
       home: Platform.isAndroid
           ? const AndroidNavBar()
           : Platform.isWindows
               ? const WindowsNavBar()
-              :  HttpFileShareScreen(),
+              : HttpFileShareScreen(),
       debugShowCheckedModeBanner: false,
     );
   }
@@ -172,79 +277,88 @@ class _WindowsNavBarState extends State<WindowsNavBar> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Row(
-        children: [
-          Container(
-            width: 60,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.10),
-              borderRadius: const BorderRadius.only(
-                topRight: Radius.circular(18),
-                bottomRight: Radius.circular(18),
-              ),
-            ),
-            margin: const EdgeInsets.symmetric(vertical: 24, horizontal: 8),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                const SizedBox(height: 12),
-                _VSCodeSidebarButton(
-                  icon: Icons.upload_rounded,
-                  tooltip: 'Send',
-                  selected: _selectedIndex == 0,
-                  onTap: () => setState(() => _selectedIndex = 0),
-                ),
-                _VSCodeSidebarButton(
-                  icon: Icons.download_rounded,
-                  tooltip: 'Receive',
-                  selected: _selectedIndex == 1,
-                  onTap: () => setState(() => _selectedIndex = 1),
-                ),
-                _VSCodeSidebarButton(
-                  icon: Icons.history_rounded,
-                  tooltip: 'History',
-                  selected: _selectedIndex == 2,
-                  onTap: () => setState(() => _selectedIndex = 2),
-                ),
-                const Spacer(),
-              ],
-            ),
+      body: _screens[_selectedIndex],
+      bottomNavigationBar: Container(
+        margin: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.black,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: Colors.white.withOpacity(0.1),
+            width: 1,
           ),
-          Expanded(child: _screens[_selectedIndex]),
-        ],
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _buildDockItem(
+                icon: Icons.upload_rounded,
+                label: 'Send',
+                selected: _selectedIndex == 0,
+                onTap: () => setState(() => _selectedIndex = 0),
+              ),
+              _buildDockItem(
+                icon: Icons.download_rounded,
+                label: 'Receive',
+                selected: _selectedIndex == 1,
+                onTap: () => setState(() => _selectedIndex = 1),
+              ),
+              _buildDockItem(
+                icon: Icons.history_rounded,
+                label: 'History',
+                selected: _selectedIndex == 2,
+                onTap: () => setState(() => _selectedIndex = 2),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
-}
 
-class _VSCodeSidebarButton extends StatelessWidget {
-  final IconData icon;
-  final String tooltip;
-  final bool selected;
-  final VoidCallback onTap;
-  const _VSCodeSidebarButton({required this.icon, required this.tooltip, required this.selected, required this.onTap});
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      verticalOffset: 0,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
+  Widget _buildDockItem({
+    required IconData icon,
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: GestureDetector(
         onTap: onTap,
         child: Container(
-          width: 48,
-          height: 48,
-          margin: const EdgeInsets.symmetric(vertical: 6),
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
           decoration: BoxDecoration(
-            color: selected ? Colors.yellow.withOpacity(0.18) : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
-            border: selected
-                ? Border(
-                    left: BorderSide(color: Colors.yellow, width: 4),
-                  )
-                : null,
+            color: selected ? kAccentYellow.withOpacity(0.15) : Colors.transparent,
+            borderRadius: BorderRadius.circular(16),
           ),
-          child: Icon(icon, color: selected ? Colors.yellow : Colors.white, size: 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                color: selected ? kAccentYellow : Colors.white70,
+                size: 24,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  color: selected ? kAccentYellow : Colors.white70,
+                  fontSize: 12,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
