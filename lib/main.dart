@@ -5,6 +5,7 @@ import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:zap_share/Screens/HomeScreen.dart';
 import 'package:zap_share/Screens/HttpFileShareScreen.dart';
 import 'Screens/WindowsFileShareScreen.dart';
 import 'Screens/WindowsReceiveScreen.dart';
@@ -194,7 +195,7 @@ class DataRushApp extends StatelessWidget {
         ),
       ),
       home: Platform.isAndroid
-          ? const AndroidNavBar()
+          ? const HomeScreen()
           : Platform.isWindows
               ? const WindowsNavBar()
               : HttpFileShareScreen(),
@@ -265,8 +266,12 @@ class WindowsNavBar extends StatefulWidget {
   State<WindowsNavBar> createState() => _WindowsNavBarState();
 }
 
-class _WindowsNavBarState extends State<WindowsNavBar> {
+class _WindowsNavBarState extends State<WindowsNavBar> with SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
+  bool _isCollapsed = false;
+  final double _collapsedWidth = 64;
+  final double _expandedWidth = 180;
+  final Duration _animationDuration = Duration(milliseconds: 250);
   final List<Widget> _screens = [
     WindowsFileShareScreen(),
     WindowsReceiveScreen(),
@@ -277,88 +282,118 @@ class _WindowsNavBarState extends State<WindowsNavBar> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: _screens[_selectedIndex],
-      bottomNavigationBar: Container(
-        margin: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.black,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: Colors.white.withOpacity(0.1),
-            width: 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.3),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      body: Stack(
+        children: [
+          Row(
             children: [
-              _buildDockItem(
-                icon: Icons.upload_rounded,
-                label: 'Send',
-                selected: _selectedIndex == 0,
-                onTap: () => setState(() => _selectedIndex = 0),
+              AnimatedContainer(
+                duration: _animationDuration,
+                width: _isCollapsed ? _collapsedWidth : _expandedWidth,
+                curve: Curves.easeInOut,
+                margin: EdgeInsets.only(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  right: 0,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF23272F).withOpacity(0.95),
+                  borderRadius: BorderRadius.only(
+                    topRight: Radius.circular(24),
+                    bottomRight: Radius.circular(24),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.25),
+                      blurRadius: 24,
+                      offset: Offset(4, 8),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    SizedBox(height: 24),
+                    IconButton(
+                      icon: Icon(_isCollapsed ? Icons.chevron_right : Icons.chevron_left, color: Colors.white70),
+                      tooltip: _isCollapsed ? 'Expand Navigation' : 'Collapse Navigation',
+                      onPressed: () {
+                        setState(() {
+                          _isCollapsed = !_isCollapsed;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    _buildNavItem(
+                      icon: Icons.upload_rounded,
+                      label: 'Send',
+                      selected: _selectedIndex == 0,
+                      onTap: () => setState(() => _selectedIndex = 0),
+                      collapsed: _isCollapsed,
+                    ),
+                    _buildNavItem(
+                      icon: Icons.download_rounded,
+                      label: 'Receive',
+                      selected: _selectedIndex == 1,
+                      onTap: () => setState(() => _selectedIndex = 1),
+                      collapsed: _isCollapsed,
+                    ),
+                    _buildNavItem(
+                      icon: Icons.history_rounded,
+                      label: 'History',
+                      selected: _selectedIndex == 2,
+                      onTap: () => setState(() => _selectedIndex = 2),
+                      collapsed: _isCollapsed,
+                    ),
+                    Spacer(),
+                  ],
+                ),
               ),
-              _buildDockItem(
-                icon: Icons.download_rounded,
-                label: 'Receive',
-                selected: _selectedIndex == 1,
-                onTap: () => setState(() => _selectedIndex = 1),
-              ),
-              _buildDockItem(
-                icon: Icons.history_rounded,
-                label: 'History',
-                selected: _selectedIndex == 2,
-                onTap: () => setState(() => _selectedIndex = 2),
-              ),
+              Expanded(child: _screens[_selectedIndex]),
             ],
           ),
-        ),
+        ],
       ),
     );
   }
 
-  Widget _buildDockItem({
+  Widget _buildNavItem({
     required IconData icon,
     required String label,
     required bool selected,
     required VoidCallback onTap,
+    required bool collapsed,
   }) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-          decoration: BoxDecoration(
-            color: selected ? kAccentYellow.withOpacity(0.15) : Colors.transparent,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                icon,
-                color: selected ? kAccentYellow : Colors.white70,
-                size: 24,
-              ),
-              const SizedBox(height: 4),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: AnimatedContainer(
+        duration: _animationDuration,
+        margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        padding: EdgeInsets.symmetric(vertical: 12, horizontal: collapsed ? 0 : 10),
+        decoration: BoxDecoration(
+          color: selected ? kAccentYellow.withOpacity(0.18) : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          mainAxisAlignment: collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
+          children: [
+            Icon(
+              icon,
+              color: selected ? kAccentYellow : Colors.white70,
+              size: 28,
+            ),
+            if (!collapsed) ...[
+              const SizedBox(width: 18),
               Text(
                 label,
                 style: TextStyle(
                   color: selected ? kAccentYellow : Colors.white70,
-                  fontSize: 12,
+                  fontSize: 16,
                   fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
                 ),
               ),
             ],
-          ),
+          ],
         ),
       ),
     );

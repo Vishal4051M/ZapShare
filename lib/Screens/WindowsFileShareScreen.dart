@@ -23,6 +23,8 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
   String? _displayCode;
 
   final _pageController = PageController();
+  // Removed: bool _isNavExpanded = false;
+  // Removed: int _selectedNavIndex = 0;
 
   String _ipToCode(String ip) {
     final parts = ip.split('.').map(int.parse).toList();
@@ -141,6 +143,13 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
     setState(() => _isSharing = false);
   }
 
+  void _clearFiles() {
+    setState(() {
+      _files.clear();
+      _progressList.clear();
+    });
+  }
+
   @override
   void dispose() {
     _server?.close(force: true);
@@ -156,180 +165,39 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
       ),
       body: Stack(
         children: [
-          // Main content
-          Center(
-            child: _loading
-                ? CircularProgressIndicator(color: kAccentYellow)
-                : _localIp == null
-                    ? Padding(
-                        padding: const EdgeInsets.all(24.0),
-                        child: Text(
-                          "No network connection detected. Please connect to WiFi or Ethernet.",
-                          style: TextStyle(color: Colors.red, fontSize: 16, fontWeight: FontWeight.bold),
-                          textAlign: TextAlign.center,
-                        ),
-                      )
-                    : _files.isEmpty
-                        ? const Text("No file selected", style: TextStyle(color: Colors.white))
-                        : Column(
-                            mainAxisAlignment: MainAxisAlignment.start,
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              if (_isSharing && _displayCode != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 32, bottom: 12),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      SelectableText(
-                                        _displayCode!,
-                                        style: TextStyle(fontSize: 32, color: kAccentYellow, fontWeight: FontWeight.bold, letterSpacing: 2, shadows: [Shadow(color: Colors.black26, blurRadius: 6)]),
-                                      ),
-                                      IconButton(
-                                        icon: Icon(Icons.copy, color: Colors.black),
-                                        tooltip: "Copy Code",
-                                        onPressed: () {
-                                          Clipboard.setData(ClipboardData(text: _displayCode!));
-                                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Code copied!")));
-                                        },
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              if (_isSharing && _displayCode != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 16),
-                                  child: Text(
-                                    "Share this code with the receiver.",
-                                    style: TextStyle(fontSize: 15, color: Colors.black87),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ),
-                              Expanded(
-                                child: ListView.builder(
-                                  itemCount: _files.length,
-                                  itemBuilder: (context, index) {
-                                    return Card(
-                                      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 24),
-                                      child: ListTile(
-                                        title: Text(_files[index].name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                                        subtitle: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Text(_files[index].size != null ? '${_files[index].size} bytes' : '', style: const TextStyle(fontSize: 12)),
-                                            if (_isSharing)
-                                              Padding(
-                                                padding: const EdgeInsets.only(top: 6),
-                                                child: LinearProgressIndicator(
-                                                  value: _progressList.length > index ? _progressList[index] : 0.0,
-                                                  backgroundColor: Colors.black.withOpacity(0.12),
-                                                  color: Colors.black,
-                                                ),
-                                              ),
-                                          ],
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            ],
-                          ),
-          ),
-          
-          // Left side panel
+          _buildFileSharingContent(),
+          // App Info floating button (top right)
           Positioned(
-            left: 0,
-            top: 0,
-            bottom: 0,
-            child: Container(
-              width: 80,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _buildSideIcon(
-                    icon: Icons.attach_file_rounded,
-                    tooltip: "Pick Files",
-                    onPressed: _pickFiles,
-                    color: kAccentYellow,
-                  ),
-                  const SizedBox(height: 16),
-                  _buildSideIcon(
-                    icon: Icons.folder_rounded,
-                    tooltip: "Pick Folder",
-                    onPressed: _pickFolder,
-                    color: kAccentYellow,
-                  ),
-                  const SizedBox(height: 16),
-                  _buildSideIcon(
-                    icon: Icons.refresh_rounded,
-                    tooltip: "Refresh Network",
-                    onPressed: _fetchLocalIp,
-                    color: Colors.blue,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          
-          // Right side panel
-          Positioned(
-            right: 0,
-            top: 0,
-            bottom: 0,
-            child: Container(
-              width: 80,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _buildSideIcon(
-                    icon: _isSharing ? Icons.stop_rounded : Icons.send_rounded,
-                    tooltip: _isSharing ? "Stop Sharing" : "Start Sharing",
-                    onPressed: (_files.isEmpty || _loading || _localIp == null)
-                        ? null
-                        : _isSharing
-                            ? _stopServer
-                            : _startServer,
-                    color: _files.isEmpty
-                        ? Colors.grey
-                        : _isSharing
-                            ? Colors.red
-                            : kAccentYellow,
-                  ),
-                  const SizedBox(height: 16),
-                  _buildSideIcon(
-                    icon: Icons.clear_all_rounded,
-                    tooltip: "Clear Files",
-                    onPressed: _files.isEmpty ? null : () {
-                      setState(() {
-                        _files.clear();
-                        _progressList.clear();
-                      });
-                    },
-                    color: _files.isEmpty ? Colors.grey : Colors.orange,
-                  ),
-                  const SizedBox(height: 16),
-                  _buildSideIcon(
-                    icon: Icons.info_outline_rounded,
-                    tooltip: "App Info",
-                    onPressed: () {
-                      showDialog(
-                        context: context,
-                        builder: (context) => AlertDialog(
-                          title: Text('ZapShare Info'),
-                          content: Text('Version 1.0.0\n\nA fast and secure file sharing app.'),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(context),
-                              child: Text('OK'),
-                            ),
-                          ],
+            top: 32,
+            right: 32,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(24),
+                onTap: () {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: Text('ZapShare Info'),
+                      content: Text('Version 1.0.0\n\nA fast and secure file sharing app.'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: Text('OK'),
                         ),
-                      );
-                    },
-                    color: Colors.green,
+                      ],
+                    ),
+                  );
+                },
+                child: Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(24),
                   ),
-                ],
+                  child: Icon(Icons.info_outline_rounded, color: Colors.white, size: 26),
+                ),
               ),
             ),
           ),
@@ -338,41 +206,184 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
     );
   }
 
-  Widget _buildSideIcon({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback? onPressed,
-    required Color color,
-  }) {
-    return Tooltip(
-      message: tooltip,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 8),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: onPressed,
-            child: Container(
-              width: 56,
-              height: 56,
-              decoration: BoxDecoration(
-                color: onPressed != null ? color.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: onPressed != null ? color.withOpacity(0.3) : Colors.grey.withOpacity(0.3),
-                  width: 1,
-                ),
+  // Only show File Sharing content
+  Widget _buildFileSharingContent() {
+    return Stack(
+      children: [
+        Column(
+          children: [
+            // File action buttons row (without Start/Stop Sharing)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _buildActionButton(
+                    icon: Icons.attach_file_rounded,
+                    label: "Pick Files",
+                    onPressed: _pickFiles,
+                    color: kAccentYellow,
+                  ),
+                  const SizedBox(width: 16),
+                  _buildActionButton(
+                    icon: Icons.folder_rounded,
+                    label: "Pick Folder",
+                    onPressed: _pickFolder,
+                    color: kAccentYellow,
+                  ),
+                  const SizedBox(width: 16),
+                  _buildActionButton(
+                    icon: Icons.clear_all_rounded,
+                    label: "Clear Files",
+                    onPressed: _files.isEmpty ? null : _clearFiles,
+                    color: _files.isEmpty ? Colors.grey : Colors.orange,
+                  ),
+                ],
               ),
-              child: Icon(
-                icon,
-                color: onPressed != null ? color : Colors.grey,
-                size: 24,
+            ),
+            // Existing file sharing content
+            Expanded(
+              child: Center(
+                child: _loading
+                    ? CircularProgressIndicator(color: kAccentYellow)
+                    : _localIp == null
+                        ? Padding(
+                            padding: const EdgeInsets.all(24.0),
+                            child: Text(
+                              "No network connection detected. Please connect to WiFi or Ethernet.",
+                              style: TextStyle(color: Colors.red, fontSize: 16, fontWeight: FontWeight.bold),
+                              textAlign: TextAlign.center,
+                            ),
+                          )
+                        : _files.isEmpty
+                            ? const Text("No file selected", style: TextStyle(color: Colors.white))
+                            : Column(
+                                mainAxisAlignment: MainAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  if (_isSharing && _displayCode != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 32, bottom: 12),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          SelectableText(
+                                            _displayCode!,
+                                            style: TextStyle(fontSize: 32, color: kAccentYellow, fontWeight: FontWeight.bold, letterSpacing: 2, shadows: [Shadow(color: Colors.black26, blurRadius: 6)]),
+                                          ),
+                                          IconButton(
+                                            icon: Icon(Icons.copy, color: Colors.black),
+                                            tooltip: "Copy Code",
+                                            onPressed: () {
+                                              Clipboard.setData(ClipboardData(text: _displayCode!));
+                                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Code copied!")));
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  if (_isSharing && _displayCode != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 16),
+                                      child: Text(
+                                        "Share this code with the receiver.",
+                                        style: TextStyle(fontSize: 15, color: Colors.black87),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                                  Expanded(
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(top: 32),
+                                      child: Center(
+                                        child: ConstrainedBox(
+                                          constraints: BoxConstraints(maxWidth: 480),
+                                          child: ListView.builder(
+                                            itemCount: _files.length,
+                                            itemBuilder: (context, index) {
+                                              return Card(
+                                                margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 24),
+                                                child: ListTile(
+                                                  title: Text(_files[index].name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                                                  subtitle: Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text(_files[index].size != null ? '${_files[index].size} bytes' : '', style: const TextStyle(fontSize: 12)),
+                                                      if (_isSharing)
+                                                        Padding(
+                                                          padding: const EdgeInsets.only(top: 6),
+                                                          child: LinearProgressIndicator(
+                                                            value: _progressList.length > index ? _progressList[index] : 0.0,
+                                                            backgroundColor: Colors.black.withOpacity(0.12),
+                                                            color: Colors.black,
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+              ),
+            ),
+          ],
+        ),
+        // Bottom center Start/Stop Sharing button
+        if (_localIp != null)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 32,
+            child: Center(
+              child: ElevatedButton.icon(
+                icon: Icon(_isSharing ? Icons.stop_rounded : Icons.send_rounded, color: Colors.white),
+                label: Text(_isSharing ? "Stop Sharing" : "Start Sharing", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _files.isEmpty
+                      ? Colors.grey
+                      : _isSharing
+                          ? Colors.red
+                          : kAccentYellow,
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  elevation: 4,
+                ),
+                onPressed: (_files.isEmpty || _loading || _localIp == null)
+                    ? null
+                    : _isSharing
+                        ? _stopServer
+                        : _startServer,
               ),
             ),
           ),
-        ),
+      ],
+    );
+  }
+
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
+    required Color color,
+  }) {
+    return ElevatedButton.icon(
+      icon: Icon(icon, color: color),
+      label: Text(label, style: TextStyle(color: color)),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.white.withOpacity(0.08),
+        foregroundColor: color,
+        disabledBackgroundColor: Colors.grey.withOpacity(0.08),
+        disabledForegroundColor: Colors.grey,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        elevation: 0,
       ),
+      onPressed: onPressed,
     );
   }
 } 
