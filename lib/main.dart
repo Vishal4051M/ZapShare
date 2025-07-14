@@ -194,11 +194,9 @@ class DataRushApp extends StatelessWidget {
           ),
         ),
       ),
-      home: Platform.isAndroid
+      home: Platform.isAndroid || Platform.isWindows
           ? const HomeScreen()
-          : Platform.isWindows
-              ? const WindowsNavBar()
-              : HttpFileShareScreen(),
+          : HttpFileShareScreen(),
       debugShowCheckedModeBanner: false,
     );
   }
