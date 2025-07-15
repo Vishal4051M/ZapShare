@@ -6,6 +6,8 @@ import 'package:flutter_swiper_null_safety/flutter_swiper_null_safety.dart';
 import 'package:smooth_page_indicator/smooth_page_indicator.dart';
 import 'dart:io';
 import 'package:flutter/gestures.dart';
+import 'package:zap_share/Screens/HttpFileShareScreen.dart';
+import 'package:zap_share/Screens/AndroidReceiveScreen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -106,9 +108,21 @@ class _HomeScreenState extends State<HomeScreen> {
   void _navigateToScreen(int index) {
     Widget targetScreen;
     if (index == 0) {
-      targetScreen = WindowsFileShareScreen();
+      if (Platform.isAndroid) {
+        targetScreen = HttpFileShareScreen();
+      } else if (Platform.isWindows) {
+        targetScreen = WindowsFileShareScreen();
+      } else {
+        targetScreen = HttpFileShareScreen(); // fallback
+      }
     } else if (index == 1) {
-      targetScreen = WindowsReceiveScreen();
+      if (Platform.isAndroid) {
+        targetScreen = AndroidReceiveScreen();
+      } else if (Platform.isWindows) {
+        targetScreen = WindowsReceiveScreen();
+      } else {
+        targetScreen = AndroidReceiveScreen(); // fallback
+      }
     } else {
       targetScreen = TransferHistoryScreen();
     }
