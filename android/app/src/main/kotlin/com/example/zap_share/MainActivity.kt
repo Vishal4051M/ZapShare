@@ -39,11 +39,14 @@ class MainActivity : FlutterActivity() {
                         val stream = contentResolver.openInputStream(uri)
                         if (stream != null) {
                             inputStreams[uriStr!!] = stream
+                            println("ZapShare: Successfully opened stream for URI: $uriStr")
                             result.success(true)
                         } else {
+                            println("ZapShare: Failed to open stream for URI: $uriStr")
                             result.error("STREAM_FAIL", "Could not open input stream", null)
                         }
                     } catch (e: Exception) {
+                        println("ZapShare: Exception opening stream: ${e.message}")
                         result.error("EXCEPTION", e.message, null)
                     }
                 }
@@ -68,7 +71,9 @@ class MainActivity : FlutterActivity() {
                 "readChunk" -> {
                     val uriStr = call.argument<String>("uri")
                     val size = call.argument<Int>("size") ?: 65536
+                    
                     val stream = inputStreams[uriStr]
+                    
                     if (stream == null) {
                         result.error("NO_STREAM", "Stream not opened for URI", null)
                         return@setMethodCallHandler
@@ -78,19 +83,25 @@ class MainActivity : FlutterActivity() {
                         val buffer = ByteArray(size)
                         val bytesRead = stream.read(buffer)
                         if (bytesRead == -1) {
-                            result.success(null) // End of file
+                            println("ZapShare: End of file reached for URI: $uriStr")
+                            result.success(byteArrayOf()) // End of file - return empty array
+                        } else if (bytesRead == 0) {
+                            println("ZapShare: No data read for URI: $uriStr")
+                            result.success(byteArrayOf()) // No data read
                         } else {
+                            println("ZapShare: Read $bytesRead bytes for URI: $uriStr")
                             result.success(buffer.copyOf(bytesRead)) // Only return valid portion
                         }
                     } catch (e: Exception) {
+                        println("ZapShare: Read error for URI $uriStr: ${e.message}")
                         result.error("READ_ERROR", e.message, null)
                     }
                 }
 
                 "closeStream" -> {
                     val uriStr = call.argument<String>("uri")
-                    val stream = inputStreams.remove(uriStr)
                     try {
+                        val stream = inputStreams.remove(uriStr)
                         stream?.close()
                         result.success(true)
                     } catch (e: Exception) {

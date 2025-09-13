@@ -5,6 +5,8 @@
 #include <flutter/flutter_view_controller.h>
 
 #include <memory>
+#include <vector>
+#include <string>
 
 #include "win32_window.h"
 
@@ -28,6 +30,15 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // Drag and drop support
+  bool is_drag_over_ = false;
+  void EnableDragDrop();
+  void DisableDragDrop();
+  std::vector<std::string> GetDroppedFiles(HDROP hdrop);
+  void SendFilesToFlutter(const std::vector<std::string>& files);
+  void SendDragEnterToFlutter();
+  void SendDragLeaveToFlutter();
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
