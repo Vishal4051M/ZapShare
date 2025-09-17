@@ -1,4 +1,4 @@
-import 'package:zap_share/Screens/AndroidReceiveScreen.dart';
+import 'package:zap_share/Screens/ReceiveOptionsScreen.dart';
 import 'package:zap_share/Screens/HttpFileShareScreen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -236,7 +236,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (index == 0) {
       targetScreen = HttpFileShareScreen();
     } else if (index == 1) {
-      targetScreen = AndroidReceiveScreen();
+      targetScreen = ReceiveOptionsScreen();
     } else {
       targetScreen = TransferHistoryScreen();
     }

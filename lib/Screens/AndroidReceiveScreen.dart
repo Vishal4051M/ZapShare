@@ -77,11 +77,6 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
   List<String> _recentCodes = [];
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
-  // Lightweight upload server state
-  HttpServer? _uploadServer;
-  String? _localIp;
-  bool _isHostingUpload = false;
-
   @override
   void initState() {
     super.initState();
@@ -121,179 +116,6 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
         }
       },
     );
-  }
-
-  Future<String?> _getLocalIpv4() async {
-    try {
-      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4, includeLoopback: false);
-      for (final iface in interfaces) {
-        for (final addr in iface.addresses) {
-          final ip = addr.address;
-          if (ip.startsWith('127.') || ip.startsWith('169.254.')) continue;
-          if (ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('172.16.') || ip.startsWith('172.17.') || ip.startsWith('172.18.') || ip.startsWith('172.19.') || ip.startsWith('172.2') || ip.startsWith('172.30.') || ip.startsWith('172.31.')) {
-            return ip;
-          }
-        }
-      }
-      // Fallback: first non-loopback IPv4
-      for (final iface in interfaces) {
-        for (final addr in iface.addresses) {
-          final ip = addr.address;
-          if (!ip.startsWith('127.') && !ip.startsWith('169.254.')) return ip;
-        }
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  Future<void> _startUploadServer() async {
-    try {
-      _localIp ??= await _getLocalIpv4();
-      _uploadServer?.close(force: true);
-      _uploadServer = await HttpServer.bind(InternetAddress.anyIPv4, 8090);
-      setState(() { _isHostingUpload = true; });
-      _uploadServer!.listen((HttpRequest request) async {
-        final path = request.uri.path;
-        if (request.method == 'GET' && (path == '/' || path == '/index.html')) {
-          await _serveUploadForm(request);
-          return;
-        }
-        if (request.method == 'PUT' && path == '/upload') {
-          await _handlePutUpload(request);
-          return;
-        }
-        request.response.statusCode = HttpStatus.notFound;
-        await request.response.close();
-      });
-    } catch (e) {
-      setState(() { _isHostingUpload = false; });
-    }
-  }
-
-  Future<void> _stopUploadServer() async {
-    await _uploadServer?.close(force: true);
-    setState(() { _isHostingUpload = false; });
-  }
-
-  Future<void> _serveUploadForm(HttpRequest request) async {
-    final response = request.response;
-    response.statusCode = HttpStatus.ok;
-    response.headers.contentType = ContentType.html;
-    final html = r'''
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ZapShare - Upload to Device</title>
-  <style>
-    body { margin:0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#000; color:#fff; }
-    .wrap { max-width: 720px; margin: 0 auto; padding: 24px; }
-    .card { background:#1a1a1a; border:2px solid #FFD600; border-radius:16px; padding:24px; }
-    h1 { color:#FFD600; margin:0 0 16px; font-weight:700; }
-    p { color:#bbb; }
-    .box { border:1px dashed #555; border-radius:12px; padding:20px; text-align:center; background:#111; }
-    input[type=file] { display:block; width:100%; padding:12px; background:#222; color:#fff; border:1px solid #555; border-radius:8px; }
-    button { margin-top:16px; width:100%; padding:12px; background:#FFD600; color:#000; border:none; border-radius:10px; font-weight:700; }
-    .hint { margin-top:8px; color:#888; font-size:14px; }
-    .ok { color:#0f0; }
-    .err { color:#f66; }
-  </style>
-  <script>
-    async function uploadFiles(ev) {
-      ev.preventDefault();
-      const files = document.getElementById('files').files;
-      if (!files || files.length === 0) return;
-      const msg = document.getElementById('msg');
-      let okCount = 0;
-      for (const f of files) {
-        const res = await fetch('/upload?name=' + encodeURIComponent(f.name), { method:'PUT', body: f });
-        if (res.ok) okCount++;
-      }
-      msg.textContent = `Uploaded ${okCount} / ${files.length} file(s).`;
-      msg.className = okCount === files.length ? 'ok' : 'err';
-    }
-  </script>
-  </head>
-<body>
-  <div class="wrap">
-    <div class="card">
-      <h1>Upload to ZapShare</h1>
-      <p>Select files to send to this device.</p>
-      <form onsubmit="uploadFiles(event)">
-        <div class="box">
-          <input id="files" type="file" multiple />
-          <div class="hint">Files will be saved into the Downloads/ZapShare folder on device.</div>
-        </div>
-        <button type="submit">Upload</button>
-      </form>
-      <div id="msg" class="hint"></div>
-    </div>
-  </div>
-</body>
-</html>
-''';
-    response.write(html);
-    await response.close();
-  }
-
-  Future<void> _ensureSaveFolder() async {
-    if (_saveFolder == null) {
-      _saveFolder = await _getDefaultDownloadFolder();
-    }
-    final dir = Directory(_saveFolder!);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-  }
-
-  Future<void> _handlePutUpload(HttpRequest request) async {
-    try {
-      await _ensureSaveFolder();
-      String fileName = request.uri.queryParameters['name'] ?? 'upload.bin';
-      fileName = fileName.split('/').last.split('\\').last;
-      String savePath = '$_saveFolder/$fileName';
-      int count = 1;
-      while (await File(savePath).exists()) {
-        final bits = fileName.split('.');
-        if (bits.length > 1) {
-          final base = bits.sublist(0, bits.length - 1).join('.');
-          final ext = bits.last;
-          savePath = '$_saveFolder/${base}_$count.$ext';
-        } else {
-          savePath = '$_saveFolder/${fileName}_$count';
-        }
-        count++;
-      }
-      final file = File(savePath);
-      final sink = file.openWrite();
-      await request.listen(sink.add).asFuture();
-      await sink.close();
-
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        final history = prefs.getStringList('transfer_history') ?? [];
-        final entry = {
-          'fileName': fileName,
-          'fileSize': await file.length(),
-          'direction': 'Received',
-          'peer': 'WebUpload',
-          'dateTime': DateTime.now().toIso8601String(),
-          'fileLocation': savePath,
-        };
-        history.insert(0, jsonEncode(entry));
-        if (history.length > 100) history.removeLast();
-        await prefs.setStringList('transfer_history', history);
-      } catch (_) {}
-
-      request.response.statusCode = HttpStatus.ok;
-      request.response.write('Uploaded 1 file.');
-      await request.response.close();
-    } catch (e) {
-      request.response.statusCode = HttpStatus.internalServerError;
-      request.response.write('Upload failed: $e');
-      await request.response.close();
-    }
   }
 
   Future<void> showProgressNotification(int fileIndex, double progress, String fileName, {double speedMbps = 0.0, bool paused = false}) async {
@@ -923,7 +745,6 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
     FlutterForegroundTask.stopService();
     _pageController.dispose();
     _codeFocusNode.dispose();
-    _uploadServer?.close(force: true);
     super.dispose();
   }
 
@@ -993,49 +814,6 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
                     ),
                   ),
                 ],
-              ),
-            ),
-          ),
-          // Upload hosting toggle button
-          Positioned(
-            right: 20,
-            bottom: 20,
-            child: GestureDetector(
-              onTap: () async {
-                HapticFeedback.lightImpact();
-                if (_isHostingUpload) {
-                  await _stopUploadServer();
-                } else {
-                  await _startUploadServer();
-                }
-                setState(() {});
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: _isHostingUpload ? Colors.yellow[300] : Colors.grey[800],
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.grey[700]!, width: 1),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      _isHostingUpload ? Icons.wifi_tethering : Icons.wifi_tethering_off,
-                      color: _isHostingUpload ? Colors.black : Colors.grey[300],
-                      size: 18,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _isHostingUpload ? 'http://${_localIp ?? '0.0.0.0'}:8090' : 'Host Upload',
-                      style: TextStyle(
-                        color: _isHostingUpload ? Colors.black : Colors.grey[300],
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
               ),
             ),
           ),
