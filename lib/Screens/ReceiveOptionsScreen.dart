@@ -61,19 +61,7 @@ class ReceiveOptionsScreen extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Column(
                   children: [
-                    // Web Receive Option
-                    _buildOptionCard(
-                      context,
-                      icon: Icons.wifi_tethering,
-                      title: 'Web Receive',
-                      subtitle: 'Start a web server for others to upload files',
-                      description: 'Others can visit a web page to upload files directly to your device',
-                      onTap: () => _navigateToScreen(context, WebReceiveScreen()),
-                    ),
-                    
-                    const SizedBox(height: 24),
-                    
-                    // Receive by Code Option
+                    // Receive by Code Option (first)
                     _buildOptionCard(
                       context,
                       icon: Icons.tag,
@@ -83,11 +71,23 @@ class ReceiveOptionsScreen extends StatelessWidget {
                       onTap: () => _navigateToScreen(context, AndroidReceiveScreen()),
                     ),
                     
+                    const SizedBox(height: 16),
+                    
+                    // Web Receive Option
+                    _buildOptionCard(
+                      context,
+                      icon: Icons.wifi_tethering,
+                      title: 'Web Receive',
+                      subtitle: 'Start a web server for others to upload files',
+                      description: '',
+                      onTap: () => _navigateToScreen(context, WebReceiveScreen()),
+                    ),
+                    
                     const Spacer(),
                     
-                    // Help section
+                    // Quick Tips (match HomeScreen style)
                     Container(
-                      margin: const EdgeInsets.only(bottom: 24),
+                      margin: const EdgeInsets.symmetric(horizontal: 0),
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
                         color: Colors.grey[900],
@@ -96,20 +96,33 @@ class ReceiveOptionsScreen extends StatelessWidget {
                       ),
                       child: Column(
                         children: [
-                          Icon(
-                            Icons.info_outline,
-                            color: Colors.yellow[300],
-                            size: 24,
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.lightbulb_outline,
+                                color: Colors.yellow[300],
+                                size: 24,
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                'Quick Tips',
+                                style: TextStyle(
+                                  color: Colors.yellow[300],
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 16),
                           Text(
-                            'Both methods require devices to be on the same WiFi network',
+                            '• Both devices must be on the same WiFi network\n• Long press on images to preview before downloading\n• Connection codes are 8 characters (A-Z, 0-9)',
                             style: TextStyle(
-                              color: Colors.grey[300],
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
+                              color: Colors.grey[400],
+                              fontSize: 15,
+                              fontWeight: FontWeight.w400,
+                              height: 1.5,
                             ),
-                            textAlign: TextAlign.center,
                           ),
                         ],
                       ),
@@ -132,79 +145,87 @@ class ReceiveOptionsScreen extends StatelessWidget {
     required String description,
     required VoidCallback onTap,
   }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: Colors.grey[800]!,
-          width: 1,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double tileHeight = 84; // Compact fixed height to prevent overflow
+        return Container(
+          width: double.infinity,
+          constraints: BoxConstraints.tightFor(height: tileHeight),
+          decoration: BoxDecoration(
+            color: Colors.grey[900],
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: Colors.grey[800]!,
+              width: 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () {
-            HapticFeedback.lightImpact();
-            onTap();
-          },
-          borderRadius: BorderRadius.circular(20),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () {
+                HapticFeedback.lightImpact();
+                onTap();
+              },
+              borderRadius: BorderRadius.circular(16),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Container(
-                      width: 56,
-                      height: 56,
+                      width: 44,
+                      height: 44,
                       decoration: BoxDecoration(
                         color: Colors.yellow[300],
-                        borderRadius: BorderRadius.circular(16),
+                        borderRadius: BorderRadius.circular(12),
                         boxShadow: [
                           BoxShadow(
                             color: Colors.yellow[300]!.withOpacity(0.3),
-                            blurRadius: 8,
-                            offset: const Offset(0, 4),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
                           ),
                         ],
                       ),
                       child: Icon(
                         icon,
                         color: Colors.black,
-                        size: 28,
+                        size: 22,
                       ),
                     ),
                     const SizedBox(width: 16),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
                             title,
                             style: TextStyle(
                               color: Colors.white,
-                              fontSize: 20,
+                              fontSize: 17,
                               fontWeight: FontWeight.w600,
                               letterSpacing: -0.2,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 2),
                           Text(
                             subtitle,
                             style: TextStyle(
                               color: Colors.grey[400],
-                              fontSize: 15,
+                              fontSize: 13,
                               fontWeight: FontWeight.w400,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ),
@@ -212,25 +233,15 @@ class ReceiveOptionsScreen extends StatelessWidget {
                     Icon(
                       Icons.chevron_right_rounded,
                       color: Colors.grey[600],
-                      size: 24,
+                      size: 20,
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
-                Text(
-                  description,
-                  style: TextStyle(
-                    color: Colors.grey[500],
-                    fontSize: 14,
-                    fontWeight: FontWeight.w400,
-                    height: 1.4,
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 

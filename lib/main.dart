@@ -5,7 +5,6 @@ import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:zap_share/Screens/HomeScreen.dart';
 import 'package:zap_share/Screens/HttpFileShareScreen.dart';
 import 'Screens/WindowsFileShareScreen.dart';
 import 'Screens/WindowsReceiveScreen.dart';
@@ -30,13 +29,8 @@ Future<void> requestPermissions() async {
   if (!Platform.isAndroid) return;
   Map<Permission, PermissionStatus> statuses = await [
     Permission.storage,
-    Permission.location,
     Permission.manageExternalStorage,
-    Permission.nearbyWifiDevices,
-    Permission.audio,
-    Permission.videos,
     Permission.notification,
-    Permission.manageExternalStorage,
   ].request();
 
   statuses.forEach((perm, status) {
@@ -195,7 +189,7 @@ class DataRushApp extends StatelessWidget {
         ),
       ),
       home: Platform.isAndroid
-          ? const HomeScreen()
+          ? const AndroidNavBar()
           : Platform.isWindows
               ? const WindowsNavBar()
               : HttpFileShareScreen(),

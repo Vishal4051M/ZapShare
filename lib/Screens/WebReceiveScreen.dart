@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:open_file/open_file.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 enum FileType {
   image,
@@ -41,6 +43,51 @@ class ReceivedFile {
   });
 }
 
+class PendingFile {
+  final String id;
+  final String name;
+  final int size;
+  final DateTime uploadedAt;
+  final String browserSessionId; // Identifier for browser session
+  bool isSelected;
+  FileType fileType;
+
+  PendingFile({
+    required this.id,
+    required this.name,
+    required this.size,
+    required this.uploadedAt,
+    required this.browserSessionId,
+    this.isSelected = true,
+    required this.fileType,
+  });
+}
+
+class PendingFileWithPreview extends PendingFile {
+  final String previewPath; // Path to preview chunk file
+  final int previewSize; // Size of preview chunk
+
+  PendingFileWithPreview({
+    required String id,
+    required String name,
+    required int size,
+    required DateTime uploadedAt,
+    required String browserSessionId,
+    bool isSelected = true,
+    required FileType fileType,
+    required this.previewPath,
+    required this.previewSize,
+  }) : super(
+    id: id,
+    name: name,
+    size: size,
+    uploadedAt: uploadedAt,
+    browserSessionId: browserSessionId,
+    isSelected: isSelected,
+    fileType: fileType,
+  );
+}
+
 class WebReceiveScreen extends StatefulWidget {
   const WebReceiveScreen({super.key});
 
@@ -53,32 +100,86 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   String? _localIp;
   bool _isHosting = false;
   String? _saveFolder;
+  String? _customSaveFolder; // User-selected folder (persisted)
+  bool _uploadApprovalActive = false;
+  DateTime? _uploadApprovalExpiresAt;
   
   List<ReceivedFile> _receivedFiles = [];
-  Map<String, ReceivedFile> _ongoingUploads = {}; // Track uploads in progress
-  int _currentTab = 0; // 0 = Available, 1 = Received Files
+  List<PendingFile> _pendingFiles = []; // Files uploaded but not yet received
+  Map<String, ReceivedFile> _ongoingDownloads = {}; // Track downloads in progress
+  final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
+  final Map<String, int> _fileToNotificationId = {};
+  
+  int _currentTab = 0; // 0 = Pending Files, 1 = Received Files
   final PageController _pageController = PageController();
   
   @override
   void initState() {
     super.initState();
     _initializeServer();
+    _initLocalNotifications();
+  }
+
+  Future<void> _initLocalNotifications() async {
+    const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    final InitializationSettings initSettings = InitializationSettings(android: androidSettings);
+    await _notificationsPlugin.initialize(initSettings);
+  }
+
+  Future<void> _startForegroundService() async {
+    await FlutterForegroundTask.startService(
+      notificationTitle: '⚡ ZapShare Web Receive',
+      notificationText: 'Receiving files in background',
+    );
+  }
+
+  Future<void> _stopForegroundService() async {
+    await FlutterForegroundTask.stopService();
+  }
+
+  int _notificationIdFor(String key) {
+    return _fileToNotificationId.putIfAbsent(key, () => 5000 + key.hashCode.abs() % 2000);
+  }
+
+  Future<void> _showProgressNotification({
+    required String key,
+    required String title,
+    required String body,
+    required int progress,
+  }) async {
+    final android = AndroidNotificationDetails(
+      'web_receive_progress_$key',
+      'Web Receive Progress $key',
+      channelDescription: 'Shows the progress of an incoming file',
+      importance: Importance.max,
+      priority: Priority.high,
+      showProgress: true,
+      maxProgress: 100,
+      progress: progress.clamp(0, 100),
+      onlyAlertOnce: true,
+      styleInformation: BigTextStyleInformation(body),
+    );
+    final details = NotificationDetails(android: android);
+    await _notificationsPlugin.show(_notificationIdFor(key), title, body, details);
+  }
+
+  Future<void> _cancelProgressNotification(String key) async {
+    await _notificationsPlugin.cancel(_notificationIdFor(key));
   }
 
   Future<void> _initializeServer() async {
     await _requestStoragePermissions();
+    await _loadCustomFolder();
     _saveFolder = await _getDefaultDownloadFolder();
     await _startWebServer();
   }
 
   Future<void> _requestStoragePermissions() async {
     try {
-      // Request storage permissions
       if (await Permission.storage.isDenied) {
         await Permission.storage.request();
       }
       
-      // For Android 11+ (API 30+), also request manage external storage
       if (await Permission.manageExternalStorage.isDenied) {
         await Permission.manageExternalStorage.request();
       }
@@ -89,24 +190,80 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
 
   Future<String> _getDefaultDownloadFolder() async {
     try {
-      // Use app's document directory for received files (not public Downloads)
-      final appDir = await getApplicationDocumentsDirectory();
-      final receivedDir = Directory('${appDir.path}/ReceivedFiles');
-      
-      if (!await receivedDir.exists()) {
-        await receivedDir.create(recursive: true);
+      // Use custom folder if set
+      if (_customSaveFolder != null && _customSaveFolder!.isNotEmpty) {
+        final dir = Directory(_customSaveFolder!);
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+        return dir.path;
       }
-      
-      return receivedDir.path;
+
+      // Prefer public Downloads/ZapShare on Android
+      final downloadsCandidate = Directory('/storage/emulated/0/Download/ZapShare');
+      if (Platform.isAndroid) {
+        try {
+          if (!await downloadsCandidate.exists()) {
+            await downloadsCandidate.create(recursive: true);
+          }
+          return downloadsCandidate.path;
+        } catch (_) {}
+      }
+
+      // Try platform downloads directory if available
+      try {
+        final downloadsDir = await getDownloadsDirectory();
+        if (downloadsDir != null) {
+          final zapDir = Directory('${downloadsDir.path}/ZapShare');
+          if (!await zapDir.exists()) {
+            await zapDir.create(recursive: true);
+          }
+          return zapDir.path;
+        }
+      } catch (_) {}
+
+      // Fallback to app documents
+      final appDir = await getApplicationDocumentsDirectory();
+      final fallback = Directory('${appDir.path}/ZapShare');
+      if (!await fallback.exists()) {
+        await fallback.create(recursive: true);
+      }
+      return fallback.path;
     } catch (e) {
       print('Error getting app folder: $e');
       // Fallback to a private folder in app storage
-      final receivedDir = Directory('/data/data/com.example.zapshare/ReceivedFiles');
+      final receivedDir = Directory('/data/data/com.example.zapshare/ZapShare');
       if (!await receivedDir.exists()) {
         await receivedDir.create(recursive: true);
       }
       return receivedDir.path;
     }
+  }
+
+  Future<void> _loadCustomFolder() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _customSaveFolder = prefs.getString('custom_save_folder');
+    } catch (_) {}
+  }
+
+  Future<void> _setCustomFolder(String? folderPath) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (folderPath == null || folderPath.isEmpty) {
+        await prefs.remove('custom_save_folder');
+        setState(() {
+          _customSaveFolder = null;
+        });
+      } else {
+        await prefs.setString('custom_save_folder', folderPath);
+        setState(() {
+          _customSaveFolder = folderPath;
+        });
+      }
+      // Refresh _saveFolder to reflect new choice
+      _saveFolder = await _getDefaultDownloadFolder();
+    } catch (_) {}
   }
 
   Future<String?> _getLocalIpv4() async {
@@ -138,11 +295,16 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       _uploadServer?.close(force: true);
       _uploadServer = await HttpServer.bind(InternetAddress.anyIPv4, 8090);
       setState(() { _isHosting = true; });
+      await _startForegroundService();
       
       _uploadServer!.listen((HttpRequest request) async {
         final path = request.uri.path;
         if (request.method == 'GET' && (path == '/' || path == '/index.html')) {
           await _serveUploadForm(request);
+          return;
+        }
+        if (request.method == 'POST' && path == '/request-upload') {
+          await _handleRequestUpload(request);
           return;
         }
         if (request.method == 'PUT' && path == '/upload') {
@@ -172,6 +334,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     await _uploadServer?.close(force: true);
     setState(() { _isHosting = false; });
     _showSnackBar('Web server stopped');
+    await _stopForegroundService();
   }
 
   Future<void> _serveUploadForm(HttpRequest request) async {
@@ -470,23 +633,19 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       const progressBar = document.getElementById('progressBar');
       const message = document.getElementById('message');
       
-      // Drag and drop functionality
       uploadArea.addEventListener('dragover', function(e) {
         e.preventDefault();
         uploadArea.classList.add('dragover');
       });
-      
       uploadArea.addEventListener('dragleave', function(e) {
         e.preventDefault();
         uploadArea.classList.remove('dragover');
       });
-      
       uploadArea.addEventListener('drop', function(e) {
         e.preventDefault();
         uploadArea.classList.remove('dragover');
         handleFiles(e.dataTransfer.files);
       });
-      
       fileInput.addEventListener('change', function(e) {
         handleFiles(e.target.files);
       });
@@ -502,10 +661,8 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
           selectedFilesDiv.style.display = 'none';
           return;
         }
-        
         selectedFilesDiv.style.display = 'block';
         selectedFilesDiv.innerHTML = '<h4 style="margin: 0 0 12px 0; color: #FFD600;">Selected Files:</h4>';
-        
         selectedFiles.forEach(file => {
           const fileItem = document.createElement('div');
           fileItem.className = 'file-item';
@@ -527,134 +684,123 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
       }
       
-      uploadBtn.addEventListener('click', uploadFiles);
-      
-      async function uploadFiles() {
+      uploadBtn.addEventListener('click', async () => {
         if (selectedFiles.length === 0) return;
-        
         uploadBtn.disabled = true;
         progress.style.display = 'block';
         message.innerHTML = '';
         
-        let uploaded = 0;
-        let failed = 0;
-        const totalFiles = selectedFiles.length;
-        
-        // Add individual file progress display
-        const progressDiv = document.createElement('div');
-        progressDiv.id = 'file-progress-list';
-        progressDiv.style.marginTop = '16px';
-        selectedFilesDiv.appendChild(progressDiv);
-        
-        for (let i = 0; i < selectedFiles.length; i++) {
-          const file = selectedFiles[i];
-          
-          // Create progress item for each file
-          const fileProgressItem = document.createElement('div');
-          fileProgressItem.className = 'file-progress-item';
-          fileProgressItem.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding: 8px; background: rgba(255, 255, 255, 0.05); border-radius: 8px;">
-              <div>
-                <div style="color: white; font-weight: 500; font-size: 14px;">\${file.name}</div>
-                <div style="color: #ccc; font-size: 12px;">\${formatFileSize(file.size)}</div>
-              </div>
-              <div style="display: flex; align-items: center;">
-                <div style="width: 100px; height: 6px; background: rgba(255, 255, 255, 0.2); border-radius: 3px; margin-right: 12px;">
-                  <div id="file-progress-\${i}" style="width: 0%; height: 100%; background: #FFD600; border-radius: 3px; transition: width 0.3s;"></div>
-                </div>
-                <span id="file-percent-\${i}" style="color: #FFD600; font-weight: 500; font-size: 12px; width: 40px;">0%</span>
-              </div>
-            </div>
-          `;
-          progressDiv.appendChild(fileProgressItem);
-          
-          try {
-            const xhr = new XMLHttpRequest();
-            
-            // Track upload progress
-            xhr.upload.addEventListener('progress', function(e) {
-              if (e.lengthComputable) {
-                const percent = Math.round((e.loaded / e.total) * 100);
-                const progressBar = document.getElementById(`file-progress-\${i}`);
-                const percentText = document.getElementById(`file-percent-\${i}`);
-                if (progressBar && percentText) {
-                  progressBar.style.width = percent + '%';
-                  percentText.textContent = percent + '%';
-                }
-              }
-            });
-            
-            const uploadPromise = new Promise((resolve, reject) => {
-              xhr.onload = function() {
-                if (xhr.status === 200) {
-                  uploaded++;
-                  // Mark as completed
-                  const progressBar = document.getElementById(`file-progress-\${i}`);
-                  const percentText = document.getElementById(`file-percent-\${i}`);
-                  if (progressBar && percentText) {
-                    progressBar.style.background = '#4CAF50';
-                    percentText.textContent = '✓';
-                    percentText.style.color = '#4CAF50';
-                  }
-                  resolve();
-                } else {
-                  failed++;
-                  // Mark as failed
-                  const progressBar = document.getElementById(`file-progress-\${i}`);
-                  const percentText = document.getElementById(`file-percent-\${i}`);
-                  if (progressBar && percentText) {
-                    progressBar.style.background = '#f44336';
-                    percentText.textContent = '✗';
-                    percentText.style.color = '#f44336';
-                  }
-                  reject();
-                }
-              };
-              
-              xhr.onerror = function() {
-                failed++;
-                // Mark as failed
-                const progressBar = document.getElementById(`file-progress-\${i}`);
-                const percentText = document.getElementById(`file-percent-\${i}`);
-                if (progressBar && percentText) {
-                  progressBar.style.background = '#f44336';
-                  percentText.textContent = '✗';
-                  percentText.style.color = '#f44336';
-                }
-                reject();
-              };
-            });
-            
-            xhr.open('PUT', '/upload?name=' + encodeURIComponent(file.name));
-            xhr.send(file);
-            
-            await uploadPromise;
-          } catch (error) {
-            // Error already handled in xhr.onerror
+        try {
+          // Ask device for permission
+          const meta = selectedFiles.map(f => ({ name: f.name, size: f.size }));
+          const approveResp = await fetch('/request-upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ files: meta })
+          });
+          const approve = await approveResp.json();
+          if (!approve.approved) {
+            message.innerHTML = '<div class="message error">Upload denied on device</div>';
+            progress.style.display = 'none';
+            uploadBtn.disabled = false;
+            return;
           }
-          
-          // Update overall progress
-          const overallPercent = ((i + 1) / totalFiles) * 100;
-          progressBar.style.width = overallPercent + '%';
+
+          // Build per-file progress list
+          let list = document.getElementById('file-progress-list');
+          if (!list) {
+            list = document.createElement('div');
+            list.id = 'file-progress-list';
+            list.style.marginTop = '16px';
+            selectedFilesDiv.appendChild(list);
+          }
+          list.innerHTML = '';
+
+          const items = [];
+          selectedFiles.forEach((file, i) => {
+            const wrapper = document.createElement('div');
+            wrapper.style.cssText = 'margin:8px 0; padding:8px; background: rgba(255,255,255,0.05); border-radius:8px;';
+            wrapper.innerHTML = `
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <div>
+                  <div style="color:#fff; font-weight:500; font-size:14px;">\${file.name}</div>
+                  <div style="color:#ccc; font-size:12px;">\${formatFileSize(file.size)}</div>
+                </div>
+                <div style="display:flex; align-items:center;">
+                  <div style="width:140px; height:6px; background: rgba(255,255,255,0.2); border-radius:3px; margin-right:10px;">
+                    <div id="fpb-\${i}" style="width:0%; height:100%; background:#FFD600; border-radius:3px;"></div>
+                  </div>
+                  <span id="fpp-\${i}" style="color:#FFD600; font-weight:600; font-size:12px; width:40px; text-align:right;">0%</span>
+                </div>
+              </div>`;
+            list.appendChild(wrapper);
+            items.push({ barId: `fpb-\${i}`, pctId: `fpp-\${i}` });
+          });
+
+          function updateOverall(currentIndex, currentFraction) {
+            const overall = ((currentIndex + currentFraction) / selectedFiles.length) * 100;
+            progressBar.style.width = overall + '%';
+          }
+
+          function uploadFileWithProgress(file, idx) {
+            return new Promise((resolve) => {
+              const xhr = new XMLHttpRequest();
+              xhr.open('PUT', `/upload?name=\${encodeURIComponent(file.name)}`);
+              xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                  const pct = Math.min(100, Math.max(0, Math.round((e.loaded / e.total) * 100)));
+                  const bar = document.getElementById(items[idx].barId);
+                  const pctEl = document.getElementById(items[idx].pctId);
+                  if (bar) bar.style.width = pct + '%';
+                  if (pctEl) pctEl.textContent = pct + '%';
+                  updateOverall(idx, e.total ? (e.loaded / e.total) : 0);
+                }
+              };
+              xhr.onload = () => {
+                const bar = document.getElementById(items[idx].barId);
+                const pctEl = document.getElementById(items[idx].pctId);
+                if (xhr.status >= 200 && xhr.status < 300) {
+                  if (bar) bar.style.background = '#4CAF50';
+                  if (pctEl) pctEl.textContent = '100%';
+                } else {
+                  if (bar) bar.style.background = '#f44336';
+                  if (pctEl) pctEl.textContent = '✗';
+                  if (pctEl) pctEl.style.color = '#f44336';
+                }
+                updateOverall(idx + 1, 0);
+                resolve(xhr.status >= 200 && xhr.status < 300);
+              };
+              xhr.onerror = () => {
+                const bar = document.getElementById(items[idx].barId);
+                const pctEl = document.getElementById(items[idx].pctId);
+                if (bar) bar.style.background = '#f44336';
+                if (pctEl) pctEl.textContent = '✗';
+                if (pctEl) pctEl.style.color = '#f44336';
+                updateOverall(idx + 1, 0);
+                resolve(false);
+              };
+              xhr.send(file);
+            });
+          }
+
+          let uploaded = 0;
+          for (let i = 0; i < selectedFiles.length; i++) {
+            const ok = await uploadFileWithProgress(selectedFiles[i], i);
+            if (ok) uploaded++;
+          }
+
+          if (uploaded === selectedFiles.length) {
+            message.innerHTML = `<div class=\"message success\">Uploaded \${uploaded} file(s) successfully</div>`;
+          } else {
+            message.innerHTML = `<div class=\"message error\">Uploaded \${uploaded}/\${selectedFiles.length} file(s)</div>`;
+          }
+        } catch (e) {
+          message.innerHTML = `<div class=\"message error\">Upload failed: \${e}</div>`;
+        } finally {
+          progress.style.display = 'none';
+          uploadBtn.disabled = false;
         }
-        
-        progress.style.display = 'none';
-        uploadBtn.disabled = false;
-        
-        if (failed === 0) {
-          message.innerHTML = `<div class="message success">Successfully uploaded \${uploaded} file\${uploaded !== 1 ? 's' : ''}!</div>`;
-        } else {
-          message.innerHTML = `<div class="message error">Uploaded \${uploaded} file\${uploaded !== 1 ? 's' : ''}, \${failed} failed</div>`;
-        }
-        
-        // Clear selection after upload (after a delay to show results)
-        setTimeout(() => {
-          selectedFiles = [];
-          fileInput.value = '';
-          selectedFilesDiv.style.display = 'none';
-          uploadBtn.disabled = true;
-        }, 3000);
-      }
+      });
     });
   </script>
 </head>
@@ -672,7 +818,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         <div>or</div>
         <label for="files" class="file-input-label">Choose Files</label>
         <input id="files" type="file" multiple />
-        <div class="upload-hint">Files will be received and stored in the app</div>
+        <div class="upload-hint">Files will be uploaded and ready for download on the device</div>
       </div>
       
       <div id="selectedFiles" class="selected-files"></div>
@@ -681,45 +827,38 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         <div class="progress-bar" id="progressBar"></div>
       </div>
       
-      <button id="uploadBtn" class="upload-btn" disabled>Upload Files</button>
+      <button id="uploadBtn" class="upload-btn" disabled>Send File Previews</button>
       
       <div id="message"></div>
       
-      <!-- Available Files Section -->
-      <div class="available-files-section">
-        <h3 style="color: white; margin: 24px 0 16px 0; text-align: center;">Available Files</h3>
-        <div id="availableFiles" class="available-files">
-          <div class="loading">Loading available files...</div>
-        </div>
-        <button id="refreshBtn" class="refresh-btn" onclick="loadAvailableFiles()">Refresh Files</button>
-      </div>
+      
     </div>
   </div>
   
   <script>
-    // Load available files on page load
+    // Load pending files on page load
     document.addEventListener('DOMContentLoaded', function() {
-      loadAvailableFiles();
-      // Refresh every 5 seconds
-      setInterval(loadAvailableFiles, 5000);
+      loadPendingFiles();
+      // Refresh every 3 seconds
+      setInterval(loadPendingFiles, 3000);
     });
     
-    async function loadAvailableFiles() {
+    async function loadPendingFiles() {
       try {
-        const response = await fetch('/files');
+        const response = await fetch('/pending');
         const files = await response.json();
-        displayAvailableFiles(files);
+        displayPendingFiles(files);
       } catch (error) {
-        console.error('Failed to load files:', error);
-        document.getElementById('availableFiles').innerHTML = '<div class="error">Failed to load files</div>';
+        console.error('Failed to load pending files:', error);
+        document.getElementById('availableFiles').innerHTML = '<div class="error">Failed to load pending files</div>';
       }
     }
     
-    function displayAvailableFiles(files) {
+    function displayPendingFiles(files) {
       const container = document.getElementById('availableFiles');
       
       if (files.length === 0) {
-        container.innerHTML = '<div class="no-files">No files available</div>';
+        container.innerHTML = '<div class="no-files">No pending files - upload some files to see them here</div>';
         return;
       }
       
@@ -727,11 +866,11 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         <div class="file-item available-file-item">
           <div class="file-info">
             <div class="file-name">\${file.name}</div>
-            <div class="file-details">\${formatFileSize(file.size)} • \${formatDate(file.receivedAt)}</div>
+            <div class="file-details">\${formatFileSize(file.size)} • \${formatDate(file.uploadedAt)} • Pending download</div>
           </div>
-          <button class="download-btn" onclick="downloadFile('\${encodeURIComponent(file.name)}')">
-            📥 Download
-          </button>
+          <div style="color: #FFD600; font-size: 12px; font-weight: 500;">
+            � Ready on device
+          </div>
         </div>
       `).join('');
     }
@@ -780,12 +919,222 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     }
   }
 
+  Future<void> _promptForFolderPath() async {
+    final controller = TextEditingController(text: _customSaveFolder ?? _saveFolder ?? '');
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Colors.grey[900],
+          title: Text('Set save folder', style: TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Enter a folder path. If it does not exist, it will be created.', style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+              const SizedBox(height: 10),
+              TextField(
+                controller: controller,
+                style: TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: '/storage/emulated/0/Download/ZapShare',
+                  hintStyle: TextStyle(color: Colors.grey[600]),
+                  filled: true,
+                  fillColor: Colors.grey[850],
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey[800]!)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: Text('Cancel', style: TextStyle(color: Colors.grey[400])),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(''),
+              child: Text('Use Default', style: TextStyle(color: Colors.yellow[300])),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+              child: Text('Save', style: TextStyle(color: Colors.yellow[300])),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (chosen == null) return; // cancelled
+    if (chosen.isEmpty) {
+      await _setCustomFolder(null);
+      _showSnackBar('Save folder reset to default');
+      return;
+    }
+
+    try {
+      final dir = Directory(chosen);
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      await _setCustomFolder(dir.path);
+      _showSnackBar('Save folder set');
+    } catch (e) {
+      _showSnackBar('Failed to set folder: $e');
+    }
+  }
+
   Future<void> _handlePutUpload(HttpRequest request) async {
     try {
+      // Enforce approval window
+      final now = DateTime.now();
+      if (!_uploadApprovalActive || _uploadApprovalExpiresAt == null || now.isAfter(_uploadApprovalExpiresAt!)) {
+        request.response.statusCode = HttpStatus.forbidden;
+        request.response.headers.set('Access-Control-Allow-Origin', '*');
+        request.response.write('Upload not approved on device');
+        await request.response.close();
+        return;
+      }
+      // Handle full file transfer
+      await _handleFileTransfer(request);
+    } catch (e) {
+      request.response.statusCode = HttpStatus.internalServerError;
+      request.response.write('Upload failed: $e');
+      await request.response.close();
+    }
+  }
+
+  // Handle browser asking for permission to upload files
+  Future<void> _handleRequestUpload(HttpRequest request) async {
+    try {
+      final body = await utf8.decodeStream(request);
+      final data = jsonDecode(body);
+      final files = (data['files'] as List).cast<Map>().map((m) => {
+        'name': m['name'],
+        'size': m['size']
+      }).toList();
+
+      if (!mounted) {
+        request.response.statusCode = HttpStatus.ok;
+        request.response.headers.set('Content-Type', 'application/json');
+        request.response.headers.set('Access-Control-Allow-Origin', '*');
+        request.response.write(jsonEncode({'approved': false}));
+        await request.response.close();
+        return;
+      }
+
+      final approved = await _showUploadApprovalDialog(files);
+      if (approved) {
+        setState(() {
+          _uploadApprovalActive = true;
+          _uploadApprovalExpiresAt = DateTime.now().add(const Duration(minutes: 2));
+        });
+      }
+
+      request.response.statusCode = HttpStatus.ok;
+      request.response.headers.set('Content-Type', 'application/json');
+      request.response.headers.set('Access-Control-Allow-Origin', '*');
+      request.response.write(jsonEncode({'approved': approved}));
+      await request.response.close();
+    } catch (e) {
+      request.response.statusCode = HttpStatus.internalServerError;
+      request.response.write('Failed to request approval: $e');
+      await request.response.close();
+    }
+  }
+
+  Future<bool> _showUploadApprovalDialog(List<Map<String, dynamic>> files) async {
+    final totalSize = files.fold<int>(0, (sum, f) => sum + (f['size'] as int? ?? 0));
+    return await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Colors.grey[900],
+          title: Text('Allow upload?', style: TextStyle(color: Colors.white)),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${files.length} file(s) • ${_formatBytes(totalSize)}',
+                  style: TextStyle(color: Colors.grey[300]),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 180),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[850],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey[800]!),
+                  ),
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: files.length,
+                    itemBuilder: (context, index) {
+                      final f = files[index];
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        child: Row(
+                          children: [
+                            Icon(Icons.insert_drive_file, color: Colors.yellow[300], size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${f['name']}',
+                                style: TextStyle(color: Colors.white, fontSize: 13),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _formatBytes((f['size'] as int?) ?? 0),
+                              style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Uploads will be allowed for 2 minutes.',
+                  style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(false);
+              },
+              child: Text('Deny', style: TextStyle(color: Colors.red[300])),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(true);
+              },
+              child: Text('Allow', style: TextStyle(color: Colors.yellow[300])),
+            ),
+          ],
+        );
+      },
+    ) ?? false;
+  }
+
+  // (Removed preview chunk handler as previews are no longer used)
+
+  // Handle actual file transfer when download is initiated
+  Future<void> _handleFileTransfer(HttpRequest request) async {
+    try {
       await _ensureSaveFolder();
-      String fileName = request.uri.queryParameters['name'] ?? 'upload_${DateTime.now().millisecondsSinceEpoch}.bin';
-      fileName = fileName.split('/').last.split('\\').last;
+      final fileName = request.uri.queryParameters['name'] ?? 'unknown_file';
       String savePath = '$_saveFolder/$fileName';
+      final totalBytes = request.headers.contentLength; // -1 if unknown
       
       // Handle duplicate filenames
       int count = 1;
@@ -795,67 +1144,72 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         if (bits.length > 1) {
           final base = bits.sublist(0, bits.length - 1).join('.');
           final ext = bits.last;
-          fileName = '${base}_$count.$ext';
-          savePath = '$_saveFolder/$fileName';
+          savePath = '$_saveFolder/${base}_$count.$ext';
         } else {
-          fileName = '${originalFileName}_$count';
-          savePath = '$_saveFolder/$fileName';
+          savePath = '$_saveFolder/${originalFileName}_$count';
         }
         count++;
       }
       
-      // Get content length for progress tracking
-      final contentLength = request.contentLength;
-      
-      // Create an uploading file entry
-      final uploadingFile = ReceivedFile(
-        name: fileName,
-        size: contentLength > 0 ? contentLength : 0,
-        path: savePath,
-        receivedAt: DateTime.now(),
-        progress: 0.0,
-        status: 'Receiving',
-        isUploading: true,
-      );
-      
-      final uploadId = '${fileName}_${DateTime.now().millisecondsSinceEpoch}';
-      
+      // Prepare ongoing download entry for progress UI
       setState(() {
-        _ongoingUploads[uploadId] = uploadingFile;
+        _ongoingDownloads[fileName] = ReceivedFile(
+          name: fileName,
+          size: totalBytes > 0 ? totalBytes : 0,
+          path: savePath,
+          receivedAt: DateTime.now(),
+          progress: 0.0,
+          status: 'Receiving... 0%',
+          isUploading: true,
+        );
       });
-      
+
+      // Save file content directly to final destination
       final file = File(savePath);
       final sink = file.openWrite();
       int bytesReceived = 0;
+      var lastUiUpdate = DateTime.now();
       
       await request.listen((chunk) {
         sink.add(chunk);
         bytesReceived += chunk.length;
-        
-        // Update progress
-        if (contentLength > 0) {
-          final progress = bytesReceived / contentLength;
-          setState(() {
-            if (_ongoingUploads.containsKey(uploadId)) {
-              _ongoingUploads[uploadId] = ReceivedFile(
-                name: fileName,
-                size: contentLength,
-                path: savePath,
-                receivedAt: uploadingFile.receivedAt,
-                progress: progress,
-                status: progress >= 1.0 ? 'Complete' : 'Receiving',
-                isUploading: progress < 1.0,
-              );
-            }
-          });
+        // Throttle UI updates to ~10fps
+        final now = DateTime.now();
+        if (now.difference(lastUiUpdate).inMilliseconds >= 100) {
+          lastUiUpdate = now;
+          if (mounted) {
+            setState(() {
+              final entry = _ongoingDownloads[fileName];
+              if (entry != null) {
+                final hasTotal = totalBytes > 0;
+                entry.progress = hasTotal ? (bytesReceived / totalBytes).clamp(0.0, 1.0) : entry.progress;
+                entry.status = hasTotal
+                    ? 'Receiving... ${((entry.progress) * 100).toInt()}%'
+                    : 'Receiving... ${_formatBytes(bytesReceived)}';
+              }
+            });
+          }
+          // Update notification
+          final hasTotal = totalBytes > 0;
+          final pct = hasTotal ? ((bytesReceived / totalBytes) * 100).clamp(0, 100).toInt() : 0;
+          final body = hasTotal
+              ? 'Receiving $fileName • $pct%'
+              : 'Receiving $fileName • ${_formatBytes(bytesReceived)}';
+          _showProgressNotification(
+            key: fileName,
+            title: 'Receiving file',
+            body: body,
+            progress: hasTotal ? pct : 0,
+          );
         }
       }).asFuture();
       
       await sink.close();
 
-      // Remove from ongoing uploads and add to received files
+      // Add to received files and remove from pending
       setState(() {
-        _ongoingUploads.remove(uploadId);
+        // Remove from ongoing downloads
+        _ongoingDownloads.remove(fileName);
         _receivedFiles.insert(0, ReceivedFile(
           name: fileName,
           size: bytesReceived,
@@ -865,10 +1219,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
           status: 'Complete',
           isUploading: false,
         ));
-        // Keep only last 20 files in the list to avoid memory issues
-        if (_receivedFiles.length > 20) {
-          _receivedFiles = _receivedFiles.take(20).toList();
-        }
+        
+        // Remove from pending files
+        _pendingFiles.removeWhere((pf) => pf.name == fileName);
       });
 
       // Record transfer history
@@ -889,12 +1242,19 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       } catch (_) {}
 
       request.response.statusCode = HttpStatus.ok;
-      request.response.write('File uploaded successfully');
+      request.response.write('File transfer completed');
       await request.response.close();
+      await _cancelProgressNotification(fileName);
+      // Stop service if no more transfers and server not hosting
+      if (!_isHosting && _ongoingDownloads.isEmpty) {
+        await _stopForegroundService();
+      }
     } catch (e) {
       request.response.statusCode = HttpStatus.internalServerError;
-      request.response.write('Upload failed: $e');
+      request.response.write('File transfer failed: $e');
       await request.response.close();
+      // Try to cancel notification on error
+      try { await _cancelProgressNotification(request.uri.queryParameters['name'] ?? 'unknown_file'); } catch (_) {}
     }
   }
 
@@ -952,6 +1312,12 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     }
   }
 
+  // (Removed pending files list API as previews/pending list are removed from web UI)
+
+  // (Removed request-file API as uploads are direct after approval)
+
+  // (Removed check-requests API)
+
   String _formatBytes(int bytes) {
     if (bytes < 1024) return "$bytes B";
     if (bytes < 1024 * 1024) return "${(bytes / 1024).toStringAsFixed(1)} KB";
@@ -959,18 +1325,23 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     return "${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB";
   }
 
+  String _formatTime(DateTime dateTime) {
+    final now = DateTime.now();
+    final difference = now.difference(dateTime);
+    
+    if (difference.inDays > 0) {
+      return '${difference.inDays}d ago';
+    } else if (difference.inHours > 0) {
+      return '${difference.inHours}h ago';
+    } else if (difference.inMinutes > 0) {
+      return '${difference.inMinutes}m ago';
+    } else {
+      return 'Just now';
+    }
+  }
+
   void _showSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.grey[800],
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        margin: EdgeInsets.all(16),
-      ),
-    );
+    // Snack bars disabled as requested
   }
 
   void _showStorageInfo() {
@@ -1008,6 +1379,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   @override
   void dispose() {
     _uploadServer?.close(force: true);
+    _stopForegroundService();
     super.dispose();
   }
 
@@ -1122,21 +1494,6 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     );
   }
 
-  String _formatTime(DateTime dateTime) {
-    final now = DateTime.now();
-    final difference = now.difference(dateTime);
-    
-    if (difference.inDays > 0) {
-      return '${difference.inDays}d ago';
-    } else if (difference.inHours > 0) {
-      return '${difference.inHours}h ago';
-    } else if (difference.inMinutes > 0) {
-      return '${difference.inMinutes}m ago';
-    } else {
-      return 'Just now';
-    }
-  }
-
   Future<void> _openFile(ReceivedFile file) async {
     try {
       final result = await OpenFile.open(file.path);
@@ -1145,48 +1502,6 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       }
     } catch (e) {
       _showSnackBar('Error opening file: $e');
-    }
-  }
-
-  // Start download - copy from app storage to public Downloads folder
-  Future<void> _startDownload(ReceivedFile file) async {
-    try {
-      _showSnackBar('Starting download: ${file.name}');
-      
-      // Get the public Downloads directory
-      final publicDownloadsPath = '/storage/emulated/0/Download';
-      final zapShareDownloadsDir = Directory('$publicDownloadsPath/ZapShare');
-      
-      // Ensure ZapShare Downloads folder exists
-      if (!await zapShareDownloadsDir.exists()) {
-        await zapShareDownloadsDir.create(recursive: true);
-      }
-      
-      // Copy file from app storage to Downloads
-      final originalFile = File(file.path);
-      if (await originalFile.exists()) {
-        // Handle duplicate names in downloads
-        String finalPath = '${zapShareDownloadsDir.path}/${file.name}';
-        int count = 1;
-        while (await File(finalPath).exists()) {
-          final bits = file.name.split('.');
-          if (bits.length > 1) {
-            final base = bits.sublist(0, bits.length - 1).join('.');
-            final ext = bits.last;
-            finalPath = '${zapShareDownloadsDir.path}/${base}_$count.$ext';
-          } else {
-            finalPath = '${zapShareDownloadsDir.path}/${file.name}_$count';
-          }
-          count++;
-        }
-        
-        await originalFile.copy(finalPath);
-        _showSnackBar('Downloaded to Downloads/ZapShare: ${finalPath.split('/').last}');
-      } else {
-        _showSnackBar('File not found: ${file.name}');
-      }
-    } catch (e) {
-      _showSnackBar('Download failed: $e');
     }
   }
 
@@ -1317,7 +1632,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                             ),
                           ),
                           Text(
-                            'Received Files',
+                            _customSaveFolder != null && _customSaveFolder!.isNotEmpty
+                                ? _customSaveFolder!
+                                : 'Download/ZapShare',
                             style: TextStyle(
                               color: Colors.white,
                               fontSize: 12,
@@ -1327,19 +1644,20 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                         ],
                       ),
                     ),
-                    // Info button instead of change folder
+                    // Change/Info buttons
                     IconButton(
-                      onPressed: () => _showStorageInfo(),
+                      onPressed: () => _promptForFolderPath(),
                       style: IconButton.styleFrom(
                         minimumSize: Size(28, 28),
                         padding: EdgeInsets.all(4),
                       ),
-                      icon: Icon(
-                        Icons.info_outline,
-                        color: Colors.grey[400],
-                        size: 16,
-                      ),
+                      icon: Icon(Icons.create_new_folder_outlined, color: Colors.yellow[300], size: 18),
                     ),
+                    IconButton(
+                      onPressed: () => _showStorageInfo(),
+                      style: IconButton.styleFrom(minimumSize: Size(28, 28), padding: EdgeInsets.all(4)),
+                      icon: Icon(Icons.info_outline, color: Colors.grey[400], size: 16),
+                    )
                   ],
                 ),
               ],
@@ -1443,8 +1761,8 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                           const SizedBox(width: 6),
                           Text(
                             isCompact 
-                                ? 'Files (${_receivedFiles.length + _ongoingUploads.length})'
-                                : 'Received (${_receivedFiles.length + _ongoingUploads.length})',
+                                ? 'Pending (${_pendingFiles.length})'
+                                : 'Received (${_receivedFiles.length + _ongoingDownloads.length})',
                             style: TextStyle(
                               color: _currentTab == 1 ? Colors.black : Colors.grey[400],
                               fontSize: isCompact ? 13 : 14,
@@ -1465,14 +1783,8 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   }
 
   // Available content
-  // Available content - shows ongoing uploads and all available files
+  // Available content - shows pending files ready for download
   Widget _buildAvailableContent(String url) {
-    // Combine ongoing uploads and received files
-    final allFiles = <ReceivedFile>[
-      ..._ongoingUploads.values.toList(),
-      ..._receivedFiles,
-    ];
-    
     return Container(
       margin: const EdgeInsets.all(8),
       decoration: BoxDecoration(
@@ -1525,7 +1837,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                 ),
                 if (_isHosting) ...[
                   const SizedBox(height: 16),
-                  if (allFiles.isEmpty) ...[
+                  if (_pendingFiles.isEmpty) ...[
                     Container(
                       padding: const EdgeInsets.all(20),
                       child: Column(
@@ -1537,7 +1849,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                           ),
                           const SizedBox(height: 12),
                           Text(
-                            'No files available yet',
+                            'No files uploaded yet',
                             style: TextStyle(
                               color: Colors.grey[400],
                               fontSize: 16,
@@ -1546,7 +1858,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Files will appear here as they are uploaded',
+                            'Files will appear here when uploaded from web browsers',
                             style: TextStyle(
                               color: Colors.grey[500],
                               fontSize: 12,
@@ -1556,21 +1868,125 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                         ],
                       ),
                     ),
+                  ] else ...[
+                    // Download selected files button
+                    if (_pendingFiles.any((f) => f.isSelected)) 
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: _startSelectedDownloads,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.yellow[300],
+                              foregroundColor: Colors.black,
+                              padding: EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                            child: Text(
+                              'Download Selected Files (${_pendingFiles.where((f) => f.isSelected).length})',
+                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ],
               ],
             ),
           ),
           
-          // Files list
-          if (_isHosting && allFiles.isNotEmpty) 
+          // Ongoing transfers summary with progress (Android UI)
+          if (_ongoingDownloads.isNotEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.downloading, color: Colors.yellow[300], size: 18),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Receiving ${_ongoingDownloads.length} file(s)...',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ..._ongoingDownloads.values.map((file) {
+                    final progressPercent = (file.progress * 100).clamp(0, 100).toInt();
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[850],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey[800]!, width: 1),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  file.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                '${progressPercent}%',
+                                style: TextStyle(color: Colors.yellow[300], fontSize: 12, fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Container(
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[700],
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                            child: FractionallySizedBox(
+                              widthFactor: file.progress,
+                              alignment: Alignment.centerLeft,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.yellow[300],
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            file.status,
+                            style: TextStyle(color: Colors.grey[400], fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ],
+              ),
+            ),
+
+          // Files list - show pending files
+          if (_isHosting && _pendingFiles.isNotEmpty) 
             Expanded(
               child: ListView.builder(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                itemCount: allFiles.length,
+                itemCount: _pendingFiles.length,
                 itemBuilder: (context, index) {
-                  final file = allFiles[index];
-                  return _buildAvailableFileItem(file);
+                  final file = _pendingFiles[index];
+                  return _buildPendingFileItem(file, index);
                 },
               ),
             ),
@@ -1613,9 +2029,8 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     );
   }
 
-  // Available file item with download option
-  Widget _buildAvailableFileItem(ReceivedFile file) {
-    final fileType = _getFileType(file.name);
+  // Pending file item with selection checkbox
+  Widget _buildPendingFileItem(PendingFile file, int index) {
     final screenWidth = MediaQuery.of(context).size.width;
     final isCompact = screenWidth < 400;
     
@@ -1623,27 +2038,42 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       margin: const EdgeInsets.symmetric(vertical: 3),
       padding: EdgeInsets.all(isCompact ? 10 : 12),
       decoration: BoxDecoration(
-        color: Colors.grey[800],
+        color: file.isSelected ? Colors.grey[800] : Colors.grey[850],
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[700]!, width: 1),
+        border: Border.all(
+          color: file.isSelected ? Colors.yellow[300]! : Colors.grey[700]!, 
+          width: file.isSelected ? 2 : 1,
+        ),
       ),
       child: Row(
         children: [
-          // File icon
+          // Selection checkbox
+          Checkbox(
+            value: file.isSelected,
+            onChanged: (value) {
+              setState(() {
+                file.isSelected = value ?? false;
+              });
+            },
+            activeColor: Colors.yellow[300],
+            checkColor: Colors.black,
+          ),
+          const SizedBox(width: 8),
+          
+          // File type icon
           Container(
-            width: isCompact ? 32 : 36,
-            height: isCompact ? 32 : 36,
+            padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: Colors.yellow[300],
+              color: Colors.grey[700],
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(
-              _getFileTypeIcon(fileType),
-              color: Colors.black,
-              size: isCompact ? 18 : 20,
+              _getFileTypeIcon(file.fileType),
+              color: Colors.yellow[300],
+              size: isCompact ? 20 : 24,
             ),
           ),
-          SizedBox(width: isCompact ? 10 : 12),
+          const SizedBox(width: 12),
           
           // File info
           Expanded(
@@ -1654,181 +2084,102 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                   file.name,
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: isCompact ? 15 : 16,
-                    fontWeight: FontWeight.w600,
+                    fontSize: isCompact ? 13 : 14,
+                    fontWeight: FontWeight.w500,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 2),
-                // Show progress bar if uploading
-                if (file.isUploading) ...[
-                  Container(
-                    height: 4,
-                    width: double.infinity,
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[700],
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                    child: Stack(
-                      children: [
-                        Container(
-                          height: 4,
-                          width: double.infinity,
-                          decoration: BoxDecoration(
-                            color: Colors.grey[700],
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                        FractionallySizedBox(
-                          widthFactor: file.progress,
-                          child: Container(
-                            height: 4,
-                            decoration: BoxDecoration(
-                              color: Colors.yellow[300],
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                const SizedBox(height: 4),
+                Text(
+                  '${_formatBytes(file.size)} • ${_formatTime(file.uploadedAt)}',
+                  style: TextStyle(
+                    color: Colors.grey[400],
+                    fontSize: isCompact ? 11 : 12,
                   ),
-                  Row(
-                    children: [
-                      Text(
-                        file.status,
-                        style: TextStyle(
-                          color: Colors.yellow[300],
-                          fontSize: isCompact ? 11 : 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        '${(file.progress * 100).toInt()}%',
-                        style: TextStyle(
-                          color: Colors.yellow[300],
-                          fontSize: isCompact ? 11 : 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ] else ...[
-                  Row(
-                    children: [
-                      Text(
-                        _formatBytes(file.size),
-                        style: TextStyle(
-                          color: Colors.grey,
-                          fontSize: isCompact ? 12 : 13,
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
-                      Text(
-                        ' • ',
-                        style: TextStyle(
-                          color: Colors.grey[600],
-                          fontSize: isCompact ? 12 : 13,
-                        ),
-                      ),
-                      Text(
-                        _formatTime(file.receivedAt),
-                        style: TextStyle(
-                          color: Colors.grey,
-                          fontSize: isCompact ? 12 : 13,
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                ),
               ],
             ),
           ),
           
-          // Action buttons
-          if (!file.isUploading) ...[
-            // Download button
-            GestureDetector(
-              onTap: () => _startDownload(file),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                margin: const EdgeInsets.only(right: 8),
-                decoration: BoxDecoration(
-                  color: Colors.blue[600],
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.download,
-                      color: Colors.white,
-                      size: 14,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Download',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+          // Remove button
+          IconButton(
+            onPressed: () => _removePendingFile(index),
+            icon: Icon(
+              Icons.delete_outline,
+              color: Colors.red[400],
+              size: 20,
             ),
-            // Open button
-            GestureDetector(
-              onTap: () => _openFile(file),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.yellow[300],
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  'Open',
-                  style: TextStyle(
-                    color: Colors.black,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          ],
-          
-          // Progress indicator for uploading files
-          if (file.isUploading)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.grey[700],
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.yellow[300]!),
-                ),
-              ),
-            ),
+            tooltip: 'Remove file',
+          ),
         ],
       ),
     );
   }
 
+  // Start downloading selected files - now triggers file transfer from browser
+  Future<void> _startSelectedDownloads() async {
+    final selectedFiles = _pendingFiles.where((f) => f.isSelected).toList();
+    if (selectedFiles.isEmpty) return;
+
+    await _ensureSaveFolder();
+    
+    for (final pendingFile in selectedFiles) {
+      await _requestFileFromBrowser(pendingFile);
+    }
+  }
+
+  // Request actual file transfer from browser
+  Future<void> _requestFileFromBrowser(PendingFile pendingFile) async {
+    try {
+      setState(() {
+        // Add to ongoing downloads to show progress
+        _ongoingDownloads[pendingFile.id] = ReceivedFile(
+          name: pendingFile.name,
+          size: pendingFile.size,
+          path: 'requesting...',
+          receivedAt: DateTime.now(),
+          progress: 0.0,
+          status: 'Requesting file from browser...',
+          isUploading: true,
+        );
+      });
+
+      // Register file request - browser will poll and send file when detected
+      final requestData = jsonEncode({'fileName': pendingFile.name});
+      final response = await HttpClient().postUrl(Uri.parse('http://localhost:8090/request-file'))
+        ..headers.contentType = ContentType.json
+        ..write(requestData);
+      
+      await response.close();
+      
+      _showSnackBar('Requesting ${pendingFile.name} from browser...');
+      
+    } catch (e) {
+      setState(() {
+        _ongoingDownloads.remove(pendingFile.id);
+      });
+      _showSnackBar('Failed to request ${pendingFile.name}: $e');
+    }
+  }
+
+  // Remove pending file
+  void _removePendingFile(int index) {
+    final file = _pendingFiles[index];
+    
+    setState(() {
+      _pendingFiles.removeAt(index);
+    });
+    
+    _showSnackBar('${file.name} removed');
+  }
+
+
   // Received files content matching AndroidReceiveScreen style
   Widget _buildReceivedFilesContent() {
-    // Combine ongoing uploads and received files
+    // Combine ongoing downloads and received files
     final allFiles = <ReceivedFile>[
-      ..._ongoingUploads.values.toList(),
+      ..._ongoingDownloads.values.toList(),
       ..._receivedFiles,
     ];
     
