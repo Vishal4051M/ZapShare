@@ -3,7 +3,7 @@ ZapShare
 
 Lightning-fast, privacy-first file sharing across devices on the same network. Built with Flutter, runs on Android, iOS, Windows, macOS, and Linux.
 
-Note: Screenshots below use placeholders. Replace them with real captures from your environment in `docs/screenshots/`.
+
 
 Table of Contents
 -----------------
@@ -29,24 +29,6 @@ Features
 - Background transfers with notifications (Android)
 - Local transfer history (lightweight log)
 - Works fully offline on local Wi‑Fi/hotspot (no cloud)
-
-Screenshots (placeholders)
--------------------------
-- Home: `docs/screenshots/home.png`
-- Send (HTTP Share): `docs/screenshots/send.png`
-- Receive Options: `docs/screenshots/receive-options.png`
-- Receive by Code: `docs/screenshots/receive-code.png`
-- Web Receive: `docs/screenshots/web-receive.png`
-- Transfer History: `docs/screenshots/history.png`
-
-```
-![Home](docs/screenshots/home.png)
-![Send](docs/screenshots/send.png)
-![Receive Options](docs/screenshots/receive-options.png)
-![Receive by Code](docs/screenshots/receive-code.png)
-![Web Receive](docs/screenshots/web-receive.png)
-![History](docs/screenshots/history.png)
-```
 
 How It Works
 ------------
@@ -159,14 +141,3 @@ License
 -------
 MIT
 
-Screenshot placeholders
------------------------
-Create these files or replace paths above:
-```
-docs/screenshots/home.png
-docs/screenshots/send.png
-docs/screenshots/receive-options.png
-docs/screenshots/receive-code.png
-docs/screenshots/web-receive.png
-docs/screenshots/history.png
-```
