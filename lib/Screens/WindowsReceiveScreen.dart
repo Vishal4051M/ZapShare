@@ -176,6 +176,7 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
           'fileSize': contentLength,
           'direction': 'Received',
           'peer': _serverIp ?? '',
+          'peerDeviceName': null, // Could be enhanced to lookup device name
           'dateTime': DateTime.now().toIso8601String(),
           'fileLocation': savePath, // Save the actual file path
         };

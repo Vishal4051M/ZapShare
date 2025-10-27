@@ -11,7 +11,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'dart:convert';
 import 'dart:math';
-import 'package:flutter/services.dart';
+import '../services/device_discovery_service.dart';
+import '../widgets/connection_request_dialog.dart';
 
 const Color kAndroidAccentYellow = Colors.yellow; // lighter yellow for Android
 
@@ -74,8 +75,20 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
   // Track downloads per client for multiple simultaneous downloads
   Map<String, Map<int, DownloadStatus>> _clientDownloads = {}; // clientIP -> {fileIndex -> DownloadStatus}
   List<String> _connectedClients = []; // List of connected client IPs
+  Map<String, String> _clientDeviceNames = {}; // clientIP -> deviceName mapping
 
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+  // Device Discovery
+  final DeviceDiscoveryService _discoveryService = DeviceDiscoveryService();
+  List<DiscoveredDevice> _nearbyDevices = [];
+  StreamSubscription? _devicesSubscription;
+  StreamSubscription? _connectionRequestSubscription;
+  StreamSubscription? _connectionResponseSubscription;
+  bool _showNearbyDevices = true;
+  String? _pendingRequestDeviceIp;
+  Timer? _requestTimeoutTimer;
+  DiscoveredDevice? _pendingDevice;
 
 
   String _ipToCode(String ip) {
@@ -452,6 +465,9 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
     _initLocalNotifications();
     _listenForSharedFiles();
     
+    // Initialize device discovery
+    _initDeviceDiscovery();
+    
     // Periodically cleanup disconnected clients
     Timer.periodic(Duration(minutes: 2), (timer) {
       if (mounted) {
@@ -779,6 +795,7 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
           'fileSize': fileSize,
           'direction': 'Sent',
           'peer': clientIP, // Record the actual client IP
+          'peerDeviceName': _clientDeviceNames[clientIP], // Record device name if available
           'dateTime': DateTime.now().toIso8601String(),
         };
         history.insert(0, jsonEncode(entry));
@@ -2020,10 +2037,373 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
     await response.close();
   }
 
+  void _initDeviceDiscovery() async {
+    print('🔍 Initializing device discovery...');
+    
+    // Initialize device info first
+    await _discoveryService.initialize();
+    
+    // Start discovery
+    await _discoveryService.start();
+    
+    print('✅ Device discovery started');
+    
+    // Listen for nearby devices
+    _devicesSubscription = _discoveryService.devicesStream.listen((devices) {
+      if (mounted) {
+        print('📱 Nearby devices updated: ${devices.length} devices');
+        setState(() {
+          _nearbyDevices = devices.where((d) => d.isOnline).toList();
+          // Update device name mapping
+          for (var device in devices) {
+            _clientDeviceNames[device.ipAddress] = device.deviceName;
+          }
+        });
+      }
+    });
+    
+    // Listen for incoming connection requests
+    _connectionRequestSubscription = _discoveryService.connectionRequestStream.listen(
+      (request) {
+        if (mounted) {
+          print('📩 Stream listener received connection request from ${request.deviceName} (${request.ipAddress})');
+          _showConnectionRequestDialog(request);
+        } else {
+          print('⚠️  Widget not mounted, ignoring connection request');
+        }
+      },
+      onError: (error) {
+        print('❌ Error in connection request stream: $error');
+      },
+      onDone: () {
+        print('⚠️  Connection request stream closed');
+      },
+    );
+    print('✅ Connection request listener active');
+    
+    // Listen for connection responses
+    _connectionResponseSubscription = _discoveryService.connectionResponseStream.listen((response) {
+      print('📨 Connection response received: accepted=${response.accepted}, ip=${response.ipAddress}');
+      if (mounted && _pendingRequestDeviceIp != null) {
+        // Cancel the timeout timer since we got a response
+        _requestTimeoutTimer?.cancel();
+        _requestTimeoutTimer = null;
+        
+        if (response.accepted) {
+          // Connection accepted! Start sharing
+          print('✅ Connection accepted! Starting server...');
+          _startSharingToDevice(_pendingRequestDeviceIp!);
+        } else {
+          // Connection declined
+          print('❌ Connection declined');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Connection request was declined'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        _pendingRequestDeviceIp = null;
+        _pendingDevice = null;
+      }
+    });
+    
+    print('✅ All stream listeners set up');
+  }
+
+  void _showConnectionRequestDialog(ConnectionRequest request) {
+    print('🚀 _showConnectionRequestDialog called');
+    print('   Device: ${request.deviceName}');
+    print('   IP: ${request.ipAddress}');
+    print('   Files: ${request.fileNames.length}');
+    print('   Context valid: ${context != null}');
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        print('📱 Building ConnectionRequestDialog...');
+        return ConnectionRequestDialog(
+          request: request,
+          onAccept: () async {
+            print('✅ User accepted connection request');
+            Navigator.of(context).pop();
+            await _discoveryService.sendConnectionResponse(request.ipAddress, true);
+          },
+          onDecline: () async {
+            print('❌ User declined connection request');
+            Navigator.of(context).pop();
+            await _discoveryService.sendConnectionResponse(request.ipAddress, false);
+          },
+        );
+      },
+    );
+    print('✅ Dialog shown');
+  }
+
+  Future<void> _sendConnectionRequest(DiscoveredDevice device) async {
+    if (_fileUris.isEmpty) {
+      print('⚠️ No files selected');
+      return;
+    }
+
+    setState(() {
+      _pendingRequestDeviceIp = device.ipAddress;
+      _pendingDevice = device;
+    });
+    
+    // Start server FIRST before sending request
+    print('🚀 Starting server before sending connection request...');
+    await _startServer();
+    
+    // Calculate total size
+    final totalSize = _fileSizeList.fold<int>(0, (sum, size) => sum + size);
+    
+    // Send connection request
+    print('📤 Sending connection request to ${device.deviceName} (${device.ipAddress})');
+    await _discoveryService.sendConnectionRequest(
+      device.ipAddress,
+      _fileNames,
+      totalSize,
+    );
+
+    print('✅ Connection request sent successfully');
+    
+    // Start 10-second timeout timer
+    _requestTimeoutTimer?.cancel();
+    _requestTimeoutTimer = Timer(Duration(seconds: 10), () {
+      if (mounted && _pendingRequestDeviceIp != null) {
+        print('⏰ Connection request timeout - no response after 10 seconds');
+        _showRetryDialog();
+      }
+    });
+  }
+
+  void _showRetryDialog() {
+    if (!mounted) return;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.grey[900],
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: Colors.yellow[300]!.withOpacity(0.5),
+                width: 2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.5),
+                  blurRadius: 20,
+                  offset: Offset(0, 10),
+                ),
+              ],
+            ),
+            padding: EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Icon
+                Container(
+                  width: 70,
+                  height: 70,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.yellow[300],
+                    border: Border.all(
+                      color: Colors.yellow[600]!,
+                      width: 3,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.yellow[300]!.withOpacity(0.4),
+                        blurRadius: 15,
+                        offset: Offset(0, 5),
+                      ),
+                    ],
+                  ),
+                  child: Icon(
+                    Icons.timer_off_rounded,
+                    size: 35,
+                    color: Colors.black87,
+                  ),
+                ),
+                SizedBox(height: 16),
+                
+                // Title
+                Text(
+                  'No Response',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.yellow[300],
+                  ),
+                ),
+                SizedBox(height: 8),
+                
+                // Device name
+                if (_pendingDevice != null)
+                  Text(
+                    _pendingDevice!.deviceName,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                SizedBox(height: 16),
+                
+                // Message
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[850],
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: Colors.grey[700]!,
+                      width: 1,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.info_outline_rounded, color: Colors.yellow[400], size: 18),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'hasn\'t responded to your request',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey[400],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Would you like to try again?',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.white,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                SizedBox(height: 24),
+                
+                // Buttons
+                Row(
+                  children: [
+                    // Cancel button
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () {
+                          _requestTimeoutTimer?.cancel();
+                          _requestTimeoutTimer = null;
+                          setState(() {
+                            _pendingRequestDeviceIp = null;
+                            _pendingDevice = null;
+                          });
+                          Navigator.of(context).pop();
+                        },
+                        child: Container(
+                          padding: EdgeInsets.symmetric(vertical: 14),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[800],
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: Colors.grey[700]!,
+                              width: 1,
+                            ),
+                          ),
+                          child: Text(
+                            'Cancel',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.grey[400],
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    
+                    // Retry button
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () async {
+                          Navigator.of(context).pop();
+                          if (_pendingDevice != null) {
+                            await _sendConnectionRequest(_pendingDevice!);
+                          }
+                        },
+                        child: Container(
+                          padding: EdgeInsets.symmetric(vertical: 14),
+                          decoration: BoxDecoration(
+                            color: Colors.yellow[300],
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.yellow[300]!.withOpacity(0.3),
+                                blurRadius: 8,
+                                offset: Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Text(
+                            'Retry',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.black,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _startSharingToDevice(String deviceIp) async {
+    // Start the HTTP server
+    await _startServer();
+    
+    print('✅ Server started successfully');
+  }
+
   @override
   void dispose() {
     _server?.close(force: true);
     _pageController.dispose();
+    _devicesSubscription?.cancel();
+    _connectionRequestSubscription?.cancel();
+    _connectionResponseSubscription?.cancel();
+    _requestTimeoutTimer?.cancel();
+    // Don't stop the singleton discovery service - it runs globally
     super.dispose();
   }
 
@@ -2088,6 +2468,9 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
                     // Share code section - always visible for consistent design
                     _buildCompactShareCode(),
                     const SizedBox(height: 24),
+                    
+                    // Nearby devices section
+                    _buildNearbyDevicesSection(),
                     
                     // File list section - prominent
                     if (_fileNames.isNotEmpty) ...[
@@ -2221,6 +2604,634 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildNearbyDevicesSection() {
+    // Compact header-only view when collapsed
+    return GestureDetector(
+      onTap: () {
+        setState(() => _showNearbyDevices = !_showNearbyDevices);
+        HapticFeedback.lightImpact();
+      },
+      child: AnimatedContainer(
+        duration: Duration(milliseconds: 300),
+        margin: EdgeInsets.only(bottom: 12),
+        padding: EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: _showNearbyDevices ? 14 : 10,
+        ),
+        decoration: BoxDecoration(
+          color: _showNearbyDevices 
+            ? Colors.grey[900] 
+            : Colors.grey[900]!.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: _nearbyDevices.isNotEmpty 
+              ? Colors.yellow[300]!.withOpacity(0.4) 
+              : Colors.grey[700]!.withOpacity(0.3),
+            width: 1,
+          ),
+        ),
+        child: Column(
+          children: [
+            // Compact header
+            Row(
+              children: [
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: _AnimatedRadar(isActive: true),
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _nearbyDevices.isEmpty 
+                      ? 'Discovering...' 
+                      : '${_nearbyDevices.length} device${_nearbyDevices.length == 1 ? '' : 's'} nearby',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Icon(
+                  _showNearbyDevices 
+                    ? Icons.keyboard_arrow_up_rounded 
+                    : Icons.keyboard_arrow_down_rounded,
+                  color: Colors.grey[500],
+                  size: 20,
+                ),
+              ],
+            ),
+            
+            // Expandable content
+            if (_showNearbyDevices && _nearbyDevices.isNotEmpty) ...[
+              SizedBox(height: 12),
+              _buildCompactDeviceList(),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyDevicesState() {
+    return Container(
+      padding: EdgeInsets.symmetric(vertical: 24),
+      child: Column(
+        children: [
+          // Animated scanning indicator
+          _PulsingSearchIndicator(),
+          SizedBox(height: 16),
+          Text(
+            'Searching for nearby devices...',
+            style: TextStyle(
+              color: Colors.grey[400],
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Make sure devices are on the same network',
+            style: TextStyle(
+              color: Colors.grey[600],
+              fontSize: 12,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactDeviceList() {
+    return Container(
+      height: 85,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: _nearbyDevices.length,
+        itemBuilder: (context, index) {
+          return _buildCircularDeviceItem(_nearbyDevices[index]);
+        },
+      ),
+    );
+  }
+
+  Widget _buildCircularDeviceItem(DiscoveredDevice device) {
+    final isPending = _pendingRequestDeviceIp == device.ipAddress;
+    
+    return GestureDetector(
+      onTap: isPending ? null : () => _sendConnectionRequest(device),
+      onLongPress: () => _showDeviceDetailsDialog(device),
+      child: Container(
+        width: 65,
+        margin: EdgeInsets.only(right: 10),
+        child: Column(
+          children: [
+            // Circular device icon
+            AnimatedContainer(
+              duration: Duration(milliseconds: 200),
+              width: 55,
+              height: 55,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: isPending
+                  ? LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Colors.yellow[300]!,
+                        Colors.yellow[400]!,
+                      ],
+                    )
+                  : LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Colors.grey[800]!,
+                        Colors.grey[850]!,
+                      ],
+                    ),
+                border: Border.all(
+                  color: isPending 
+                    ? Colors.yellow[600]! 
+                    : Colors.grey[700]!,
+                  width: 2,
+                ),
+                boxShadow: [
+                  if (isPending)
+                    BoxShadow(
+                      color: Colors.yellow[300]!.withOpacity(0.3),
+                      blurRadius: 8,
+                      offset: Offset(0, 3),
+                    ),
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.2),
+                    blurRadius: 6,
+                    offset: Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  // Platform icon
+                  Icon(
+                    _getPlatformIcon(device.platform),
+                    color: isPending ? Colors.black87 : Colors.white70,
+                    size: 24,
+                  ),
+                  // Pending spinner
+                  if (isPending)
+                    Positioned.fill(
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          Colors.black.withOpacity(0.3),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            SizedBox(height: 6),
+            // Device name
+            Text(
+              device.deviceName.length > 8 
+                ? '${device.deviceName.substring(0, 8)}...' 
+                : device.deviceName,
+              style: TextStyle(
+                color: isPending ? Colors.yellow[300] : Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showDeviceDetailsDialog(DiscoveredDevice device) {
+    HapticFeedback.mediumImpact();
+    
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          padding: EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.grey[900],
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: Colors.yellow[300]!.withOpacity(0.5),
+              width: 2,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.5),
+                blurRadius: 20,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Device Icon
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.yellow[300],
+                  border: Border.all(
+                    color: Colors.yellow[600]!,
+                    width: 3,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.yellow[300]!.withOpacity(0.4),
+                      blurRadius: 15,
+                      offset: Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: Icon(
+                  _getPlatformIcon(device.platform),
+                  color: Colors.black87,
+                  size: 40,
+                ),
+              ),
+              SizedBox(height: 16),
+              
+              // Device Name
+              Text(
+                device.deviceName,
+                style: TextStyle(
+                  color: Colors.yellow[300],
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 20),
+              
+              // Device Details
+              _buildDetailRow(Icons.computer_rounded, 'Platform', device.platform),
+              SizedBox(height: 12),
+              _buildDetailRow(Icons.wifi_rounded, 'IP Address', device.ipAddress),
+              SizedBox(height: 12),
+              _buildDetailRow(Icons.share_rounded, 'Share Code', device.shareCode),
+              SizedBox(height: 12),
+              _buildDetailRow(
+                device.isOnline ? Icons.check_circle_rounded : Icons.cancel_rounded,
+                'Status',
+                device.isOnline ? 'Online' : 'Offline',
+                statusColor: device.isOnline ? Colors.green[400] : Colors.red[400],
+              ),
+              
+              SizedBox(height: 24),
+              
+              // Close Button
+              GestureDetector(
+                onTap: () => Navigator.of(context).pop(),
+                child: Container(
+                  width: double.infinity,
+                  padding: EdgeInsets.symmetric(vertical: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.yellow[300],
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.yellow[300]!.withOpacity(0.3),
+                        blurRadius: 8,
+                        offset: Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    'Close',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.black,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(IconData icon, String label, String value, {Color? statusColor}) {
+    return Row(
+      children: [
+        Container(
+          padding: EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.grey[850],
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: Colors.grey[700]!,
+              width: 1,
+            ),
+          ),
+          child: Icon(
+            icon,
+            color: statusColor ?? Colors.yellow[300],
+            size: 20,
+          ),
+        ),
+        SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  color: Colors.grey[500],
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              SizedBox(height: 2),
+              Text(
+                value,
+                style: TextStyle(
+                  color: statusColor ?? Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBeautifulDeviceCard(DiscoveredDevice device) {
+    final isPending = _pendingRequestDeviceIp == device.ipAddress;
+    
+    return GestureDetector(
+      onTap: isPending ? null : () => _sendConnectionRequest(device),
+      child: AnimatedContainer(
+        duration: Duration(milliseconds: 300),
+        width: 160,
+        padding: EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isPending
+                ? [
+                    Colors.yellow[300]!.withOpacity(0.2),
+                    Colors.yellow[400]!.withOpacity(0.1),
+                  ]
+                : [
+                    Colors.grey[850]!,
+                    Colors.grey[900]!,
+                  ],
+          ),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isPending ? Colors.yellow[300]! : Colors.grey[700]!,
+            width: isPending ? 2 : 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: isPending 
+                ? Colors.yellow[300]!.withOpacity(0.2)
+                : Colors.black.withOpacity(0.2),
+              blurRadius: isPending ? 12 : 8,
+              offset: Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Platform icon with background
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: isPending 
+                  ? Colors.yellow[300]!.withOpacity(0.2)
+                  : Colors.grey[800],
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: isPending ? Colors.yellow[300]! : Colors.transparent,
+                  width: 1,
+                ),
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Icon(
+                    _getPlatformIcon(device.platform),
+                    color: isPending ? Colors.yellow[300] : Colors.white,
+                    size: 30,
+                  ),
+                  if (isPending)
+                    Positioned.fill(
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation(Colors.yellow[300]),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            SizedBox(height: 12),
+            // Device name
+            Text(
+              device.deviceName,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+            ),
+            SizedBox(height: 4),
+            // Platform name
+            Text(
+              device.platform,
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            if (isPending) ...[
+              SizedBox(height: 8),
+              Text(
+                'Connecting...',
+                style: TextStyle(
+                  color: Colors.yellow[300],
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCompactDeviceChip(DiscoveredDevice device) {
+    final isPending = _pendingRequestDeviceIp == device.ipAddress;
+    
+    return Tooltip(
+      message: '${device.deviceName}\n${device.platform}\n${device.ipAddress}',
+      preferBelow: false,
+      verticalOffset: 10,
+      decoration: BoxDecoration(
+        color: Colors.grey[900],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.yellow[300]!, width: 1),
+      ),
+      textStyle: TextStyle(
+        color: Colors.white,
+        fontSize: 12,
+      ),
+      child: GestureDetector(
+        onTap: isPending ? null : () => _sendConnectionRequest(device),
+        child: AnimatedContainer(
+          duration: Duration(milliseconds: 200),
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: isPending ? Colors.yellow[300]!.withOpacity(0.2) : Colors.grey[800],
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isPending ? Colors.yellow[300]! : Colors.grey[700]!,
+              width: isPending ? 2 : 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _getPlatformIcon(device.platform),
+                color: isPending ? Colors.yellow[300] : Colors.white70,
+                size: 16,
+              ),
+              SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  device.deviceName,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (isPending) ...[
+                SizedBox(width: 6),
+                SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation(Colors.yellow[300]),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNearbyDeviceCard(DiscoveredDevice device) {
+    final isPending = _pendingRequestDeviceIp == device.ipAddress;
+    
+    return GestureDetector(
+      onTap: isPending ? null : () => _sendConnectionRequest(device),
+      child: Container(
+        width: 140,
+        margin: EdgeInsets.only(right: 12),
+        padding: EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isPending ? Colors.yellow[300]!.withOpacity(0.1) : Colors.grey[900],
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isPending ? Colors.yellow[300]! : Colors.grey[800]!,
+            width: isPending ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              _getPlatformIcon(device.platform),
+              color: isPending ? Colors.yellow[300] : Colors.white,
+              size: 28,
+            ),
+            SizedBox(height: 8),
+            Text(
+              device.deviceName,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+            ),
+            if (isPending) ...[
+              SizedBox(height: 4),
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation(Colors.yellow[300]),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  IconData _getPlatformIcon(String platform) {
+    switch (platform.toLowerCase()) {
+      case 'android':
+        return Icons.android;
+      case 'ios':
+        return Icons.phone_iphone;
+      case 'windows':
+        return Icons.desktop_windows;
+      case 'macos':
+        return Icons.laptop_mac;
+      case 'linux':
+        return Icons.computer;
+      default:
+        return Icons.devices;
+    }
   }
 
   Widget _buildCompactShareCode() {
@@ -2607,40 +3618,8 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
                           ],
                         ],
                       ),
-                    ] else if (clientStatuses.isNotEmpty && 
-                               clientStatuses.values.any((status) => status.progress > 0 && status.progress < 1.0)) ...[
-                      // Show processing indicator for files being downloaded
-                      Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: Colors.blue[400],
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.blue[400]!.withOpacity(0.4),
-                              blurRadius: 6,
-                              offset: Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: Icon(
-                          Icons.sync_rounded,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        'Processing...',
-                        style: TextStyle(
-                          color: Colors.blue[400],
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
                     ] else ...[
-                      // Small circular progress indicator inline
+                      // Show percentage and pause/resume button when sharing
                       ValueListenableBuilder<double>(
                         valueListenable: progress,
                         builder: (context, value, _) => Container(
@@ -2681,7 +3660,7 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
                           builder: (context, paused, _) => Text(
                             paused ? 'Paused' : '${(value * 100).toStringAsFixed(0)}%',
                             style: TextStyle(
-                              color: paused ? Colors.orange[400] : Colors.yellow[300],
+                              color: paused ? Colors.yellow[600] : Colors.yellow[300],
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
                             ),
@@ -2819,26 +3798,53 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Container(
-            width: 80,
-            height: 80,
-            decoration: BoxDecoration(
-              color: Colors.grey[900],
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.grey[800]!, width: 1),
-            ),
-            child: CircularProgressIndicator(
-              color: Colors.yellow[300],
-              strokeWidth: 3,
-            ),
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              // Outer rotating ring
+              SizedBox(
+                width: 90,
+                height: 90,
+                child: CircularProgressIndicator(
+                  color: Colors.yellow[300],
+                  strokeWidth: 3,
+                ),
+              ),
+              // Inner pulsing circle
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  color: Colors.grey[900],
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.grey[800]!,
+                    width: 2,
+                  ),
+                ),
+                child: Icon(
+                  Icons.hourglass_empty_rounded,
+                  color: Colors.yellow[300],
+                  size: 28,
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 24),
           Text(
             'Loading...',
             style: TextStyle(
               color: Colors.white,
-              fontSize: 20,
+              fontSize: 18,
               fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Please wait',
+            style: TextStyle(
+              color: Colors.grey[500],
+              fontSize: 14,
             ),
           ),
         ],
@@ -2870,18 +3876,13 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
             height: 88,
             transform: Matrix4.identity()..scale(isPressed ? 0.95 : 1.0),
             decoration: BoxDecoration(
-              color: isEnabled ? color : Colors.grey[700],
+              color: isEnabled 
+                ? (isPrimary ? Colors.yellow[300] : color)
+                : Colors.grey[700],
               shape: BoxShape.circle,
-              gradient: isEnabled && isPrimary 
-                ? LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Colors.yellow[300]!, Colors.orange[400]!],
-                  )
-                : null,
               boxShadow: isEnabled ? [
                 BoxShadow(
-                  color: color.withOpacity(isPressed ? 0.2 : 0.3),
+                  color: (isPrimary ? Colors.yellow[400]! : color).withOpacity(isPressed ? 0.2 : 0.3),
                   blurRadius: isPressed ? 12 : 16,
                   offset: Offset(0, isPressed ? 4 : 8),
                   spreadRadius: 0,
@@ -2901,7 +3902,7 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
                 ),
               ],
               border: isEnabled && isPrimary 
-                ? Border.all(color: Colors.orange[500]!, width: 2)
+                ? Border.all(color: Colors.yellow[600]!, width: 2)
                 : null,
             ),
             child: Material(
@@ -2952,18 +3953,11 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
             height: 88,
             transform: Matrix4.identity()..scale(isPressed ? 0.95 : 1.0),
             decoration: BoxDecoration(
-              color: color,
+              color: isPrimary ? Colors.yellow[300] : color,
               shape: BoxShape.circle,
-              gradient: isPrimary 
-                ? LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Colors.yellow[300]!, Colors.orange[400]!],
-                  )
-                : null,
               boxShadow: [
                 BoxShadow(
-                  color: color.withOpacity(isPressed ? 0.2 : 0.3),
+                  color: (isPrimary ? Colors.yellow[400]! : color).withOpacity(isPressed ? 0.2 : 0.3),
                   blurRadius: isPressed ? 12 : 16,
                   offset: Offset(0, isPressed ? 4 : 8),
                   spreadRadius: 0,
@@ -2976,7 +3970,7 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
                 ),
               ],
               border: isPrimary 
-                ? Border.all(color: Colors.orange[500]!, width: 2)
+                ? Border.all(color: Colors.yellow[600]!, width: 2)
                 : null,
             ),
             child: Material(
@@ -3039,7 +4033,7 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
                     ],
                     border: Border.all(
                       color: backgroundColor == Colors.yellow[300]! 
-                        ? Colors.orange[500]! 
+                        ? Colors.yellow[600]! 
                         : Colors.transparent,
                       width: 1.5,
                     ),
@@ -3089,11 +4083,11 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
             height: 32,
             transform: Matrix4.identity()..scale(isPressed ? 0.9 : 1.0),
             decoration: BoxDecoration(
-              color: isPaused ? Colors.green[400] : Colors.orange[400],
+              color: isPaused ? Colors.green[400] : Colors.yellow[400],
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: (isPaused ? Colors.green[400] : Colors.orange[400])!.withOpacity(isPressed ? 0.3 : 0.4),
+                  color: (isPaused ? Colors.green[400] : Colors.yellow[400])!.withOpacity(isPressed ? 0.3 : 0.4),
                   blurRadius: isPressed ? 6 : 8,
                   offset: Offset(0, isPressed ? 2 : 4),
                   spreadRadius: 0,
@@ -3391,18 +4385,13 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
                     width: 90,
                     height: 80,
                     decoration: BoxDecoration(
-                      color: isEnabled ? color : Colors.grey[700],
+                      color: isEnabled 
+                        ? (isPrimary ? Colors.yellow[300] : color)
+                        : Colors.grey[700],
                       borderRadius: BorderRadius.circular(16),
-                      gradient: isEnabled && isPrimary 
-                        ? LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [Colors.yellow[300]!, Colors.orange[400]!],
-                          )
-                        : null,
                     boxShadow: [
                       BoxShadow(
-                        color: color.withOpacity(isPressed ? 0.2 : 0.3),
+                        color: (isPrimary ? Colors.yellow[400]! : color).withOpacity(isPressed ? 0.2 : 0.3),
                         blurRadius: isPressed ? 8 : 12,
                         offset: Offset(0, isPressed ? 3 : 6),
                         spreadRadius: 0,
@@ -3415,7 +4404,7 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
                       ),
                     ],
                     border: isEnabled && isPrimary 
-                      ? Border.all(color: Colors.orange[500]!, width: 2)
+                      ? Border.all(color: Colors.yellow[600]!, width: 2)
                       : Border.all(color: Colors.white.withOpacity(0.2), width: 1),
                   ),
                   child: Column(
@@ -3569,7 +4558,7 @@ class HexagonPainter extends CustomPainter {
       paint.shader = LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: [Colors.yellow[300]!, Colors.orange[400]!],
+        colors: [Colors.yellow[300]!, Colors.yellow[400]!],
       ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
     }
 
@@ -3598,7 +4587,7 @@ class HexagonPainter extends CustomPainter {
     // Add border if primary
     if (isPrimary) {
       final borderPaint = Paint()
-        ..color = Colors.orange[500]!
+        ..color = Colors.yellow[600]!
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2;
       canvas.drawPath(path, borderPaint);
@@ -3629,4 +4618,125 @@ class HexagonPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
+
+// Animated Radar Icon Widget
+class _AnimatedRadar extends StatefulWidget {
+  final bool isActive;
+  
+  const _AnimatedRadar({Key? key, required this.isActive}) : super(key: key);
+  
+  @override
+  State<_AnimatedRadar> createState() => _AnimatedRadarState();
+}
+
+class _AnimatedRadarState extends State<_AnimatedRadar> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: Duration(seconds: 2),
+    )..repeat();
+  }
+  
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Transform.rotate(
+          angle: _controller.value * 2 * 3.14159,
+          child: Icon(
+            Icons.radar,
+            color: widget.isActive ? Colors.yellow[300] : Colors.grey[600],
+            size: 16,
+          ),
+        );
+      },
+    );
+  }
+}
+
+// Pulsing Search Indicator Widget
+class _PulsingSearchIndicator extends StatefulWidget {
+  const _PulsingSearchIndicator({Key? key}) : super(key: key);
+  
+  @override
+  State<_PulsingSearchIndicator> createState() => _PulsingSearchIndicatorState();
+}
+
+class _PulsingSearchIndicatorState extends State<_PulsingSearchIndicator> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _scaleAnimation;
+  
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: 1500),
+    )..repeat(reverse: true);
+    
+    _scaleAnimation = Tween<double>(begin: 0.8, end: 1.2).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
+  }
+  
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        // Outer pulse
+        AnimatedBuilder(
+          animation: _scaleAnimation,
+          builder: (context, child) {
+            return Transform.scale(
+              scale: _scaleAnimation.value,
+              child: Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.yellow[300]!.withOpacity(0.3),
+                    width: 2,
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+        // Inner icon
+        Container(
+          width: 60,
+          height: 60,
+          decoration: BoxDecoration(
+            color: Colors.grey[800],
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            Icons.search,
+            color: Colors.grey[600],
+            size: 30,
+          ),
+        ),
+      ],
+    );
+  }
 }

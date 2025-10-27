@@ -7,10 +7,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:zap_share/Screens/HomeScreen.dart';
 import 'package:zap_share/Screens/HttpFileShareScreen.dart';
+import 'package:zap_share/services/device_discovery_service.dart';
+import 'package:zap_share/widgets/connection_request_dialog.dart';
 import 'Screens/WindowsFileShareScreen.dart';
 import 'Screens/WindowsReceiveScreen.dart';
 import 'Screens/AndroidReceiveScreen.dart';
 import 'Screens/TransferHistoryScreen.dart';
+import 'dart:async';
 
 Future<void> clearAppCache() async {
   final cacheDir = await getTemporaryDirectory();
@@ -73,12 +76,103 @@ void main() async {
   runApp(const DataRushApp());
 }
 
-class DataRushApp extends StatelessWidget {
+class DataRushApp extends StatefulWidget {
   const DataRushApp({super.key});
+
+  @override
+  State<DataRushApp> createState() => _DataRushAppState();
+}
+
+class _DataRushAppState extends State<DataRushApp> {
+  final DeviceDiscoveryService _discoveryService = DeviceDiscoveryService();
+  StreamSubscription<ConnectionRequest>? _connectionRequestSubscription;
+  final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _initGlobalDeviceDiscovery();
+  }
+
+  void _initGlobalDeviceDiscovery() async {
+    print('🌐 [Global] Initializing device discovery for global dialog');
+    await _discoveryService.initialize();
+    await _discoveryService.start();
+
+    _connectionRequestSubscription = _discoveryService.connectionRequestStream.listen((request) {
+      print('🔔 [Global] Received connection request from ${request.deviceName}');
+      _showGlobalConnectionRequestDialog(request);
+    });
+  }
+
+  void _showGlobalConnectionRequestDialog(ConnectionRequest request) {
+    final context = navigatorKey.currentContext;
+    if (context == null) {
+      print('❌ [Global] No context available to show dialog');
+      return;
+    }
+
+    print('🚀 [Global] Showing connection request dialog globally');
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return ConnectionRequestDialog(
+          request: request,
+          onAccept: () async {
+            print('✅ [Global] User accepted connection request');
+            Navigator.of(dialogContext).pop();
+            
+            // Send acceptance response
+            await _discoveryService.sendConnectionResponse(request.ipAddress, true);
+            
+            // Navigate to receive screen
+            if (Platform.isAndroid) {
+              // Navigate to AndroidReceiveScreen with the sender's code
+              final senderCode = _ipToCode(request.ipAddress);
+              navigatorKey.currentState?.pushReplacement(
+                MaterialPageRoute(
+                  builder: (context) => AndroidReceiveScreen(
+                    autoConnectCode: senderCode,
+                  ),
+                ),
+              );
+            }
+            
+            print('✅ [Global] Redirecting to receive screen');
+          },
+          onDecline: () async {
+            print('❌ [Global] User declined connection request');
+            Navigator.of(dialogContext).pop();
+            await _discoveryService.sendConnectionResponse(request.ipAddress, false);
+          },
+        );
+      },
+    );
+  }
+
+  String _ipToCode(String ipAddress) {
+    final parts = ipAddress.split('.');
+    if (parts.length != 4) return '';
+    final n = (int.parse(parts[0]) << 24) |
+        (int.parse(parts[1]) << 16) |
+        (int.parse(parts[2]) << 8) |
+        int.parse(parts[3]);
+    return n.toRadixString(36).toUpperCase().padLeft(8, '0');
+  }
+
+  @override
+  void dispose() {
+    _connectionRequestSubscription?.cancel();
+    // Keep discovery service running - it should run for the entire app lifecycle
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       theme: ThemeData(
         brightness: Brightness.dark,
         primaryColor: const Color(0xFFFFD600),

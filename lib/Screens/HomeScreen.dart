@@ -3,6 +3,7 @@ import 'package:zap_share/Screens/HttpFileShareScreen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:zap_share/Screens/TransferHistoryScreen.dart';
+import 'package:zap_share/Screens/DeviceSettingsScreen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -24,28 +25,52 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
               child: Column(
                 children: [
-                  Text(
-                    "ZapShare",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 28,
-                      fontWeight: FontWeight.w300,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    "Share files instantly",
-                    style: TextStyle(
-                      color: Colors.grey[400],
-                      fontSize: 15,
-                      fontWeight: FontWeight.w400,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Text(
+                              "ZapShare",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 28,
+                                fontWeight: FontWeight.w300,
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              "Share files instantly",
+                              style: TextStyle(
+                                color: Colors.grey[400],
+                                fontSize: 15,
+                                fontWeight: FontWeight.w400,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Settings icon
+                      IconButton(
+                        icon: Icon(Icons.settings_outlined, color: Colors.grey[400]),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const DeviceSettingsScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
-            
+
             // Main content
             Expanded(
               child: Padding(
@@ -59,9 +84,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       subtitle: "Share files with others",
                       onTap: () => _navigateToScreen(0),
                     ),
-                    
+
                     const SizedBox(height: 16),
-                    
+
                     // Receive files card
                     _buildActionCard(
                       icon: Icons.download_rounded,
@@ -69,9 +94,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       subtitle: "Get files from others",
                       onTap: () => _navigateToScreen(1),
                     ),
-                    
+
                     const SizedBox(height: 16),
-                    
+
                     // History card
                     _buildActionCard(
                       icon: Icons.history_rounded,
@@ -83,10 +108,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
-            
+
             // Bottom spacing
             const SizedBox(height: 24),
-            
+
             // Helpful hints section
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 24),
@@ -129,7 +154,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
             ),
-            
+
             const SizedBox(height: 24),
           ],
         ),
@@ -231,6 +256,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+
   void _navigateToScreen(int index) {
     Widget targetScreen;
     if (index == 0) {
@@ -250,10 +276,10 @@ class _HomeScreenState extends State<HomeScreen> {
           var begin = Offset(1.0, 0.0);
           var end = Offset.zero;
           var curve = Curves.easeInOutCubic;
-          
+
           var tween = Tween(begin: begin, end: end)
               .chain(CurveTween(curve: curve));
-          
+
           return SlideTransition(
             position: animation.drive(tween),
             child: child,

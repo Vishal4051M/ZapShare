@@ -1457,11 +1457,11 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
                                 width: 20,
                                 height: 20,
                                 decoration: BoxDecoration(
-                                  color: _isPausedList.length > index ? (_isPausedList[index] ? Colors.green[400] : Colors.orange[400]) : Colors.orange[400],
+                                  color: _isPausedList.length > index ? (_isPausedList[index] ? Colors.green[400] : Colors.yellow[400]) : Colors.yellow[400],
                                   shape: BoxShape.circle,
                                   boxShadow: [
                                     BoxShadow(
-                                      color: (_isPausedList.length > index ? (_isPausedList[index] ? Colors.green[400] : Colors.orange[400]) : Colors.orange[400])!.withOpacity(0.4),
+                                      color: (_isPausedList.length > index ? (_isPausedList[index] ? Colors.green[400] : Colors.yellow[400]) : Colors.yellow[400])!.withOpacity(0.4),
                                       blurRadius: 6,
                                       offset: Offset(0, 2),
                                     ),
@@ -1490,7 +1490,7 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
                         Text(
                           _isPausedList.length > index && _isPausedList[index] ? 'Paused' : '${(progress * 100).toStringAsFixed(1)}%',
                           style: TextStyle(
-                            color: _isPausedList.length > index && _isPausedList[index] ? Colors.orange[400] : Colors.yellow[300],
+                            color: _isPausedList.length > index && _isPausedList[index] ? Colors.yellow[600] : Colors.yellow[300],
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),

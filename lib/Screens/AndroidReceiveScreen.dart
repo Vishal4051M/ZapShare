@@ -54,7 +54,10 @@ class DownloadTask {
 }
 
 class AndroidReceiveScreen extends StatefulWidget {
-  const AndroidReceiveScreen({super.key});
+  final String? autoConnectCode;
+  
+  const AndroidReceiveScreen({super.key, this.autoConnectCode});
+  
   @override
   State<AndroidReceiveScreen> createState() => _AndroidReceiveScreenState();
 }
@@ -85,6 +88,15 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
     _codeFocusNode.addListener(() {
       setState(() {});
     });
+    
+    // Auto-connect if code provided
+    if (widget.autoConnectCode != null && widget.autoConnectCode!.isNotEmpty) {
+      print('🚀 [Receive Screen] Auto-connecting with code: ${widget.autoConnectCode}');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _codeController.text = widget.autoConnectCode!;
+        _fetchFileList(widget.autoConnectCode!);
+      });
+    }
   }
 
   Future<void> _initLocalNotifications() async {
@@ -495,6 +507,7 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
           'fileSize': contentLength,
           'direction': 'Received',
           'peer': _serverIp ?? '',
+          'peerDeviceName': null, // Could be enhanced to lookup device name
           'dateTime': DateTime.now().toIso8601String(),
           'fileLocation': savePath, // Save the actual file path
         };
@@ -723,18 +736,10 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
 
   // Show snackbar message
   void _showSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.grey[800],
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        margin: EdgeInsets.all(16),
-      ),
-    );
+    // Snackbars removed as requested
+    print(message);
   }
+
 
 
 
