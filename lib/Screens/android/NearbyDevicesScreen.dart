@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
-import '../services/device_discovery_service.dart';
+import '../../services/device_discovery_service.dart';
 
 class NearbyDevicesScreen extends StatefulWidget {
   const NearbyDevicesScreen({super.key});

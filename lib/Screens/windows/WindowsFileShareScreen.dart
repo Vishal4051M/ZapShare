@@ -1,9 +1,13 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:flutter/services.dart';
 import 'dart:convert';
+import '../../services/device_discovery_service.dart';
+import '../../widgets/connection_request_dialog.dart';
+import 'WindowsReceiveScreen.dart';
 
 const Color kAccentYellow = Color(0xFFFFD600);
 
@@ -19,6 +23,7 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
   HttpServer? _server;
   String? _localIp;
   bool _isSharing = false;
+  bool _useHttps = false;
   List<double> _progressList = [];
   List<bool> _isPausedList = []; // Add pause state tracking
   String? _displayCode;
@@ -26,8 +31,20 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
   static const MethodChannel _channel = MethodChannel('zapshare/drag_drop');
 
   final _pageController = PageController();
-  // Removed: bool _isNavExpanded = false;
-  // Removed: int _selectedNavIndex = 0;
+  
+  // Device Discovery
+  final DeviceDiscoveryService _discoveryService = DeviceDiscoveryService();
+  List<DiscoveredDevice> _nearbyDevices = [];
+  StreamSubscription? _devicesSubscription;
+  StreamSubscription? _connectionRequestSubscription;
+  StreamSubscription? _connectionResponseSubscription;
+  bool _showNearbyDevices = true;
+  String? _pendingRequestDeviceIp;
+  Timer? _requestTimeoutTimer;
+  DiscoveredDevice? _pendingDevice;
+  Map<String, String> _clientDeviceNames = {}; // clientIP -> deviceName mapping
+  Set<String> _processedRequests = {}; // Track processed request IPs to prevent duplicates
+  Map<String, DateTime> _lastRequestTime = {}; // Track last request time per IP
 
   String _ipToCode(String ip) {
     final parts = ip.split('.').map(int.parse).toList();
@@ -42,6 +59,316 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
     super.initState();
     _fetchLocalIp();
     _setupDragDrop();
+    _initDeviceDiscovery();
+    _checkNetworkPermissions();
+  }
+  
+  Future<void> _checkNetworkPermissions() async {
+    // For Windows, we need to ensure the app has network permissions
+    // This is typically handled by the Windows firewall
+    // Show a helpful message if connection fails
+    print('🔒 Checking network permissions for Windows...');
+    
+    try {
+      // Test if we can bind to a port (this will trigger Windows firewall prompt if needed)
+      final testServer = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+      await testServer.close();
+      print('✅ Network permissions OK');
+    } catch (e) {
+      print('⚠️ Network permission issue: $e');
+      if (mounted) {
+        _showNetworkPermissionDialog();
+      }
+    }
+  }
+  
+  void _showNetworkPermissionDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: Row(
+          children: [
+            Icon(Icons.security, color: Colors.yellow[300], size: 24),
+            SizedBox(width: 12),
+            Text(
+              'Network Permission Required',
+              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+        content: Text(
+          'ZapShare needs network access to share files.\n\n'
+          'If Windows Firewall prompts you, please click "Allow access" to enable local network discovery and file sharing.',
+          style: TextStyle(color: Colors.grey[300], fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'Got it',
+              style: TextStyle(color: Colors.yellow[300], fontWeight: FontWeight.w600, fontSize: 15),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  void _initDeviceDiscovery() async {
+    print('🔍 Initializing device discovery for Windows...');
+    
+    // Initialize device info first
+    await _discoveryService.initialize();
+    
+    // Start discovery
+    await _discoveryService.start();
+    
+    print('✅ Device discovery started');
+    
+    // Listen for nearby devices
+    _devicesSubscription = _discoveryService.devicesStream.listen((devices) {
+      if (mounted) {
+        print('📱 Nearby devices updated: ${devices.length} devices');
+        setState(() {
+          _nearbyDevices = devices.where((d) => d.isOnline).toList();
+          // Update device name mapping
+          for (var device in devices) {
+            _clientDeviceNames[device.ipAddress] = device.deviceName;
+          }
+        });
+      }
+    });
+    
+    // Listen for incoming connection requests
+    _connectionRequestSubscription = _discoveryService.connectionRequestStream.listen(
+      (request) {
+        if (mounted) {
+          // Check if we already have a dialog open for this IP
+          final now = DateTime.now();
+          final lastTime = _lastRequestTime[request.ipAddress];
+          
+          // Ignore duplicate requests within 30 seconds (or if already processed)
+          if (lastTime != null && now.difference(lastTime).inSeconds < 30) {
+            print('⏭️  Ignoring duplicate request from ${request.ipAddress} (last: ${now.difference(lastTime).inSeconds}s ago)');
+            return;
+          }
+          
+          print('📩 Stream listener received connection request from ${request.deviceName} (${request.ipAddress})');
+          _lastRequestTime[request.ipAddress] = now;
+          _showConnectionRequestDialog(request);
+        } else {
+          print('⚠️  Widget not mounted, ignoring connection request');
+        }
+      },
+      onError: (error) {
+        print('❌ Error in connection request stream: $error');
+      },
+      onDone: () {
+        print('⚠️  Connection request stream closed');
+      },
+    );
+    print('✅ Connection request listener active');
+    
+    // Listen for connection responses
+    _connectionResponseSubscription = _discoveryService.connectionResponseStream.listen((response) {
+      print('📨 Connection response received: accepted=${response.accepted}, ip=${response.ipAddress}');
+      if (mounted && _pendingRequestDeviceIp != null) {
+        // Cancel the timeout timer since we got a response
+        _requestTimeoutTimer?.cancel();
+        _requestTimeoutTimer = null;
+        
+        if (response.accepted) {
+          // Connection accepted! Start sharing
+          print('✅ Connection accepted! Starting server...');
+          _startSharingToDevice(_pendingRequestDeviceIp!);
+        } else {
+          // Connection declined
+          print('❌ Connection declined');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Connection request was declined'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        _pendingRequestDeviceIp = null;
+        _pendingDevice = null;
+      }
+    });
+    
+    print('✅ All stream listeners set up');
+  }
+  
+  void _showConnectionRequestDialog(ConnectionRequest request) {
+    print('🚀 _showConnectionRequestDialog called');
+    print('   Device: ${request.deviceName}');
+    print('   IP: ${request.ipAddress}');
+    print('   Files: ${request.fileNames.length}');
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        print('📱 Building ConnectionRequestDialog...');
+        return ConnectionRequestDialog(
+          request: request,
+          onAccept: () async {
+            print('✅ User accepted connection request');
+            // Close the dialog using the dialog context
+            Navigator.of(dialogContext).pop();
+            
+            // Mark this request as processed to prevent duplicates
+            _processedRequests.add(request.ipAddress);
+            
+            // Send acceptance response
+            await _discoveryService.sendConnectionResponse(request.ipAddress, true);
+            
+            // Navigate to receive screen to download files
+            if (mounted) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const WindowsReceiveScreen(),
+                ),
+              );
+              
+              // Show snackbar with instructions
+              Future.delayed(Duration(milliseconds: 500), () {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Enter code: ${request.ipAddress.split('.').map((p) => int.parse(p).toRadixString(36).toUpperCase()).join('')}'),
+                      backgroundColor: Colors.green,
+                      duration: Duration(seconds: 5),
+                      action: SnackBarAction(
+                        label: 'Copy',
+                        textColor: Colors.yellow[300],
+                        onPressed: () {
+                          final code = request.ipAddress.split('.').map((p) => int.parse(p).toRadixString(36).toUpperCase()).join('');
+                          Clipboard.setData(ClipboardData(text: code.padLeft(8, '0')));
+                        },
+                      ),
+                    ),
+                  );
+                }
+              });
+            }
+            
+            // Clear the processed request after 60 seconds to allow future requests
+            Future.delayed(Duration(seconds: 60), () {
+              _processedRequests.remove(request.ipAddress);
+            });
+          },
+          onDecline: () async {
+            print('❌ User declined connection request');
+            // Close the dialog using the dialog context
+            Navigator.of(dialogContext).pop();
+            
+            // Mark as processed temporarily
+            _processedRequests.add(request.ipAddress);
+            
+            // Send decline response
+            await _discoveryService.sendConnectionResponse(request.ipAddress, false);
+            
+            // Allow new requests after 30 seconds
+            Future.delayed(Duration(seconds: 30), () {
+              _processedRequests.remove(request.ipAddress);
+            });
+          },
+        );
+      },
+    );
+    print('✅ Dialog shown');
+  }
+  
+  Future<void> _sendConnectionRequest(DiscoveredDevice device) async {
+    if (_files.isEmpty) {
+      print('⚠️ No files selected');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Please select files first'),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _pendingRequestDeviceIp = device.ipAddress;
+      _pendingDevice = device;
+    });
+    
+    // Start server FIRST before sending request
+    print('🚀 Starting server before sending connection request...');
+    await _startServer();
+    
+    // Calculate total size
+    final totalSize = _files.fold<int>(0, (sum, file) => sum + (file.size));
+    final fileNames = _files.map((f) => f.name).toList();
+    
+    print('📤 Sending connection request to ${device.deviceName} (${device.ipAddress})');
+    print('   Files: ${fileNames.length}');
+    print('   Total size: ${_formatBytes(totalSize)}');
+    
+    // Send the connection request
+    await _discoveryService.sendConnectionRequest(
+      device.ipAddress,
+      fileNames,
+      totalSize,
+    );
+    
+    // Set a timeout for the request
+    _requestTimeoutTimer = Timer(Duration(seconds: 30), () {
+      if (mounted && _pendingRequestDeviceIp != null) {
+        setState(() {
+          _pendingRequestDeviceIp = null;
+          _pendingDevice = null;
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Connection request timed out'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    });
+    
+    // Show pending state
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Waiting for ${device.deviceName} to accept...'),
+        duration: Duration(seconds: 30),
+        action: SnackBarAction(
+          label: 'Cancel',
+          textColor: Colors.yellow[300],
+          onPressed: () {
+            _requestTimeoutTimer?.cancel();
+            setState(() {
+              _pendingRequestDeviceIp = null;
+              _pendingDevice = null;
+            });
+          },
+        ),
+      ),
+    );
+  }
+  
+  Future<void> _startSharingToDevice(String deviceIp) async {
+    // Server is already started, just update UI
+    print('✅ Server started successfully, sharing to $deviceIp');
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Sharing files...'),
+        backgroundColor: Colors.green,
+        duration: Duration(seconds: 2),
+      ),
+    );
   }
 
   void _setupDragDrop() {
@@ -229,7 +556,33 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
   Future<void> _startServer() async {
     if (_files.isEmpty) return;
     await _server?.close(force: true);
-    _server = await HttpServer.bind(InternetAddress.anyIPv4, 8080);
+    // Attempt to load TLS cert/key (project certs path or assets) and bind secure if available
+    SecurityContext? sc;
+    try {
+      final certFile = File('temp-server/certs/server.crt');
+      final keyFile = File('temp-server/certs/server.key');
+      if (await certFile.exists() && await keyFile.exists()) {
+        sc = SecurityContext();
+        sc.useCertificateChain(certFile.path);
+        sc.usePrivateKey(keyFile.path);
+      } else {
+        final certData = await rootBundle.load('assets/certs/server.crt');
+        final keyData = await rootBundle.load('assets/certs/server.key');
+        sc = SecurityContext();
+        sc.useCertificateChainBytes(certData.buffer.asUint8List());
+        sc.usePrivateKeyBytes(keyData.buffer.asUint8List());
+      }
+    } catch (e) {
+      sc = null;
+    }
+
+    if (sc != null) {
+      _server = await HttpServer.bindSecure(InternetAddress.anyIPv4, 8080, sc);
+      _useHttps = true;
+    } else {
+      _server = await HttpServer.bind(InternetAddress.anyIPv4, 8080);
+      _useHttps = false;
+    }
     if (_localIp != null) {
       setState(() {
         _displayCode = _ipToCode(_localIp!);
@@ -982,6 +1335,11 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
   void dispose() {
     _server?.close(force: true);
     _pageController.dispose();
+    _devicesSubscription?.cancel();
+    _connectionRequestSubscription?.cancel();
+    _connectionResponseSubscription?.cancel();
+    _requestTimeoutTimer?.cancel();
+    // Don't stop the singleton discovery service - it runs globally
     super.dispose();
   }
 
@@ -1063,7 +1421,13 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
                       // Connection status
                       if (_localIp != null) ...[
                         _buildConnectionStatus(),
-                        const SizedBox(height: 24),
+                        const SizedBox(height: 16),
+                      ],
+                      
+                      // Nearby devices section (Windows discovery)
+                      if (_files.isNotEmpty) ...[
+                        _buildNearbyDevicesSection(),
+                        const SizedBox(height: 16),
                       ],
                       
                       // Share code section
@@ -1249,6 +1613,177 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildNearbyDevicesSection() {
+    // Compact header-only view when collapsed
+    return GestureDetector(
+      onTap: () {
+        setState(() => _showNearbyDevices = !_showNearbyDevices);
+        HapticFeedback.lightImpact();
+      },
+      child: AnimatedContainer(
+        duration: Duration(milliseconds: 300),
+        margin: EdgeInsets.only(bottom: 12),
+        padding: EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: _showNearbyDevices ? 14 : 10,
+        ),
+        decoration: BoxDecoration(
+          color: _showNearbyDevices 
+            ? Colors.grey[900] 
+            : Colors.grey[900]!.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: _nearbyDevices.isNotEmpty 
+              ? Colors.yellow[300]!.withOpacity(0.4) 
+              : Colors.grey[700]!.withOpacity(0.3),
+            width: 1,
+          ),
+        ),
+        child: Column(
+          children: [
+            // Compact header
+            Row(
+              children: [
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: _AnimatedRadar(isActive: true),
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _nearbyDevices.isEmpty 
+                      ? 'Discovering devices...' 
+                      : '${_nearbyDevices.length} device${_nearbyDevices.length == 1 ? '' : 's'} nearby',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Icon(
+                  _showNearbyDevices 
+                    ? Icons.keyboard_arrow_up_rounded 
+                    : Icons.keyboard_arrow_down_rounded,
+                  color: Colors.grey[500],
+                  size: 20,
+                ),
+              ],
+            ),
+            
+            // Expandable content
+            if (_showNearbyDevices && _nearbyDevices.isNotEmpty) ...[
+              SizedBox(height: 12),
+              _buildCompactDeviceList(),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildCompactDeviceList() {
+    return Column(
+      children: _nearbyDevices.map((device) {
+        final isPending = _pendingDevice?.ipAddress == device.ipAddress;
+        
+        return Container(
+          margin: EdgeInsets.only(bottom: 8),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: isPending ? null : () => _sendConnectionRequest(device),
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: isPending 
+                    ? Colors.yellow[300]!.withOpacity(0.1)
+                    : Colors.grey[850],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isPending
+                      ? Colors.yellow[300]!.withOpacity(0.5)
+                      : Colors.grey[800]!,
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    // Device icon
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: Colors.yellow[300]!.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        device.platform == 'android' 
+                          ? Icons.phone_android_rounded 
+                          : device.platform == 'windows'
+                            ? Icons.computer_rounded
+                            : Icons.devices_rounded,
+                        color: Colors.yellow[300],
+                        size: 20,
+                      ),
+                    ),
+                    SizedBox(width: 10),
+                    
+                    // Device info
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            device.deviceName,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            device.ipAddress,
+                            style: TextStyle(
+                              color: Colors.grey[500],
+                              fontSize: 11,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    // Status indicator
+                    if (isPending)
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation(Colors.yellow[300]),
+                        ),
+                      )
+                    else
+                      Icon(
+                        Icons.send_rounded,
+                        color: Colors.grey[600],
+                        size: 18,
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -1758,5 +2293,51 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
     if (bytes < 1024 * 1024) return "${(bytes / 1024).toStringAsFixed(1)} KB";
     if (bytes < 1024 * 1024 * 1024) return "${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB";
     return "${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB";
+  }
+}
+
+// Animated Radar Icon Widget
+class _AnimatedRadar extends StatefulWidget {
+  final bool isActive;
+  
+  const _AnimatedRadar({Key? key, required this.isActive}) : super(key: key);
+  
+  @override
+  State<_AnimatedRadar> createState() => _AnimatedRadarState();
+}
+
+class _AnimatedRadarState extends State<_AnimatedRadar> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: Duration(seconds: 2),
+    )..repeat();
+  }
+  
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Transform.rotate(
+          angle: _controller.value * 2 * 3.14159,
+          child: Icon(
+            Icons.radar,
+            color: widget.isActive ? Colors.yellow[300] : Colors.grey[600],
+            size: 16,
+          ),
+        );
+      },
+    );
   }
 } 

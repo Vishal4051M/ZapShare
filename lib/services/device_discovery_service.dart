@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/services.dart';
 
 // Connection request model
 class ConnectionRequest {
@@ -99,9 +100,32 @@ class DiscoveredDevice {
   }
 }
 
+// Helper class to store network interface info for broadcasting
+class _NetworkInterfaceInfo {
+  final NetworkInterface interface;
+  final List<InternetAddress> ipv4Addresses;
+  
+  _NetworkInterfaceInfo(this.interface, this.ipv4Addresses);
+  
+  // Calculate broadcast address for a given IP and subnet mask
+  // For /24 networks (most common): 192.168.43.1 -> 192.168.43.255
+  String? getBroadcastAddress() {
+    if (ipv4Addresses.isEmpty) return null;
+    
+    // Use first IPv4 address
+    final ip = ipv4Addresses.first.address;
+    final parts = ip.split('.');
+    if (parts.length != 4) return null;
+    
+    // Assume /24 subnet (255.255.255.0) - most common for hotspots and home networks
+    // Broadcast address is: network address + 255 in last octet
+    return '${parts[0]}.${parts[1]}.${parts[2]}.255';
+  }
+}
+
 class DeviceDiscoveryService {
   static const int DISCOVERY_PORT = 37020; // ZapShare discovery port
-  static const String MULTICAST_GROUP = '239.255.43.21'; // ZapShare multicast group
+  static const String MULTICAST_GROUP = '224.0.0.167'; // Compatible with all Android devices (LocalSend uses this)
   static const int BROADCAST_INTERVAL_SECONDS = 5;
   
   // Singleton instance
@@ -113,7 +137,8 @@ class DeviceDiscoveryService {
   
   DeviceDiscoveryService._internal();
   
-  RawDatagramSocket? _socket;
+  List<RawDatagramSocket> _sockets = []; // Multiple sockets, one per network interface
+  List<_NetworkInterfaceInfo> _networkInterfaces = []; // Store interface info for broadcasting
   Timer? _broadcastTimer;
   Timer? _cleanupTimer;
   Timer? _keepAliveTimer;
@@ -288,37 +313,91 @@ class DeviceDiscoveryService {
     }
     
     try {
-      // Create UDP socket for multicast
-      _socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, DISCOVERY_PORT);
+      // On Android, ensure multicast lock is acquired
+      if (Platform.isAndroid) {
+        await _ensureMulticastLock();
+      }
       
-      print('✅ Socket bound to port $DISCOVERY_PORT');
+      // Get all network interfaces
+      final interfaces = await NetworkInterface.list();
+      print('📡 Found ${interfaces.length} network interfaces');
       
-      // Join multicast group
-      _socket!.joinMulticast(InternetAddress(MULTICAST_GROUP));
-      _socket!.broadcastEnabled = true;
+      // Clear previous interface info
+      _networkInterfaces.clear();
+      _sockets.clear();
       
-      print('✅ Joined multicast group $MULTICAST_GROUP');
+      // LocalSend approach: Create ONE socket per interface, each bound to anyIPv4 with the discovery port
+      // Then join multicast group ON THAT SPECIFIC INTERFACE
+      // This ensures packets from that interface are received
       
-      // Listen for incoming discovery messages
-      _socket!.listen(
-        (RawSocketEvent event) {
-          if (event == RawSocketEvent.read) {
-            final datagram = _socket!.receive();
-            if (datagram != null) {
-              _handleDiscoveryMessage(datagram);
-            }
+      for (final interface in interfaces) {
+        try {
+          // Filter IPv4 addresses (skip loopback)
+          final ipv4Addresses = interface.addresses
+              .where((addr) => addr.type == InternetAddressType.IPv4 && !addr.isLoopback)
+              .toList();
+
+          if (ipv4Addresses.isEmpty) {
+            print('⏭️  Skipping ${interface.name} (no valid IPv4)');
+            continue;
           }
-        },
-        onError: (error) {
-          print('❌ Socket error: $error');
-          _handleSocketError(error);
-        },
-        onDone: () {
-          print('⚠️  Socket closed unexpectedly');
-          _handleSocketClosed();
-        },
-        cancelOnError: false, // Keep listening even if there are errors
-      );
+
+          // Store interface info for broadcasting
+          final interfaceInfo = _NetworkInterfaceInfo(interface, ipv4Addresses);
+          _networkInterfaces.add(interfaceInfo);
+
+          // CRITICAL: Bind to anyIPv4 with the DISCOVERY_PORT (like LocalSend)
+          // This allows receiving on this port from all addresses
+          // Note: Windows doesn't support reusePort, so we skip it on Windows
+          final socket = await RawDatagramSocket.bind(
+            InternetAddress.anyIPv4,
+            DISCOVERY_PORT,
+            reusePort: !Platform.isWindows,  // Windows doesn't support reusePort
+          );
+
+          // Join multicast group ON THIS SPECIFIC INTERFACE
+          // This is the key - tell the OS to route multicast from THIS interface to THIS socket
+          socket.joinMulticast(InternetAddress(MULTICAST_GROUP), interface);
+          socket.broadcastEnabled = true;
+
+          print('✅ Bound socket for ${interface.name} (${ipv4Addresses.map((a) => a.address).join(", ")})');
+          print('   Joined multicast $MULTICAST_GROUP on ${interface.name}');
+
+          // Listen for incoming messages
+          socket.listen(
+            (RawSocketEvent event) {
+              if (event == RawSocketEvent.read) {
+                final datagram = socket.receive();
+                if (datagram != null) {
+                  _handleDiscoveryMessage(datagram);
+                }
+              }
+            },
+            onError: (error) {
+              print('❌ Socket error on ${interface.name}: $error');
+              _handleSocketError(error);
+            },
+            onDone: () {
+              print('⚠️  Socket on ${interface.name} closed');
+              _handleSocketClosed();
+            },
+            cancelOnError: false,
+          );
+
+          _sockets.add(socket);
+
+        } catch (e) {
+          print('⚠️  Could not setup socket for ${interface.name}: $e');
+          // Continue with other interfaces
+        }
+      }
+      
+      if (_sockets.isEmpty) {
+        throw Exception('Failed to bind to any network interface');
+      }
+      
+      print('✅ Successfully created ${_sockets.length} receiver socket(s)');
+      print('   Tracking ${_networkInterfaces.length} network interface(s)');
       
       _isRunning = true;
       
@@ -349,9 +428,9 @@ class DeviceDiscoveryService {
     _broadcastPresence();
   }
 
-  void _broadcastPresence() {
-    if (!_isRunning || _socket == null) {
-      print('⚠️  Broadcast skipped - not running or socket null');
+  void _broadcastPresence() async {
+    if (!_isRunning || _networkInterfaces.isEmpty) {
+      print('⚠️  Broadcast skipped - not running or no interfaces');
       return;
     }
     
@@ -367,13 +446,48 @@ class DeviceDiscoveryService {
       
       final data = utf8.encode(message);
       
-      // Send to multicast group
-      final bytesSent1 = _socket!.send(data, InternetAddress(MULTICAST_GROUP), DISCOVERY_PORT);
+      // CRITICAL FIX: Create TEMPORARY sockets for sending (like LocalSend does!)
+      // Do NOT use the listening sockets for sending - this causes conflicts
+      int totalBytesSent = 0;
       
-      // Also send broadcast for local network
-      final bytesSent2 = _socket!.send(data, InternetAddress('255.255.255.255'), DISCOVERY_PORT);
+      for (final interfaceInfo in _networkInterfaces) {
+        try {
+          // Create a temporary socket for THIS interface (bound to port 0 = dynamic port)
+          // Note: Windows doesn't support reusePort
+          final tempSocket = await RawDatagramSocket.bind(
+            InternetAddress.anyIPv4,
+            0,  // Port 0 = let OS choose a free port
+            reusePort: !Platform.isWindows,  // Windows doesn't support reusePort
+          );
+          
+          // Join multicast on this interface (required for sending)
+          tempSocket.joinMulticast(InternetAddress(MULTICAST_GROUP), interfaceInfo.interface);
+          tempSocket.broadcastEnabled = true;
+          
+          // 1. Send to multicast group
+          final bytesSent1 = tempSocket.send(data, InternetAddress(MULTICAST_GROUP), DISCOVERY_PORT);
+          
+          // 2. Send to general broadcast
+          final bytesSent2 = tempSocket.send(data, InternetAddress('255.255.255.255'), DISCOVERY_PORT);
+          
+          // 3. Send to subnet-specific broadcast (for hotspot)
+          int bytesSent3 = 0;
+          final subnetBroadcast = interfaceInfo.getBroadcastAddress();
+          if (subnetBroadcast != null && subnetBroadcast != '255.255.255.255') {
+            bytesSent3 = tempSocket.send(data, InternetAddress(subnetBroadcast), DISCOVERY_PORT);
+          }
+          
+          totalBytesSent += bytesSent1 + bytesSent2 + bytesSent3;
+          
+          // Close the temporary socket immediately after sending
+          tempSocket.close();
+          
+        } catch (e) {
+          print('❌ Error broadcasting on ${interfaceInfo.interface.name}: $e');
+        }
+      }
       
-      print('📡 Broadcasting presence: $bytesSent1 bytes (multicast), $bytesSent2 bytes (broadcast)');
+      print('📡 Broadcasting presence: $totalBytesSent bytes total across ${_networkInterfaces.length} interfaces');
       
     } catch (e) {
       print('❌ Error broadcasting presence: $e');
@@ -411,8 +525,8 @@ class DeviceDiscoveryService {
 
   // Send connection request to a specific device
   Future<void> sendConnectionRequest(String targetIp, List<String> fileNames, int totalSize) async {
-    if (_socket == null) {
-      print('ERROR: Cannot send connection request - socket is null');
+    if (_sockets.isEmpty) {
+      print('ERROR: Cannot send connection request - no sockets available');
       return;
     }
     
@@ -434,9 +548,19 @@ class DeviceDiscoveryService {
       });
       
       final data = utf8.encode(message);
-      final bytesSent = _socket!.send(data, InternetAddress(targetIp), DISCOVERY_PORT);
       
-      print('✅ Sent connection request to $targetIp (${bytesSent} bytes)');
+      // Try to send on all sockets (at least one should work)
+      int totalBytesSent = 0;
+      for (final socket in _sockets) {
+        try {
+          final bytesSent = socket.send(data, InternetAddress(targetIp), DISCOVERY_PORT);
+          totalBytesSent += bytesSent;
+        } catch (e) {
+          // Ignore errors on individual sockets
+        }
+      }
+      
+      print('✅ Sent connection request to $targetIp ($totalBytesSent bytes)');
       print('   Device: $_myDeviceName ($_myDeviceId)');
       print('   Files: ${fileNames.length} files, ${(totalSize / 1024 / 1024).toStringAsFixed(2)} MB');
     } catch (e) {
@@ -446,7 +570,7 @@ class DeviceDiscoveryService {
 
   // Send connection response (accept/deny)
   Future<void> sendConnectionResponse(String targetIp, bool accepted) async {
-    if (_socket == null) return;
+    if (_sockets.isEmpty) return;
     
     try {
       final message = jsonEncode({
@@ -458,7 +582,15 @@ class DeviceDiscoveryService {
       });
       
       final data = utf8.encode(message);
-      _socket!.send(data, InternetAddress(targetIp), DISCOVERY_PORT);
+      
+      // Send on all sockets
+      for (final socket in _sockets) {
+        try {
+          socket.send(data, InternetAddress(targetIp), DISCOVERY_PORT);
+        } catch (e) {
+          // Ignore errors on individual sockets
+        }
+      }
       
       print('Sent connection response to $targetIp: $accepted');
     } catch (e) {
@@ -613,9 +745,9 @@ class DeviceDiscoveryService {
       return;
     }
     
-    if (_socket == null) {
-      print('⚠️  Service health check failed: socket is null');
-      _handleSocketError('Socket is null during health check');
+    if (_sockets.isEmpty) {
+      print('⚠️  Service health check failed: no sockets available');
+      _handleSocketError('No sockets available during health check');
       return;
     }
     
@@ -727,12 +859,15 @@ class DeviceDiscoveryService {
     _keepAliveTimer?.cancel();
     
     try {
-      _socket?.close();
+      // Close all sockets
+      for (final socket in _sockets) {
+        socket.close();
+      }
+      _sockets.clear();
+      _networkInterfaces.clear();
     } catch (e) {
-      print('Error closing socket: $e');
+      print('Error closing sockets: $e');
     }
-    
-    _socket = null;
     
     // Clear non-favorite devices
     _discoveredDevices.removeWhere((id, device) => !device.isFavorite);
@@ -748,6 +883,35 @@ class DeviceDiscoveryService {
     if (Platform.isMacOS) return 'macOS';
     if (Platform.isLinux) return 'Linux';
     return 'Unknown';
+  }
+
+  /// Ensure multicast lock is acquired on Android
+  Future<void> _ensureMulticastLock() async {
+    if (!Platform.isAndroid) return;
+    
+    try {
+      const channel = MethodChannel('zapshare.saf');
+      
+      // Check if multicast lock is already held
+      final isHeld = await channel.invokeMethod<bool>('checkMulticastLock');
+      print('🔒 Multicast lock status: ${isHeld == true ? "HELD ✅" : "NOT HELD ❌"}');
+      
+      if (isHeld != true) {
+        // Try to acquire multicast lock
+        print('🔓 Attempting to acquire multicast lock...');
+        final success = await channel.invokeMethod<bool>('acquireMulticastLock');
+        if (success == true) {
+          print('✅ Multicast lock ACQUIRED successfully');
+        } else {
+          print('❌ Failed to acquire multicast lock');
+        }
+      } else {
+        print('✅ Multicast lock already held');
+      }
+    } catch (e) {
+      print('❌ Error checking/acquiring multicast lock: $e');
+      print('⚠️  WARNING: Multicast reception may not work (hotspot mode affected)');
+    }
   }
 
   void dispose() {

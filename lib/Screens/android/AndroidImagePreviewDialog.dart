@@ -3,12 +3,12 @@ import 'package:http/http.dart' as http;
 import 'dart:typed_data';
 import 'AndroidReceiveScreen.dart';
 
-class ImagePreviewDialog extends StatefulWidget {
+class AndroidImagePreviewDialog extends StatefulWidget {
   final List<DownloadTask> imageTasks;
   final int initialIndex;
   final Function(int index, bool isSelected)? onSelectionChanged;
 
-  const ImagePreviewDialog({
+  const AndroidImagePreviewDialog({
     Key? key,
     required this.imageTasks,
     required this.initialIndex,
@@ -16,10 +16,10 @@ class ImagePreviewDialog extends StatefulWidget {
   }) : super(key: key);
 
   @override
-  _ImagePreviewDialogState createState() => _ImagePreviewDialogState();
+  _AndroidImagePreviewDialogState createState() => _AndroidImagePreviewDialogState();
 }
 
-class _ImagePreviewDialogState extends State<ImagePreviewDialog> {
+class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
   late PageController _pageController;
   late int _currentIndex;
   Map<String, Uint8List?> _imageCache = {};

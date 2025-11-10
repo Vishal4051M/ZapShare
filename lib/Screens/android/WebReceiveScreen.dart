@@ -99,6 +99,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   HttpServer? _uploadServer;
   String? _localIp;
   bool _isHosting = false;
+  bool _useHttps = false;
   String? _saveFolder;
   String? _customSaveFolder; // User-selected folder (persisted)
   bool _uploadApprovalActive = false;
@@ -293,7 +294,35 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     try {
       _localIp ??= await _getLocalIpv4();
       _uploadServer?.close(force: true);
-      _uploadServer = await HttpServer.bind(InternetAddress.anyIPv4, 8090);
+      // Try to load TLS certificate/key from project certs or assets and bind secure if available
+      SecurityContext? sc;
+      try {
+        // First try relative project folder (useful during development)
+        final certFile = File('temp-server/certs/server.crt');
+        final keyFile = File('temp-server/certs/server.key');
+        if (await certFile.exists() && await keyFile.exists()) {
+          sc = SecurityContext();
+          sc.useCertificateChain(certFile.path);
+          sc.usePrivateKey(keyFile.path);
+        } else {
+          // Fallback: try loading from assets (assets/certs/...)
+          final certData = await rootBundle.load('assets/certs/server.crt');
+          final keyData = await rootBundle.load('assets/certs/server.key');
+          sc = SecurityContext();
+          sc.useCertificateChainBytes(certData.buffer.asUint8List());
+          sc.usePrivateKeyBytes(keyData.buffer.asUint8List());
+        }
+      } catch (e) {
+        sc = null;
+      }
+
+      if (sc != null) {
+        _uploadServer = await HttpServer.bindSecure(InternetAddress.anyIPv4, 8090, sc);
+        _useHttps = true;
+      } else {
+        _uploadServer = await HttpServer.bind(InternetAddress.anyIPv4, 8090);
+        _useHttps = false;
+      }
       setState(() { _isHosting = true; });
       await _startForegroundService();
       
@@ -301,6 +330,10 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         final path = request.uri.path;
         if (request.method == 'GET' && (path == '/' || path == '/index.html')) {
           await _serveUploadForm(request);
+          return;
+        }
+        if (request.method == 'GET' && path == '/logo.png') {
+          await _serveLogo(request);
           return;
         }
         if (request.method == 'POST' && path == '/request-upload') {
@@ -337,6 +370,24 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     await _stopForegroundService();
   }
 
+  Future<void> _serveLogo(HttpRequest request) async {
+    try {
+      final ByteData logoData = await rootBundle.load('assets/images/logo.png');
+      final bytes = logoData.buffer.asUint8List();
+      
+      request.response.statusCode = HttpStatus.ok;
+      request.response.headers.contentType = ContentType('image', 'png');
+      request.response.headers.set('Cache-Control', 'public, max-age=86400');
+      request.response.headers.set('Access-Control-Allow-Origin', '*');
+      request.response.add(bytes);
+      await request.response.close();
+    } catch (e) {
+      print('Error serving logo: $e');
+      request.response.statusCode = HttpStatus.notFound;
+      await request.response.close();
+    }
+  }
+
   Future<void> _serveUploadForm(HttpRequest request) async {
     final response = request.response;
     response.statusCode = HttpStatus.ok;
@@ -349,276 +400,349 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ZapShare - Upload Files</title>
   <style>
-    * { box-sizing: border-box; }
+    * { 
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box; 
+    }
+    
     body { 
       margin: 0; 
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-      background: linear-gradient(135deg, #000000, #1a1a1a); 
-      color: #fff; 
-      min-height: 100vh;
-    }
-    .container { 
-      max-width: 600px; 
-      margin: 0 auto; 
-      padding: 24px; 
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; 
+      background: #000000; 
+      color: #ffffff; 
       min-height: 100vh;
       display: flex;
-      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    .app-layout {
+      display: flex;
+      width: 100%;
+      min-height: 100vh;
+    }
+
+    /* MAIN CONTENT */
+    .main-content {
+      flex: 1;
+      padding: 120px 40px 40px;
+      display: flex;
+      align-items: center;
       justify-content: center;
+      position: relative;
+      z-index: 10;
+      width: 100%;
     }
+    
+    .container { 
+      max-width: 700px; 
+      width: 100%;
+    }
+
+    /* MOBILE RESPONSIVE */
+    @media (max-width: 1024px) {
+      .main-content {
+        padding: 80px 20px 30px;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .container {
+        max-width: 100%;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .main-content {
+        padding: 30px 16px;
+      }
+    }
+    
     .card { 
-      background: rgba(26, 26, 26, 0.9); 
-      border: 2px solid #FFD600; 
-      border-radius: 20px; 
-      padding: 32px; 
-      backdrop-filter: blur(10px);
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+      background: rgba(26, 26, 26, 0.8); 
+      border: 1px solid rgba(255, 255, 255, 0.1); 
+      border-radius: 16px; 
+      padding: 36px 44px; 
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(40px);
+      animation: fadeInUp 0.6s ease-out 0.3s both;
     }
+    
+    @media (max-width: 768px) {
+      .card {
+        padding: 24px 18px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .card {
+        padding: 24px 20px;
+      }
+    }
+    
     .header {
       text-align: center;
-      margin-bottom: 24px;
+      margin-bottom: 28px;
     }
-    .logo {
-      font-size: 32px;
-      font-weight: 700;
-      color: #FFD600;
-      margin-bottom: 8px;
+    
+    .title {
+      font-size: 20px;
+      font-weight: 600;
+      color: #ffffff;
+      margin-bottom: 6px;
+      letter-spacing: -0.3px;
     }
+    
     .subtitle {
-      color: #bbb;
-      font-size: 16px;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.6);
+      font-weight: 400;
+      line-height: 1.5;
     }
+    
     .upload-area { 
-      border: 2px dashed #555; 
-      border-radius: 16px; 
-      padding: 32px; 
+      border: 2px dashed rgba(255, 255, 255, 0.2); 
+      border-radius: 12px; 
+      padding: 32px 24px; 
       text-align: center; 
-      background: #111; 
-      transition: all 0.3s ease;
-      margin: 24px 0;
+      background: rgba(0, 0, 0, 0.3); 
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      margin: 0 0 20px 0;
+      cursor: pointer;
     }
+    
     .upload-area:hover {
-      border-color: #FFD600;
-      background: #1a1a1a;
+      border-color: rgba(255, 235, 59, 0.5);
+      background: rgba(255, 235, 59, 0.05);
+      transform: translateY(-2px);
     }
+    
     .upload-area.dragover {
-      border-color: #FFD600;
-      background: #1a1a1a;
+      border-color: #FFEB3B;
+      background: rgba(255, 235, 59, 0.1);
       transform: scale(1.02);
+      box-shadow: 0 8px 24px rgba(255, 235, 59, 0.2);
     }
+    
     input[type=file] { 
       display: none;
     }
+    
     .file-input-label {
       display: inline-block;
-      padding: 12px 24px;
-      background: #FFD600;
+      padding: 14px 28px;
+      background: linear-gradient(135deg, #FFEB3B 0%, #FFF176 100%);
       color: #000;
       border-radius: 12px;
       cursor: pointer;
       font-weight: 600;
-      transition: all 0.2s;
+      font-size: 14px;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 4px 16px rgba(255, 235, 59, 0.3);
     }
+    
     .file-input-label:hover {
-      background: #ffed4e;
       transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(255, 235, 59, 0.4);
     }
-    .upload-icon {
-      font-size: 48px;
-      color: #FFD600;
-      margin-bottom: 16px;
+    
+    .file-input-label:active {
+      transform: translateY(0);
     }
+    
     .upload-text {
-      margin: 16px 0;
-      color: #ccc;
-      font-size: 18px;
+      margin: 0 0 12px 0;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 15px;
+      font-weight: 500;
     }
+    
     .upload-hint { 
       margin-top: 16px; 
-      color: #888; 
-      font-size: 14px; 
+      color: rgba(255, 255, 255, 0.4); 
+      font-size: 11px; 
+      line-height: 1.4;
     }
+    
     .selected-files {
-      margin: 16px 0;
+      margin: 0 0 20px 0;
       padding: 16px;
-      background: #222;
+      background: rgba(0, 0, 0, 0.3);
       border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
       display: none;
+      max-height: 300px;
+      overflow-y: auto;
     }
+    
+    .selected-files::-webkit-scrollbar {
+      width: 6px;
+    }
+    
+    .selected-files::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 10px;
+    }
+    
+    .selected-files::-webkit-scrollbar-thumb {
+      background: rgba(255, 235, 59, 0.3);
+      border-radius: 10px;
+    }
+    
+    .selected-files h4 {
+      margin: 0 0 12px 0;
+      color: #FFEB3B;
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
     .file-item {
-      padding: 8px 0;
-      border-bottom: 1px solid #333;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
       display: flex;
       justify-content: space-between;
       align-items: center;
     }
+    
     .file-item:last-child {
       border-bottom: none;
+      padding-bottom: 0;
     }
+    
     .file-name {
       color: #fff;
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    
+    .file-size {
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 12px;
       font-weight: 500;
     }
-    .file-size {
-      color: #888;
-      font-size: 12px;
-    }
+    
     .upload-btn { 
       width: 100%; 
-      padding: 16px; 
-      background: #FFD600; 
+      padding: 14px; 
+      background: linear-gradient(135deg, #FFEB3B 0%, #FFF176 100%);
       color: #000; 
       border: none; 
       border-radius: 12px; 
-      font-weight: 700; 
-      font-size: 16px;
+      font-weight: 600; 
+      font-size: 14px;
       cursor: pointer;
-      transition: all 0.2s;
-      margin-top: 16px;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 4px 16px rgba(255, 235, 59, 0.3);
+      margin-top: 0;
     }
+    
     .upload-btn:hover {
-      background: #ffed4e;
       transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(255, 235, 59, 0.4);
     }
+    
+    .upload-btn:active {
+      transform: translateY(0);
+    }
+    
     .upload-btn:disabled {
-      background: #666;
-      color: #999;
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.3);
       cursor: not-allowed;
       transform: none;
+      box-shadow: none;
     }
+    
     .progress {
       width: 100%;
-      height: 8px;
-      background: #333;
-      border-radius: 4px;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
       overflow: hidden;
       margin: 16px 0;
       display: none;
     }
+    
     .progress-bar {
       height: 100%;
-      background: #FFD600;
+      background: linear-gradient(90deg, #FFEB3B 0%, #FFF176 100%);
       width: 0%;
       transition: width 0.3s ease;
     }
+    
     .message { 
       margin-top: 16px; 
-      padding: 12px; 
-      border-radius: 8px; 
+      padding: 14px 18px; 
+      border-radius: 10px; 
       text-align: center;
       font-weight: 500;
+      font-size: 13px;
     }
+    
     .success { 
-      background: rgba(0, 255, 0, 0.1); 
-      color: #0f0; 
-      border: 1px solid #0f0;
+      background: rgba(52, 199, 89, 0.15);
+      border: 1px solid rgba(52, 199, 89, 0.3);
+      color: #34c759;
     }
+    
     .error { 
-      background: rgba(255, 102, 102, 0.1); 
-      color: #f66; 
-      border: 1px solid #f66;
+      background: rgba(255, 59, 48, 0.15);
+      border: 1px solid rgba(255, 59, 48, 0.3);
+      color: #ff3b30;
     }
-    .stats {
-      display: flex;
-      justify-content: space-between;
-      margin-top: 16px;
-      padding: 16px;
-      background: #222;
-      border-radius: 12px;
+    
+    .info-section {
+      margin-top: 28px;
+      padding-top: 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
     }
-    .stat {
-      text-align: center;
-    }
-    .stat-value {
-      font-size: 24px;
-      font-weight: 700;
-      color: #FFD600;
-    }
-    .stat-label {
+    
+    .info-title {
       font-size: 12px;
-      color: #888;
-      margin-top: 4px;
+      font-weight: 600;
+      color: #FFEB3B;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
     
-    /* Available Files Section */
-    .available-files-section {
-      margin-top: 32px;
-      padding-top: 24px;
-      border-top: 1px solid #444;
+    .info-text {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.6);
+      line-height: 1.8;
     }
     
-    .available-files {
-      max-height: 300px;
-      overflow-y: auto;
-      border: 1px solid #444;
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.05);
-      padding: 8px;
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
     }
     
-    .available-file-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 12px;
-      margin: 4px 0;
-      background: rgba(255, 255, 255, 0.08);
-      border-radius: 6px;
-      border: 1px solid #555;
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes fadeInDown {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
     }
     
-    .file-info {
-      flex: 1;
-    }
-    
-    .file-details {
-      color: #ccc;
-      font-size: 12px;
-      margin-top: 4px;
-    }
-    
-    .download-btn {
-      background: #2196F3;
-      color: white;
-      border: none;
-      padding: 6px 12px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 500;
-      transition: background-color 0.2s;
-    }
-    
-    .download-btn:hover {
-      background: #1976D2;
-    }
-    
-    .refresh-btn {
-      background: #666;
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 12px;
-      margin-top: 12px;
-      width: 100%;
-      transition: background-color 0.2s;
-    }
-    
-    .refresh-btn:hover {
-      background: #777;
-    }
-    
-    .loading, .no-files, .error {
-      text-align: center;
-      color: #ccc;
-      padding: 20px;
-      font-size: 14px;
-    }
-    
-    .error {
-      color: #f44336;
+    @media (max-width: 640px) {
+      .logo-container {
+        top: 16px;
+      }
+      
+      .brand-title {
+        font-size: 16px;
+      }
     }
   </style>
   <script>
@@ -662,7 +786,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
           return;
         }
         selectedFilesDiv.style.display = 'block';
-        selectedFilesDiv.innerHTML = '<h4 style="margin: 0 0 12px 0; color: #FFD600;">Selected Files:</h4>';
+        selectedFilesDiv.innerHTML = '<h4 style="margin: 0 0 12px 0; color: #FFEB3B;">Selected Files:</h4>';
         selectedFiles.forEach(file => {
           const fileItem = document.createElement('div');
           fileItem.className = 'file-item';
@@ -728,9 +852,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                 </div>
                 <div style="display:flex; align-items:center;">
                   <div style="width:140px; height:6px; background: rgba(255,255,255,0.2); border-radius:3px; margin-right:10px;">
-                    <div id="fpb-\${i}" style="width:0%; height:100%; background:#FFD600; border-radius:3px;"></div>
+                    <div id="fpb-\${i}" style="width:0%; height:100%; background:#FFEB3B; border-radius:3px;"></div>
                   </div>
-                  <span id="fpp-\${i}" style="color:#FFD600; font-weight:600; font-size:12px; width:40px; text-align:right;">0%</span>
+                  <span id="fpp-\${i}" style="color:#FFEB3B; font-weight:600; font-size:12px; width:40px; text-align:right;">0%</span>
                 </div>
               </div>`;
             list.appendChild(wrapper);
@@ -790,7 +914,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
           }
 
           if (uploaded === selectedFiles.length) {
-            message.innerHTML = `<div class=\"message success\">Uploaded \${uploaded} file(s) successfully</div>`;
+            message.innerHTML = `<div class=\"message success\">Successfully uploaded \${uploaded} file(s)</div>`;
           } else {
             message.innerHTML = `<div class=\"message error\">Uploaded \${uploaded}/\${selectedFiles.length} file(s)</div>`;
           }
@@ -805,33 +929,44 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   </script>
 </head>
 <body>
-  <div class="container">
-    <div class="card">
-      <div class="header">
-        <div class="logo">⚡ ZapShare</div>
-        <div class="subtitle">Send files to this device</div>
+  <div class="app-layout">
+    <!-- MAIN CONTENT -->
+    <div class="main-content">
+      <div class="container">
+        <div class="card">
+          <div class="header">
+            <h2 class="title">Upload Files</h2>
+            <p class="subtitle">Send files to this device instantly</p>
+          </div>
+          
+          <div class="upload-area" id="uploadArea">
+            <div class="upload-text">Drag & drop files here</div>
+            <div style="color: rgba(255, 255, 255, 0.3); margin: 16px 0; font-size: 13px;">or</div>
+            <label for="files" class="file-input-label">Choose Files</label>
+            <input id="files" type="file" multiple />
+            <div class="upload-hint">Files will be transferred over your local network</div>
+          </div>
+          
+          <div id="selectedFiles" class="selected-files"></div>
+          
+          <div class="progress" id="progress">
+            <div class="progress-bar" id="progressBar"></div>
+          </div>
+          
+          <button id="uploadBtn" class="upload-btn" disabled>Upload Files</button>
+          
+          <div id="message"></div>
+          
+          <div class="info-section">
+            <h3 class="info-title">How it works</h3>
+            <p class="info-text">
+              1. Choose or drag files to upload<br>
+              2. Files are sent directly to the device<br>
+              3. Fast, secure, and completely private
+            </p>
+          </div>
+        </div>
       </div>
-      
-      <div class="upload-area" id="uploadArea">
-        <div class="upload-icon">📁</div>
-        <div class="upload-text">Drag & drop files here</div>
-        <div>or</div>
-        <label for="files" class="file-input-label">Choose Files</label>
-        <input id="files" type="file" multiple />
-        <div class="upload-hint">Files will be uploaded and ready for download on the device</div>
-      </div>
-      
-      <div id="selectedFiles" class="selected-files"></div>
-      
-      <div class="progress" id="progress">
-        <div class="progress-bar" id="progressBar"></div>
-      </div>
-      
-      <button id="uploadBtn" class="upload-btn" disabled>Send File Previews</button>
-      
-      <div id="message"></div>
-      
-      
     </div>
   </div>
   
@@ -868,8 +1003,8 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
             <div class="file-name">\${file.name}</div>
             <div class="file-details">\${formatFileSize(file.size)} • \${formatDate(file.uploadedAt)} • Pending download</div>
           </div>
-          <div style="color: #FFD600; font-size: 12px; font-weight: 500;">
-            � Ready on device
+          <div style="color: #FFEB3B; font-size: 12px; font-weight: 500;">
+            Ready on device
           </div>
         </div>
       `).join('');
@@ -1168,42 +1303,80 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       final file = File(savePath);
       final sink = file.openWrite();
       int bytesReceived = 0;
+      int bytesSinceFlush = 0;
+      const int flushThreshold = 512 * 1024; // flush every 512KB to limit memory buffering
       var lastUiUpdate = DateTime.now();
-      
-      await request.listen((chunk) {
-        sink.add(chunk);
-        bytesReceived += chunk.length;
-        // Throttle UI updates to ~10fps
-        final now = DateTime.now();
-        if (now.difference(lastUiUpdate).inMilliseconds >= 100) {
-          lastUiUpdate = now;
-          if (mounted) {
-            setState(() {
-              final entry = _ongoingDownloads[fileName];
-              if (entry != null) {
-                final hasTotal = totalBytes > 0;
-                entry.progress = hasTotal ? (bytesReceived / totalBytes).clamp(0.0, 1.0) : entry.progress;
-                entry.status = hasTotal
-                    ? 'Receiving... ${((entry.progress) * 100).toInt()}%'
-                    : 'Receiving... ${_formatBytes(bytesReceived)}';
-              }
-            });
+
+      // Use an explicit StreamSubscription so we can apply simple backpressure:
+      // pause the incoming stream while we flush the file sink occasionally.
+      final subscription = request.listen(null);
+
+      subscription.onData((chunk) async {
+        // Pause the subscription while we write and (sometimes) flush to avoid build-up
+        subscription.pause();
+        try {
+          sink.add(chunk);
+          bytesReceived += chunk.length;
+          bytesSinceFlush += chunk.length;
+
+          // Flush periodically to push bytes to disk and keep memory usage bounded
+          if (bytesSinceFlush >= flushThreshold) {
+            bytesSinceFlush = 0;
+            try {
+              await sink.flush();
+            } catch (_) {}
           }
-          // Update notification
-          final hasTotal = totalBytes > 0;
-          final pct = hasTotal ? ((bytesReceived / totalBytes) * 100).clamp(0, 100).toInt() : 0;
-          final body = hasTotal
-              ? 'Receiving $fileName • $pct%'
-              : 'Receiving $fileName • ${_formatBytes(bytesReceived)}';
-          _showProgressNotification(
-            key: fileName,
-            title: 'Receiving file',
-            body: body,
-            progress: hasTotal ? pct : 0,
-          );
+
+          // Throttle UI updates to ~10fps
+          final now = DateTime.now();
+          if (now.difference(lastUiUpdate).inMilliseconds >= 100) {
+            lastUiUpdate = now;
+            if (mounted) {
+              setState(() {
+                final entry = _ongoingDownloads[fileName];
+                if (entry != null) {
+                  final hasTotal = totalBytes > 0;
+                  entry.progress = hasTotal ? (bytesReceived / totalBytes).clamp(0.0, 1.0) : entry.progress;
+                  entry.status = hasTotal
+                      ? 'Receiving... ${((entry.progress) * 100).toInt()}%'
+                      : 'Receiving... ${_formatBytes(bytesReceived)}';
+                }
+              });
+            }
+
+            // Update notification
+            final hasTotal = totalBytes > 0;
+            final pct = hasTotal ? ((bytesReceived / totalBytes) * 100).clamp(0, 100).toInt() : 0;
+            final body = hasTotal
+                ? 'Receiving $fileName • $pct%'
+                : 'Receiving $fileName • ${_formatBytes(bytesReceived)}';
+            _showProgressNotification(
+              key: fileName,
+              title: 'Receiving file',
+              body: body,
+              progress: hasTotal ? pct : 0,
+            );
+          }
+        } catch (e) {
+          // Re-throw to let outer try/catch handle it via subscription.onError
+          rethrow;
+        } finally {
+          subscription.resume();
         }
-      }).asFuture();
-      
+      });
+
+      // Propagate errors to outer try/catch
+      subscription.onError((e) {
+        throw e;
+      });
+
+      // Await completion of the request stream
+      await subscription.asFuture<void>();
+
+      // Ensure all buffered bytes are flushed and file closed
+      try {
+        await sink.flush();
+      } catch (_) {}
       await sink.close();
 
       // Add to received files and remove from pending
@@ -1370,8 +1543,26 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     );
   }
 
+  String _ipToCode(String? ip) {
+    if (ip == null || ip == '0.0.0.0') return '--------';
+    try {
+      final parts = ip.split('.');
+      if (parts.length != 4) return '--------';
+      
+      final num = (int.parse(parts[0]) << 24) |
+                  (int.parse(parts[1]) << 16) |
+                  (int.parse(parts[2]) << 8) |
+                  int.parse(parts[3]);
+      
+      return num.toRadixString(36).toUpperCase().padLeft(8, '0');
+    } catch (e) {
+      return '--------';
+    }
+  }
+
   void _copyUrlToClipboard() {
-    final url = 'http://${_localIp ?? '0.0.0.0'}:8090';
+    final scheme = _useHttps ? 'https' : 'http';
+    final url = '$scheme://${_localIp ?? '0.0.0.0'}:8090';
     Clipboard.setData(ClipboardData(text: url));
     _showSnackBar('URL copied to clipboard');
   }
@@ -1385,7 +1576,8 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final url = 'http://${_localIp ?? '0.0.0.0'}:8090';
+  final scheme = _useHttps ? 'https' : 'http';
+  final url = '$scheme://${_localIp ?? '0.0.0.0'}:8090';
     
     return Scaffold(
       backgroundColor: Colors.black,
@@ -1559,7 +1751,51 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                   ],
                 ),
                 if (_isHosting) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
+                  // 8-Digit Code Display - Compact & Tappable
+                  GestureDetector(
+                    onTap: () {
+                      Clipboard.setData(ClipboardData(text: _ipToCode(_localIp)));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Code copied to clipboard!'),
+                          duration: Duration(seconds: 2),
+                          backgroundColor: Colors.yellow[700],
+                        ),
+                      );
+                    },
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[850],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.yellow[300]!, width: 1.5),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _ipToCode(_localIp),
+                            style: TextStyle(
+                              color: Colors.yellow[300],
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 2,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Icon(
+                            Icons.copy,
+                            color: Colors.yellow[300],
+                            size: 16,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   GestureDetector(
                     onTap: _copyUrlToClipboard,
                     child: Container(
@@ -1799,45 +2035,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
-                Row(
-                  children: [
-                    Icon(
-                      _isHosting ? Icons.cloud_upload : Icons.cloud_off,
-                      color: _isHosting ? Colors.yellow[300] : Colors.grey[600],
-                      size: 24,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        _isHosting ? 'Server Running - Files Available' : 'Server Stopped',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    ElevatedButton(
-                      onPressed: _isHosting ? _stopWebServer : _startWebServer,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _isHosting ? Colors.red : Colors.yellow[300],
-                        foregroundColor: _isHosting ? Colors.white : Colors.black,
-                        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        minimumSize: Size(0, 32),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                      child: Text(
-                        _isHosting ? 'Stop' : 'Start',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ],
-                ),
                 if (_isHosting) ...[
                   const SizedBox(height: 16),
-                  if (_pendingFiles.isEmpty) ...[
+                  if (_pendingFiles.isEmpty && _ongoingDownloads.isEmpty) ...[
                     Container(
                       padding: const EdgeInsets.all(20),
                       child: Column(
@@ -1868,7 +2068,8 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                         ],
                       ),
                     ),
-                  ] else ...[
+                  ],
+                  if (_pendingFiles.isNotEmpty) ...[
                     // Download selected files button
                     if (_pendingFiles.any((f) => f.isSelected)) 
                       Container(

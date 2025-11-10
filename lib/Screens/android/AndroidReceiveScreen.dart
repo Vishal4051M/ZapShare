@@ -11,7 +11,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'ImagePreviewDialog.dart';
+import 'AndroidImagePreviewDialog.dart';
 
 
 const Color kAndroidAccentYellow = Colors.yellow; // lighter yellow for Android
@@ -62,6 +62,19 @@ class AndroidReceiveScreen extends StatefulWidget {
   State<AndroidReceiveScreen> createState() => _AndroidReceiveScreenState();
 }
 
+// Formatter to automatically convert input to upper-case
+class UpperCaseTextFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final upper = newValue.text.toUpperCase();
+    return TextEditingValue(
+      text: upper,
+      selection: newValue.selection,
+      composing: TextRange.empty,
+    );
+  }
+}
+
 class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
   final TextEditingController _codeController = TextEditingController();
   final FocusNode _codeFocusNode = FocusNode();
@@ -100,8 +113,8 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
   }
 
   Future<void> _initLocalNotifications() async {
-    const AndroidInitializationSettings initializationSettingsAndroid =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
+  const AndroidInitializationSettings initializationSettingsAndroid =
+    AndroidInitializationSettings('@mipmap/launcher_icon');
     final InitializationSettings initializationSettings = InitializationSettings(
       android: initializationSettingsAndroid,
     );
@@ -555,7 +568,7 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
     showDialog(
       context: context,
       barrierDismissible: true,
-      builder: (context) => ImagePreviewDialog(
+      builder: (context) => AndroidImagePreviewDialog(
         imageTasks: imageTasks,
         initialIndex: currentIndex,
         onSelectionChanged: (index, isSelected) {
@@ -1102,20 +1115,28 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
         controller: _codeController,
         focusNode: _codeFocusNode,
         cursorColor: Colors.yellow,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                            fontFamily: 'monospace',
-                            letterSpacing: 1.0,
-                          ),
-                          textAlign: TextAlign.center,
-                          decoration: InputDecoration(
+        textCapitalization: TextCapitalization.characters,
+        inputFormatters: [
+          UpperCaseTextFormatter(),
+          FilteringTextInputFormatter.allow(RegExp(r'[A-Z0-9]')),
+          LengthLimitingTextInputFormatter(8),
+        ],
+        keyboardType: TextInputType.text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 16,
+          fontWeight: FontWeight.w500,
+          fontFamily: 'monospace',
+          letterSpacing: 1.0,
+        ),
+        textAlign: TextAlign.center,
+        decoration: InputDecoration(
           hintText: 'Enter 8-character code',
-                            hintStyle: const TextStyle(
-                              color: Colors.grey,
-                              fontSize: 14,
-                            ),
+          hintStyle: const TextStyle(
+            color: Colors.grey,
+            fontSize: 14,
+          ),
+          counterText: '',
           border: InputBorder.none,
           focusedBorder: InputBorder.none,
           enabledBorder: InputBorder.none,
@@ -1126,15 +1147,15 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
           fillColor: Colors.transparent,
           filled: true,
           isDense: true,
-                          ),
-                          onSubmitted: (val) => _fetchFileList(val.trim()),
-                          onChanged: (val) {
-                            // Auto-submit when 8 characters are entered
-                            if (val.length == 8) {
-                              _fetchFileList(val.trim());
-                }
-              },
-            ),
+        ),
+        onSubmitted: (val) => _fetchFileList(val.trim()),
+        onChanged: (val) {
+          // Auto-submit when 8 characters are entered
+          if (val.length == 8) {
+            _fetchFileList(val.trim());
+          }
+        },
+      ),
           ),
                     ],
                   ),

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Notification small icon: tint the launcher foreground to white so Android
+     renders a proper silhouette for the status bar. This uses the existing
+     ic_launcher_foreground bitmap and applies a white tint. -->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/ic_launcher_foreground"
+    android:gravity="center"
+    android:tint="@android:color/white" />

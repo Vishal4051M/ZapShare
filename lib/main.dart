@@ -5,15 +5,17 @@ import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:zap_share/Screens/HomeScreen.dart';
-import 'package:zap_share/Screens/HttpFileShareScreen.dart';
+import 'package:zap_share/Screens/android/AndroidHomeScreen.dart';
+import 'package:zap_share/Screens/android/AndroidHttpFileShareScreen.dart';
 import 'package:zap_share/services/device_discovery_service.dart';
 import 'package:zap_share/widgets/connection_request_dialog.dart';
-import 'Screens/WindowsFileShareScreen.dart';
-import 'Screens/WindowsReceiveScreen.dart';
-import 'Screens/AndroidReceiveScreen.dart';
-import 'Screens/TransferHistoryScreen.dart';
+import 'Screens/windows/WindowsFileShareScreen.dart';
+import 'Screens/windows/WindowsReceiveScreen.dart';
+import 'Screens/android/AndroidReceiveScreen.dart';
+import 'Screens/shared/TransferHistoryScreen.dart';
 import 'dart:async';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> clearAppCache() async {
   final cacheDir = await getTemporaryDirectory();
@@ -91,7 +93,95 @@ class _DataRushAppState extends State<DataRushApp> {
   @override
   void initState() {
     super.initState();
-    _initGlobalDeviceDiscovery();
+    // Delay startup until after first frame so navigator/context exist.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Ask for device name on first install before initializing discovery service
+      await _ensureDeviceName();
+      _initGlobalDeviceDiscovery();
+    });
+  }
+
+  Future<void> _ensureDeviceName() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final existing = prefs.getString('device_name');
+      if (existing != null && existing.trim().isNotEmpty) return;
+
+      final nameController = TextEditingController();
+      final focusNode = FocusNode();
+
+      // Wait briefly for navigator context to be available (should be after first frame)
+      BuildContext? dialogContext = navigatorKey.currentContext;
+      int attempts = 0;
+      while (dialogContext == null && attempts < 10) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        dialogContext = navigatorKey.currentContext;
+        attempts++;
+      }
+      if (dialogContext == null) return;
+
+      await showDialog<void>(
+        context: dialogContext,
+        barrierDismissible: false,
+        builder: (context) {
+          return AlertDialog(
+            backgroundColor: Colors.grey[900],
+            title: const Text('Set device name', style: TextStyle(color: Colors.white)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Please enter a name for this device. This will be shown to other devices when sharing.',
+                  style: TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                Theme(
+                  data: Theme.of(context).copyWith(
+                    textSelectionTheme: TextSelectionThemeData(
+                      cursorColor: Colors.yellow[300],
+                      selectionHandleColor: Colors.yellow[300],
+                      selectionColor: Colors.yellow[100],
+                    ),
+                  ),
+                  child: TextField(
+                    controller: nameController,
+                    focusNode: focusNode,
+                    autofocus: true,
+                    cursorColor: Colors.yellow[300],
+                    textCapitalization: TextCapitalization.words,
+                    inputFormatters: [
+                      // Allow letters, numbers, spaces and basic punctuation
+                      FilteringTextInputFormatter.allow(RegExp(r"[\w\-\.\s']")),
+                      LengthLimitingTextInputFormatter(30),
+                    ],
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: 'My phone',
+                      hintStyle: TextStyle(color: Colors.white24),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  final v = nameController.text.trim();
+                  if (v.isEmpty) return; // keep dialog open until valid
+                  await prefs.setString('device_name', v);
+                  Navigator.of(context).pop();
+                },
+                child: const Text('Save', style: TextStyle(color: Colors.yellow)),
+              ),
+            ],
+          );
+        },
+      );
+      // give focus/keyboard a moment
+      await Future.delayed(const Duration(milliseconds: 200));
+    } catch (e) {
+      print('Error ensuring device name: $e');
+    }
   }
 
   void _initGlobalDeviceDiscovery() async {
@@ -289,10 +379,10 @@ class _DataRushAppState extends State<DataRushApp> {
         ),
       ),
       home: Platform.isAndroid
-          ? const HomeScreen()
+          ? const AndroidHomeScreen()
           : Platform.isWindows
               ? const WindowsNavBar()
-              : HttpFileShareScreen(),
+              : AndroidHttpFileShareScreen(),
       debugShowCheckedModeBanner: false,
     );
   }
@@ -307,7 +397,7 @@ class AndroidNavBar extends StatefulWidget {
 class _AndroidNavBarState extends State<AndroidNavBar> {
   int _selectedIndex = 0;
   final List<Widget> _screens = [
-    HttpFileShareScreen(),
+    AndroidHttpFileShareScreen(),
     AndroidReceiveScreen(),
     TransferHistoryScreen(),
   ];
