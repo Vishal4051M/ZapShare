@@ -3,8 +3,8 @@ import 'package:flutter/services.dart';
 import 'AndroidReceiveScreen.dart';
 import 'WebReceiveScreen.dart';
 
-class ReceiveOptionsScreen extends StatelessWidget {
-  const ReceiveOptionsScreen({super.key});
+class AndroidReceiveOptionsScreen extends StatelessWidget {
+  const AndroidReceiveOptionsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {

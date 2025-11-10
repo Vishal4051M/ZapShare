@@ -59,6 +59,12 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
 
     print('Device name updated successfully');
 
+    // Unfocus the text field and wait briefly so the keyboard is dismissed before navigating
+    try {
+      FocusScope.of(context).unfocus();
+      await Future.delayed(const Duration(milliseconds: 120));
+    } catch (_) {}
+
     Navigator.pop(context);
   }
 
@@ -127,28 +133,38 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: _deviceNameController,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    decoration: InputDecoration(
-                      hintText: 'Enter device name',
-                      hintStyle: TextStyle(color: Colors.grey[600]),
-                      filled: true,
-                      fillColor: Colors.grey[850],
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide.none,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 14,
+                  Theme(
+                    data: Theme.of(context).copyWith(
+                      textSelectionTheme: TextSelectionThemeData(
+                        cursorColor: Colors.yellow[300],
+                        selectionHandleColor: Colors.yellow[300],
+                        selectionColor: Colors.yellow[100],
                       ),
                     ),
-                    maxLength: 30,
+                    child: TextField(
+                      controller: _deviceNameController,
+                      cursorColor: Colors.yellow[300],
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: 'Enter device name',
+                        hintStyle: TextStyle(color: Colors.grey[600]),
+                        filled: true,
+                        fillColor: Colors.grey[850],
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide.none,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
+                      ),
+                      maxLength: 30,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Text(

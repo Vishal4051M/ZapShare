@@ -14,6 +14,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import android.database.Cursor
 import android.provider.OpenableColumns
+import android.net.wifi.WifiManager
+import android.content.Context
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "zapshare.saf"
@@ -25,10 +27,16 @@ class MainActivity : FlutterActivity() {
     private var folderResult: MethodChannel.Result? = null
     private val FOLDER_PICKER_REQUEST = 9999
     private var pickedFolderUri: Uri? = null
+    
+    // --- Multicast Lock for Discovery ---
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+
+        // Acquire multicast lock for UDP discovery
+        acquireMulticastLock()
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -180,6 +188,27 @@ class MainActivity : FlutterActivity() {
                         result.success(zipFile.absolutePath)
                     } catch (e: Exception) {
                         result.error("ZIP_ERROR", e.message, null)
+                    }
+                }
+
+                "acquireMulticastLock" -> {
+                    try {
+                        acquireMulticastLock()
+                        result.success(true)
+                    } catch (e: Exception) {
+                        android.util.Log.e("ZapShare", "Failed to acquire multicast lock: ${e.message}")
+                        result.error("MULTICAST_ERROR", e.message, null)
+                    }
+                }
+
+                "checkMulticastLock" -> {
+                    try {
+                        val isHeld = multicastLock?.isHeld ?: false
+                        android.util.Log.d("ZapShare", "Multicast lock status: ${if (isHeld) "HELD" else "NOT HELD"}")
+                        result.success(isHeld)
+                    } catch (e: Exception) {
+                        android.util.Log.e("ZapShare", "Failed to check multicast lock: ${e.message}")
+                        result.error("MULTICAST_ERROR", e.message, null)
                     }
                 }
 
@@ -378,6 +407,85 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Acquire multicast lock to enable UDP multicast/broadcast reception
+     * This is CRITICAL for device discovery, especially when device is hotspot
+     * 
+     * NOTE: In hotspot mode, multicast lock may have limited effect since the device
+     * is acting as AP (Access Point) rather than a WiFi client. The socket binding
+     * strategy on the Dart side handles hotspot mode by binding to 0.0.0.0 to listen
+     * on all interfaces including the hotspot interface.
+     */
+    private fun acquireMulticastLock() {
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            
+            // Release existing lock if any
+            multicastLock?.release()
+            
+            // Create and acquire new multicast lock
+            // Set setReferenceCounted(false) to ensure lock is held until explicitly released
+            multicastLock = wifiManager.createMulticastLock("ZapShare:MulticastLock")
+            multicastLock?.setReferenceCounted(false)
+            
+            // Acquire with WakeLock mode to ensure it stays active
+            multicastLock?.acquire()
+            
+            val isHeld = multicastLock?.isHeld ?: false
+            if (isHeld) {
+                android.util.Log.d("ZapShare", "✅ Multicast lock ACQUIRED successfully - UDP discovery enabled")
+            } else {
+                android.util.Log.w("ZapShare", "⚠️ Multicast lock acquired but not held (may be in hotspot mode)")
+            }
+            
+            // Log WiFi state for debugging
+            val wifiInfo = wifiManager.connectionInfo
+            val isConnected = wifiInfo != null && wifiInfo.networkId != -1
+            android.util.Log.d("ZapShare", "   WiFi connected: $isConnected")
+            
+            if (!isConnected) {
+                android.util.Log.d("ZapShare", "   Device may be in hotspot mode - relying on 0.0.0.0 socket binding")
+            }
+            
+        } catch (e: Exception) {
+            android.util.Log.e("ZapShare", "❌ Failed to acquire multicast lock: ${e.message}")
+            android.util.Log.d("ZapShare", "   This may be expected in hotspot mode - socket binding should still work")
+        }
+    }
+
+    /**
+     * Release multicast lock to save battery
+     */
+    private fun releaseMulticastLock() {
+        try {
+            if (multicastLock?.isHeld == true) {
+                multicastLock?.release()
+                android.util.Log.d("ZapShare", "✅ Multicast lock RELEASED")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ZapShare", "❌ Failed to release multicast lock: ${e.message}")
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Re-acquire multicast lock when app comes to foreground
+        acquireMulticastLock()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Release multicast lock when app goes to background to save battery
+        // Only release if we're not in background service mode
+        // For now, keep it held to maintain discovery
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Always release multicast lock when app is destroyed
+        releaseMulticastLock()
     }
 
 }

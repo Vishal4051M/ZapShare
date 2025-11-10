@@ -11,8 +11,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'dart:convert';
 import 'dart:math';
-import '../services/device_discovery_service.dart';
-import '../widgets/connection_request_dialog.dart';
+import '../../services/device_discovery_service.dart';
+import '../../widgets/connection_request_dialog.dart';
+import 'AndroidReceiveScreen.dart';
 
 const Color kAndroidAccentYellow = Colors.yellow; // lighter yellow for Android
 
@@ -43,14 +44,16 @@ class DownloadStatus {
   });
 }
 
-class HttpFileShareScreen extends StatefulWidget {
-  const HttpFileShareScreen({super.key});
+class AndroidHttpFileShareScreen extends StatefulWidget {
+  final List<Map<dynamic, dynamic>>? initialSharedFiles;
+  
+  const AndroidHttpFileShareScreen({super.key, this.initialSharedFiles});
 
   @override
-  _HttpFileShareScreenState createState() => _HttpFileShareScreenState();
+  _AndroidHttpFileShareScreenState createState() => _AndroidHttpFileShareScreenState();
 }
 
-class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
+class _AndroidHttpFileShareScreenState extends State<AndroidHttpFileShareScreen> {
   final _pageController = PageController();
   final _safUtil = SafUtil();
   List<String> _fileUris = [];
@@ -59,6 +62,7 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
   String? _localIp;
   HttpServer? _server;
   bool _isSharing = false;
+  bool _useHttps = false;
   final safStream = SafStream();
   bool _loading = false;
   String? initialUri;
@@ -89,6 +93,8 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
   String? _pendingRequestDeviceIp;
   Timer? _requestTimeoutTimer;
   DiscoveredDevice? _pendingDevice;
+  Set<String> _processedRequests = {}; // Track processed request IPs to prevent duplicates
+  Map<String, DateTime> _lastRequestTime = {}; // Track last request time per IP
 
 
   String _ipToCode(String ip) {
@@ -461,17 +467,73 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // Handle initial shared files FIRST - set them synchronously before any async operations
+    if (widget.initialSharedFiles != null && widget.initialSharedFiles!.isNotEmpty) {
+      print('📁 [HttpFileShareScreen] Processing ${widget.initialSharedFiles!.length} initial shared files IMMEDIATELY');
+      print('📁 [HttpFileShareScreen] Files: ${widget.initialSharedFiles}');
+      _processInitialFiles(widget.initialSharedFiles!);
+    }
+    
     _init();
     _initLocalNotifications();
-    _listenForSharedFiles();
     
     // Initialize device discovery
     _initDeviceDiscovery();
+    
+    // Set up listener for future shared files (after initial processing)
+    _listenForSharedFiles();
     
     // Periodically cleanup disconnected clients
     Timer.periodic(Duration(minutes: 2), (timer) {
       if (mounted) {
         _cleanupDisconnectedClients();
+      }
+    });
+  }
+  
+  void _processInitialFiles(List<Map> files) {
+    print('📁 [_processInitialFiles] Starting synchronous file processing for ${files.length} files');
+    List<String> uris = [];
+    List<String> names = [];
+    List<int> sizes = [];
+    
+    for (final file in files) {
+      final uri = file['uri'] as String;
+      final name = file['name'] as String? ?? uri.split('/').last;
+      print('📁 [_processInitialFiles] Adding file: $name (URI: $uri)');
+      uris.add(uri);
+      names.add(name);
+      sizes.add(0); // Will get actual size asynchronously later
+    }
+    
+    // Set state SYNCHRONOUSLY in initState (before first build)
+    _fileUris = uris;
+    _fileNames = names;
+    _progressList = List.generate(uris.length, (_) => ValueNotifier(0.0));
+    _isPausedList = List.generate(uris.length, (_) => ValueNotifier(false));
+    _bytesSentList = List.generate(uris.length, (_) => 0);
+    _fileSizeList = sizes;
+    _completedFiles = List.generate(uris.length, (_) => false);
+    _loading = false;
+    
+    print('✅ [_processInitialFiles] Files set synchronously: $_fileNames');
+    
+    // Get file sizes asynchronously after initialization
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      print('📁 [_processInitialFiles] Getting file sizes asynchronously...');
+      for (int i = 0; i < uris.length; i++) {
+        try {
+          final size = await getFileSizeFromUri(uris[i]);
+          if (mounted) {
+            setState(() {
+              _fileSizeList[i] = size;
+            });
+            print('📁 [_processInitialFiles] File ${names[i]} size: $size bytes');
+          }
+        } catch (e) {
+          print('⚠️ [_processInitialFiles] Could not get size for ${names[i]}: $e');
+        }
       }
     });
   }
@@ -481,7 +543,17 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
       if (call.method == 'sharedFiles') {
         final List<dynamic> files = call.arguments as List<dynamic>;
         if (files.isNotEmpty) {
-          await _handleSharedFiles(files.cast<Map>());
+          print('📁 [MethodChannel] Received shared files: ${files.length} files');
+          print('📁 [MethodChannel] Files data: $files');
+          
+          // Check if we're already on this screen
+          if (mounted) {
+            print('📁 [MethodChannel] Screen is mounted, processing files directly');
+            await _handleSharedFiles(files.cast<Map>());
+          } else {
+            print('📁 [MethodChannel] Screen not mounted, navigation should happen from MainActivity');
+            // The files will be passed via initialSharedFiles from main.dart navigation
+          }
         }
       }
       return null;
@@ -506,6 +578,7 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
     }
   }
   Future<void> _handleSharedFiles(List<Map> files) async {
+    print('📁 [_handleSharedFiles] Starting to process ${files.length} files');
     setState(() => _loading = true);
     List<String> uris = [];
     List<String> names = [];
@@ -513,14 +586,19 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
     for (final file in files) {
       final uri = file['uri'] as String;
       final name = file['name'] as String? ?? uri.split('/').last;
+      print('📁 [_handleSharedFiles] Processing file: $name (URI: $uri)');
       int size = 0;
       try {
         size = await getFileSizeFromUri(uri);
-      } catch (_) {}
+        print('📁 [_handleSharedFiles] File size: $size bytes');
+      } catch (e) {
+        print('⚠️ [_handleSharedFiles] Could not get file size: $e');
+      }
       uris.add(uri);
       names.add(name);
       sizes.add(size);
     }
+    print('📁 [_handleSharedFiles] Setting state with ${uris.length} files');
     setState(() {
       _fileUris = uris;
       _fileNames = names;
@@ -531,6 +609,9 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
       _completedFiles = List.generate(uris.length, (_) => false); // Initialize completedFiles
       _loading = false;
     });
+    print('✅ [_handleSharedFiles] Files processed successfully');
+    print('📁 [_handleSharedFiles] _fileNames: $_fileNames');
+    print('📁 [_handleSharedFiles] _fileUris: $_fileUris');
   }
 
   Future<void> _init() async {
@@ -540,8 +621,8 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
   }
 
   Future<void> _initLocalNotifications() async {
-    const AndroidInitializationSettings initializationSettingsAndroid =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
+  const AndroidInitializationSettings initializationSettingsAndroid =
+    AndroidInitializationSettings('@mipmap/launcher_icon');
     final InitializationSettings initializationSettings = InitializationSettings(
       android: initializationSettingsAndroid,
     );
@@ -951,7 +1032,33 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
       notificationText: "Sharing file(s)...",
     );
     await _server?.close(force: true);
-    _server = await HttpServer.bind(InternetAddress.anyIPv4, 8080);
+    // Attempt TLS bind using cert/key if available
+    SecurityContext? sc;
+    try {
+      final certFile = File('temp-server/certs/server.crt');
+      final keyFile = File('temp-server/certs/server.key');
+      if (await certFile.exists() && await keyFile.exists()) {
+        sc = SecurityContext();
+        sc.useCertificateChain(certFile.path);
+        sc.usePrivateKey(keyFile.path);
+      } else {
+        final certData = await rootBundle.load('assets/certs/server.crt');
+        final keyData = await rootBundle.load('assets/certs/server.key');
+        sc = SecurityContext();
+        sc.useCertificateChainBytes(certData.buffer.asUint8List());
+        sc.usePrivateKeyBytes(keyData.buffer.asUint8List());
+      }
+    } catch (e) {
+      sc = null;
+    }
+
+    if (sc != null) {
+      _server = await HttpServer.bindSecure(InternetAddress.anyIPv4, 8080, sc);
+      _useHttps = true;
+    } else {
+      _server = await HttpServer.bind(InternetAddress.anyIPv4, 8080);
+      _useHttps = false;
+    }
     // Generate 8-char code for sharing (just IP)
     final codeForUser = _ipToCode(_localIp ?? '');
     setState(() {
@@ -959,6 +1066,18 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
     });
     _server!.listen((HttpRequest request) async {
       final path = request.uri.path;
+      
+      // Add CORS headers for all requests
+      request.response.headers.add('Access-Control-Allow-Origin', '*');
+      request.response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      request.response.headers.add('Access-Control-Allow-Headers', '*');
+      
+      // Handle preflight OPTIONS request
+      if (request.method == 'OPTIONS') {
+        request.response.statusCode = HttpStatus.ok;
+        await request.response.close();
+        return;
+      }
       
       // Serve web interface at root
       if (path == '/' || path == '/index.html') {
@@ -1247,100 +1366,141 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
         }
         
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: #000000;
+            color: #ffffff;
             min-height: 100vh;
-            padding: 20px;
+            display: flex;
+            overflow-x: hidden;
+        }
+
+        .main-content {
+            flex: 1;
+            padding: 120px 40px 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            z-index: 10;
+            width: 100%;
         }
         
         .container {
-            max-width: 900px;
-            margin: 0 auto;
-            background: #1a1a1a;
-            border-radius: 20px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
-            overflow: hidden;
-            border: 2px solid #FFD600;
+            max-width: 700px;
+            width: 100%;
+        }
+
+        @media (max-width: 1024px) {
+            .main-content {
+                padding: 80px 20px 30px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                max-width: 100%;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .main-content {
+                padding: 30px 16px;
+            }
+        }
+        
+        .card {
+            background: rgba(26, 26, 26, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 36px 44px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(40px);
+            animation: fadeInUp 0.6s ease-out 0.3s both;
+        }
+
+        @media (max-width: 768px) {
+            .card {
+                padding: 24px 18px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .card {
+                padding: 24px 20px;
+            }
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
         }
         
         .header {
-            background: #1a1a1a;
-            padding: 30px;
             text-align: center;
-            color: #FFD600;
-            position: relative;
-            overflow: hidden;
-            border-bottom: 2px solid #FFD600;
+            margin-bottom: 28px;
         }
         
-        .header::before {
-            content: '⚡';
-            position: absolute;
-            top: 10px;
-            left: 20px;
-            font-size: 2rem;
-            animation: sparkle 2s infinite;
-        }
-        
-        .header::after {
-            content: '⚡';
-            position: absolute;
-            top: 10px;
-            right: 20px;
-            font-size: 2rem;
-            animation: sparkle 2s infinite reverse;
-        }
-        
-        @keyframes sparkle {
-            0%, 100% { opacity: 0.3; transform: scale(1); }
-            50% { opacity: 1; transform: scale(1.2); }
-        }
-        
-        .header h1 {
-            font-size: 2.5rem;
-            font-weight: 800;
-            margin-bottom: 10px;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        }
-        
-        .header p {
-            font-size: 1.1rem;
-            opacity: 0.9;
+        .title {
+            font-size: 20px;
+            font-weight: 600;
             color: #ffffff;
+            margin-bottom: 6px;
+            letter-spacing: -0.3px;
+        }
+        
+        .subtitle {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.6);
+            font-weight: 400;
+            line-height: 1.5;
         }
         
         .content {
-            padding: 30px;
-            background: #1a1a1a;
+            margin-top: 20px;
         }
         
         .file-list {
             margin-top: 20px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .file-list::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .file-list::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+        }
+
+        .file-list::-webkit-scrollbar-thumb {
+            background: rgba(255, 235, 59, 0.3);
+            border-radius: 10px;
         }
         
         .file-item {
             display: flex;
             align-items: center;
-            padding: 20px;
-            margin-bottom: 15px;
-            background: #2a2a2a;
+            padding: 12px;
+            margin-bottom: 12px;
+            background: rgba(0, 0, 0, 0.3);
             border-radius: 12px;
-            border: 2px solid #FFD600;
-            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             position: relative;
         }
         
         .file-item:hover {
-            border-color: #FF6B35;
-            transform: translateY(-3px);
-            box-shadow: 0 12px 30px rgba(255, 107, 53, 0.3);
-            background: #333;
+            border-color: rgba(255, 235, 59, 0.5);
+            background: rgba(255, 235, 59, 0.05);
+            transform: translateY(-2px);
         }
         
         .file-item.selected {
-            border-color: #FF6B35;
-            background: #333;
-            box-shadow: 0 8px 25px rgba(255, 107, 53, 0.2);
+            border-color: #FFEB3B;
+            background: rgba(255, 235, 59, 0.1);
+            box-shadow: 0 4px 12px rgba(255, 235, 59, 0.2);
         }
         
         .pagination {
@@ -1352,53 +1512,56 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
         }
         
         .pagination button {
-            background: #FFD600;
-            color: #1a1a1a;
+            background: linear-gradient(135deg, #FFEB3B 0%, #FFF176 100%);
+            color: #000;
             border: none;
             padding: 10px 15px;
-            border-radius: 8px;
+            border-radius: 12px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 16px rgba(255, 235, 59, 0.3);
         }
         
         .pagination button:hover {
-            background: #FF6B35;
-            color: white;
             transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(255, 235, 59, 0.4);
         }
         
         .pagination button:disabled {
-            background: #666;
-            color: #999;
+            background: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.3);
             cursor: not-allowed;
             transform: none;
+            box-shadow: none;
         }
         
         .pagination-info {
-            color: #FFD600;
+            color: #FFEB3B;
             font-weight: 600;
             margin: 0 15px;
+            font-size: 13px;
         }
         
         .file-checkbox {
-            margin-right: 15px;
-            transform: scale(1.2);
-            accent-color: #FFD600;
+            margin-right: 12px;
+            transform: scale(1.1);
+            accent-color: #FFEB3B;
         }
         
         .file-icon {
-            width: 50px;
-            height: 50px;
-            background: linear-gradient(135deg, #FFD600 0%, #FF6B35 100%);
-            border-radius: 12px;
+            width: 36px;
+            height: 36px;
+            background: #FFEB3B;
+            border-radius: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
-            margin-right: 20px;
-            font-size: 24px;
-            color: #1a1a1a;
-            border: 2px solid #FFD600;
+            margin-right: 12px;
+            font-size: 10px;
+            font-weight: 700;
+            color: #000;
+            letter-spacing: -0.5px;
         }
         
         .file-info {
@@ -1406,36 +1569,36 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
         }
         
         .file-name {
-            font-size: 1.1rem;
+            font-size: 14px;
             font-weight: 600;
-            color: #FFD600;
-            margin-bottom: 5px;
+            color: #fff;
+            margin-bottom: 4px;
         }
         
         .file-size {
-            font-size: 0.9rem;
-            color: #ccc;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.5);
+            font-weight: 500;
         }
         
         .download-btn {
-            background: linear-gradient(135deg, #FFD600 0%, #FF6B35 100%);
-            color: #1a1a1a;
+            background: linear-gradient(135deg, #FFEB3B 0%, #FFF176 100%);
+            color: #000;
             border: none;
-            padding: 12px 24px;
-            border-radius: 25px;
-            font-size: 1rem;
+            padding: 10px 20px;
+            border-radius: 12px;
+            font-size: 14px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             text-decoration: none;
             display: inline-block;
-            border: 2px solid #FFD600;
+            box-shadow: 0 4px 16px rgba(255, 235, 59, 0.3);
         }
         
         .download-btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(255, 214, 0, 0.4);
-            background: linear-gradient(135deg, #FF6B35 0%, #FFD600 100%);
+            box-shadow: 0 8px 24px rgba(255, 235, 59, 0.4);
         }
         
         .download-btn:active {
@@ -1443,71 +1606,80 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
         }
         
         .bulk-actions {
-            background: #2a2a2a;
-            padding: 20px;
-            margin-bottom: 20px;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 16px;
+            margin-bottom: 16px;
             border-radius: 12px;
-            border: 2px solid #FFD600;
+            border: 1px solid rgba(255, 255, 255, 0.08);
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
-            gap: 15px;
+            gap: 12px;
         }
         
         .bulk-actions h3 {
-            color: #FFD600;
+            color: #FFEB3B;
             margin: 0;
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
         .bulk-btn {
-            background: #FF6B35;
-            color: white;
+            background: linear-gradient(135deg, #FFEB3B 0%, #FFF176 100%);
+            color: #000;
             border: none;
             padding: 10px 20px;
-            border-radius: 20px;
+            border-radius: 12px;
             font-weight: 600;
+            font-size: 13px;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 16px rgba(255, 235, 59, 0.3);
         }
         
         .bulk-btn:hover {
-            background: #FF8C42;
             transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(255, 235, 59, 0.4);
         }
         
         .bulk-btn.secondary {
-            background: #333;
-            color: #FFD600;
-            border: 2px solid #FFD600;
+            background: rgba(255, 255, 255, 0.1);
+            color: #FFEB3B;
+            box-shadow: none;
         }
         
         .bulk-btn.secondary:hover {
-            background: #FFD600;
-            color: #1a1a1a;
+            background: rgba(255, 235, 59, 0.1);
         }
         
         .no-files {
             text-align: center;
             padding: 60px 20px;
-            color: #ccc;
         }
         
         .no-files h3 {
-            font-size: 1.5rem;
-            margin-bottom: 10px;
-            color: #FFD600;
+            font-size: 16px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: rgba(255, 255, 255, 0.4);
+        }
+
+        .no-files p {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.6);
         }
         
         .loading {
             text-align: center;
             padding: 60px 20px;
-            color: #ccc;
         }
         
         .spinner {
-            border: 4px solid #333;
-            border-top: 4px solid #FFD600;
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-top: 4px solid #FFEB3B;
             border-radius: 50%;
             width: 40px;
             height: 40px;
@@ -1520,101 +1692,41 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
             100% { transform: rotate(360deg); }
         }
         
-        .pikachu-runner {
-            width: 80px;
-            height: 80px;
-            margin: 0 auto 20px;
-            position: relative;
-            animation: run 1s infinite;
-        }
-        
-        .pikachu-runner::before {
-            content: '⚡';
-            position: absolute;
-            top: -10px;
-            right: -15px;
-            font-size: 24px;
-            animation: spark 0.5s infinite alternate;
-        }
-        
-        .pikachu-runner::after {
-            content: '⚡';
-            position: absolute;
-            top: -10px;
-            left: -15px;
-            font-size: 24px;
-            animation: spark 0.5s infinite alternate-reverse;
-        }
-        
-        @keyframes run {
-            0%, 100% { transform: translateY(0) rotate(0deg); }
-            25% { transform: translateY(-5px) rotate(5deg); }
-            50% { transform: translateY(-10px) rotate(0deg); }
-            75% { transform: translateY(-5px) rotate(-5deg); }
-        }
-        
-        @keyframes spark {
-            0% { opacity: 0.3; transform: scale(0.8); }
-            100% { opacity: 1; transform: scale(1.2); }
+        .loading h3 {
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 15px;
+            font-weight: 500;
         }
         
         .progress-container {
-            background: #333;
-            border-radius: 25px;
-            padding: 3px;
-            margin: 20px 0;
-            border: 2px solid #FFD600;
-        }
-        
-        .progress-bar {
-            background: linear-gradient(90deg, #FFD600 0%, #FF6B35 100%);
-            height: 20px;
-            border-radius: 20px;
-            transition: width 0.3s ease;
-            position: relative;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            height: 4px;
+            margin: 8px 0;
             overflow: hidden;
         }
         
-        .progress-bar::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.3) 50%, transparent 100%);
-            animation: shimmer 2s infinite;
-        }
-        
-        @keyframes shimmer {
-            0% { transform: translateX(-100%); }
-            100% { transform: translateX(100%); }
-        }
-        
-        .footer {
-            text-align: center;
-            padding: 20px;
-            color: #ccc;
-            font-size: 0.9rem;
-            border-top: 1px solid #333;
-            background: #2a2a2a;
+        .progress-bar {
+            background: linear-gradient(90deg, #FFEB3B 0%, #FFF176 100%);
+            height: 100%;
+            transition: width 0.3s ease;
         }
         
         .preview-btn {
-            background: #FF6B35;
-            color: white;
+            background: rgba(255, 255, 255, 0.1);
+            color: #FFEB3B;
             border: none;
             padding: 8px 12px;
-            border-radius: 6px;
+            border-radius: 8px;
             font-size: 12px;
             font-weight: 600;
             cursor: pointer;
             margin-left: 10px;
-            transition: all 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
         
         .preview-btn:hover {
-            background: #FF8C42;
+            background: rgba(255, 235, 59, 0.1);
             transform: translateY(-1px);
         }
         
@@ -1641,87 +1753,70 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
             position: absolute;
             top: 15px;
             right: 35px;
-            color: #FFD600;
+            color: #FFEB3B;
             font-size: 40px;
             font-weight: bold;
             cursor: pointer;
         }
         
         .close:hover {
-            color: #FF6B35;
+            color: #FFF176;
         }
         
         @media (max-width: 600px) {
-            .container {
-                margin: 10px;
-                border-radius: 15px;
-            }
-            
-            .header {
-                padding: 20px;
-            }
-            
-            .header h1 {
-                font-size: 2rem;
-            }
-            
-            .content {
-                padding: 20px;
-            }
-            
             .file-item {
-                flex-direction: column;
-                text-align: center;
+                flex-wrap: wrap;
             }
             
             .file-icon {
-                margin: 0 0 15px 0;
+                margin: 0 12px 0 0;
             }
             
             .download-btn {
-                margin-top: 15px;
+                margin-top: 12px;
+                width: 100%;
             }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>📁 ZapShare</h1>
-            <p>Download your shared files</p>
-        </div>
-        
-        <div class="content">
-            <div id="bulkActions" class="bulk-actions" style="display: none;">
-                <h3>📦 Bulk Actions</h3>
-                <div>
-                    <button class="bulk-btn secondary" onclick="selectAll()">Select All</button>
-                    <button class="bulk-btn secondary" onclick="deselectAll()">Deselect All</button>
-                    <button class="bulk-btn" onclick="downloadSelected()">Download Selected</button>
+    <div class="main-content">
+        <div class="container">
+            <div class="card">
+                <div class="header">
+                    <h2 class="title">Available Files</h2>
+                    <p class="subtitle">Download files shared from this device</p>
+                </div>
+                
+                <div class="content">
+                    <div id="bulkActions" class="bulk-actions" style="display: none;">
+                        <h3>Bulk Actions</h3>
+                        <div style="display: flex; gap: 10px;">
+                            <button class="bulk-btn secondary" onclick="selectAll()">Select All</button>
+                            <button class="bulk-btn secondary" onclick="deselectAll()">Deselect All</button>
+                            <button class="bulk-btn" onclick="downloadSelected()">Download Selected</button>
+                        </div>
+                    </div>
+                    <div id="pagination" class="pagination" style="display: none;">
+                        <button id="prevBtn" onclick="changePage(-1)">Previous</button>
+                        <span id="paginationInfo" class="pagination-info"></span>
+                        <button id="nextBtn" onclick="changePage(1)">Next</button>
+                    </div>
+                    <div id="fileList" class="file-list">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            <h3>Loading files...</h3>
+                        </div>
+                    </div>
                 </div>
             </div>
-            <div id="pagination" class="pagination" style="display: none;">
-                <button id="prevBtn" onclick="changePage(-1)">Previous</button>
-                <span id="paginationInfo" class="pagination-info"></span>
-                <button id="nextBtn" onclick="changePage(1)">Next</button>
-            </div>
-            <div id="fileList" class="file-list">
-                <div class="loading">
-                    <div class="pikachu-runner">🏃</div>
-                    <h3>Pikachu is running to fetch your files! ⚡</h3>
-                </div>
-            </div>
         </div>
-        
-        <!-- Image Preview Modal -->
-        <div id="imageModal" class="modal">
-            <span class="close" onclick="closeModal()">&times;</span>
-            <img class="modal-content" id="modalImage">
-        </div>
-        
-        <div class="footer">
-            <p>Powered by ZapShare • Fast & Secure File Sharing</p>
-        </div>
+    </div>
+
+    <!-- Image Preview Modal -->
+    <div id="imageModal" class="modal">
+        <span class="close" onclick="closeModal()">&times;</span>
+        <img class="modal-content" id="modalImage">
     </div>
 
     <script>
@@ -1789,7 +1884,7 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center;">
                             \${isImage ? \`<button class="preview-btn" onclick="previewImage(\${file.index})">Preview</button>\` : ''}
-                            <a href="/file/\${file.index}" class="download-btn" download onclick="startPikachuRun(this, \${file.index})">
+                            <a href="/file/\${file.index}" class="download-btn" download onclick="startDownload(this, \${file.index})">
                                 Download
                             </a>
                         </div>
@@ -1901,9 +1996,6 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
         function downloadSelected() {
             if (selectedFiles.size === 0) return;
             
-            // Show Pikachu running for bulk download
-            showNotification('Pikachu is running to download your files! ⚡', 'success');
-            
             // Download files one by one
             selectedFiles.forEach(fileIndex => {
                 const link = document.createElement('a');
@@ -1916,7 +2008,7 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
             });
         }
         
-        function startPikachuRun(button, fileIndex) {
+        function startDownload(button, fileIndex) {
             const fileItem = button.closest('.file-item');
             const progressContainer = fileItem.querySelector('.progress-container');
             const progressBar = fileItem.querySelector('.progress-bar');
@@ -1925,8 +2017,8 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
             // Show progress bar
             progressContainer.style.display = 'block';
             
-            // Change button to show Pikachu running
-            downloadBtn.innerHTML = '<div class="pikachu-runner" style="width: 20px; height: 20px; margin: 0;">🏃</div>';
+            // Change button state
+            downloadBtn.textContent = 'Downloading...';
             downloadBtn.style.pointerEvents = 'none';
             
             // Simulate progress (since we can't track actual download progress)
@@ -1939,7 +2031,7 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
                     
                     // Reset button and hide progress
                     setTimeout(() => {
-                        downloadBtn.innerHTML = 'Download';
+                        downloadBtn.textContent = 'Download';
                         downloadBtn.style.pointerEvents = 'auto';
                         progressContainer.style.display = 'none';
                         progressBar.style.width = '0%';
@@ -1947,39 +2039,6 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
                 }
                 progressBar.style.width = progress + '%';
             }, 200);
-            
-            // Show notification
-            showNotification('Pikachu is running to download your file! ⚡', 'success');
-        }
-        
-        function showNotification(message, type = 'info') {
-            const notification = document.createElement('div');
-            notification.className = \`notification \${type}\`;
-            notification.textContent = message;
-            notification.style.cssText = \`
-                position: fixed;
-                top: 20px;
-                right: 20px;
-                padding: 15px 20px;
-                border-radius: 8px;
-                color: white;
-                font-weight: 600;
-                z-index: 1000;
-                animation: slideIn 0.3s ease;
-                background: \${type === 'success' ? '#FF6B35' : '#FFD600'};
-                color: \${type === 'success' ? 'white' : '#1a1a1a'};
-            \`;
-            
-            document.body.appendChild(notification);
-            
-            setTimeout(() => {
-                notification.style.animation = 'slideOut 0.3s ease';
-                setTimeout(() => {
-                    if (notification.parentNode) {
-                        notification.parentNode.removeChild(notification);
-                    }
-                }, 300);
-            }, 3000);
         }
         
         function formatFileSize(bytes) {
@@ -1993,12 +2052,12 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
         function getFileIcon(filename) {
             const ext = filename.split('.').pop().toLowerCase();
             const iconMap = {
-                'pdf': '📄', 'doc': '📝', 'docx': '📝', 'txt': '📄',
-                'jpg': '🖼️', 'jpeg': '🖼️', 'png': '🖼️', 'gif': '🖼️',
-                'mp4': '🎥', 'avi': '🎥', 'mov': '🎥', 'mp3': '🎵',
-                'zip': '📦', 'rar': '📦', '7z': '📦', 'exe': '⚙️'
+                'pdf': 'PDF', 'doc': 'DOC', 'docx': 'DOC', 'txt': 'TXT',
+                'jpg': 'IMG', 'jpeg': 'IMG', 'png': 'IMG', 'gif': 'IMG',
+                'mp4': 'VID', 'avi': 'VID', 'mov': 'VID', 'mp3': 'AUD',
+                'zip': 'ZIP', 'rar': 'ZIP', '7z': 'ZIP', 'exe': 'EXE'
             };
-            return iconMap[ext] || '📁';
+            return iconMap[ext] || 'FILE';
         }
         
         // Load files when page loads
@@ -2014,20 +2073,6 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
         
         // Auto-refresh every 5 seconds
         setInterval(loadFiles, 5000);
-        
-        // Add CSS animations
-        const style = document.createElement('style');
-        style.textContent = \`
-            @keyframes slideIn {
-                from { transform: translateX(100%); opacity: 0; }
-                to { transform: translateX(0); opacity: 1; }
-            }
-            @keyframes slideOut {
-                from { transform: translateX(0); opacity: 1; }
-                to { transform: translateX(100%); opacity: 0; }
-            }
-        \`;
-        document.head.appendChild(style);
     </script>
 </body>
 </html>
@@ -2066,7 +2111,18 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
     _connectionRequestSubscription = _discoveryService.connectionRequestStream.listen(
       (request) {
         if (mounted) {
+          // Check if we already have a dialog open for this IP
+          final now = DateTime.now();
+          final lastTime = _lastRequestTime[request.ipAddress];
+          
+          // Ignore duplicate requests within 30 seconds (or if already processed)
+          if (lastTime != null && now.difference(lastTime).inSeconds < 30) {
+            print('⏭️  Ignoring duplicate request from ${request.ipAddress} (last: ${now.difference(lastTime).inSeconds}s ago)');
+            return;
+          }
+          
           print('📩 Stream listener received connection request from ${request.deviceName} (${request.ipAddress})');
+          _lastRequestTime[request.ipAddress] = now;
           _showConnectionRequestDialog(request);
         } else {
           print('⚠️  Widget not mounted, ignoring connection request');
@@ -2122,19 +2178,72 @@ class _HttpFileShareScreenState extends State<HttpFileShareScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) {
+      builder: (dialogContext) {
         print('📱 Building ConnectionRequestDialog...');
         return ConnectionRequestDialog(
           request: request,
           onAccept: () async {
             print('✅ User accepted connection request');
-            Navigator.of(context).pop();
+            // Close the dialog using the dialog context
+            Navigator.of(dialogContext).pop();
+            
+            // Mark this request as processed to prevent duplicates
+            _processedRequests.add(request.ipAddress);
+            
+            // Send acceptance response
             await _discoveryService.sendConnectionResponse(request.ipAddress, true);
+            
+            // Navigate to receive screen to download files
+            if (mounted) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const AndroidReceiveScreen(),
+                ),
+              );
+              
+              // Show snackbar with instructions
+              Future.delayed(Duration(milliseconds: 500), () {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Enter code: ${request.ipAddress.split('.').map((p) => int.parse(p).toRadixString(36).toUpperCase()).join('')}'),
+                      backgroundColor: Colors.green,
+                      duration: Duration(seconds: 5),
+                      action: SnackBarAction(
+                        label: 'Copy',
+                        textColor: Colors.yellow[300],
+                        onPressed: () {
+                          final code = request.ipAddress.split('.').map((p) => int.parse(p).toRadixString(36).toUpperCase()).join('');
+                          Clipboard.setData(ClipboardData(text: code.padLeft(8, '0')));
+                        },
+                      ),
+                    ),
+                  );
+                }
+              });
+            }
+            
+            // Clear the processed request after 60 seconds to allow future requests
+            Future.delayed(Duration(seconds: 60), () {
+              _processedRequests.remove(request.ipAddress);
+            });
           },
           onDecline: () async {
             print('❌ User declined connection request');
-            Navigator.of(context).pop();
+            // Close the dialog using the dialog context
+            Navigator.of(dialogContext).pop();
+            
+            // Mark as processed temporarily
+            _processedRequests.add(request.ipAddress);
+            
+            // Send decline response
             await _discoveryService.sendConnectionResponse(request.ipAddress, false);
+            
+            // Allow new requests after 30 seconds
+            Future.delayed(Duration(seconds: 30), () {
+              _processedRequests.remove(request.ipAddress);
+            });
           },
         );
       },

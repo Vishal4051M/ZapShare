@@ -1,18 +1,45 @@
-import 'package:zap_share/Screens/ReceiveOptionsScreen.dart';
-import 'package:zap_share/Screens/HttpFileShareScreen.dart';
+import 'package:zap_share/Screens/android/AndroidReceiveOptionsScreen.dart';
+import 'package:zap_share/Screens/android/AndroidHttpFileShareScreen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:zap_share/Screens/TransferHistoryScreen.dart';
-import 'package:zap_share/Screens/DeviceSettingsScreen.dart';
+import 'package:zap_share/Screens/shared/TransferHistoryScreen.dart';
+import 'package:zap_share/Screens/shared/DeviceSettingsScreen.dart';
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+class AndroidHomeScreen extends StatefulWidget {
+  const AndroidHomeScreen({super.key});
 
   @override
-  _HomeScreenState createState() => _HomeScreenState();
+  _AndroidHomeScreenState createState() => _AndroidHomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _AndroidHomeScreenState extends State<AndroidHomeScreen> {
+  static const MethodChannel _platform = MethodChannel('zapshare.saf');
+  
+  @override
+  void initState() {
+    super.initState();
+    _listenForSharedFiles();
+  }
+  
+  void _listenForSharedFiles() {
+    _platform.setMethodCallHandler((call) async {
+      if (call.method == 'sharedFiles') {
+        final List<dynamic> files = call.arguments as List<dynamic>;
+        if (files.isNotEmpty && mounted) {
+          print('📁 [HomeScreen] Received shared files: ${files.length} files, navigating to send screen');
+          // Navigate to send screen with the files
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => AndroidHttpFileShareScreen(initialSharedFiles: files.cast<Map<dynamic, dynamic>>()),
+            ),
+          );
+        }
+      }
+      return null;
+    });
+  }
+  
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -25,12 +52,14 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
               child: Column(
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  // Use a Stack so the title stays visually centered while the
+                  // settings icon sits on the right edge.
+                  Stack(
                     children: [
-                      Expanded(
+                      // Centered title/subtitle
+                      Center(
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
                               "ZapShare",
@@ -53,17 +82,22 @@ class _HomeScreenState extends State<HomeScreen> {
                           ],
                         ),
                       ),
-                      // Settings icon
-                      IconButton(
-                        icon: Icon(Icons.settings_outlined, color: Colors.grey[400]),
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const DeviceSettingsScreen(),
-                            ),
-                          );
-                        },
+
+                      // Settings icon aligned to the right
+                      Positioned(
+                        right: 0,
+                        top: 0,
+                        child: IconButton(
+                          icon: Icon(Icons.settings_outlined, color: Colors.grey[400]),
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const DeviceSettingsScreen(),
+                              ),
+                            );
+                          },
+                        ),
                       ),
                     ],
                   ),
@@ -260,9 +294,9 @@ class _HomeScreenState extends State<HomeScreen> {
   void _navigateToScreen(int index) {
     Widget targetScreen;
     if (index == 0) {
-      targetScreen = HttpFileShareScreen();
+      targetScreen = AndroidHttpFileShareScreen();
     } else if (index == 1) {
-      targetScreen = ReceiveOptionsScreen();
+      targetScreen = AndroidReceiveOptionsScreen();
     } else {
       targetScreen = TransferHistoryScreen();
     }
