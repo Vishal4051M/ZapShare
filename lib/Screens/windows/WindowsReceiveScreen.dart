@@ -36,6 +36,8 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
   bool _loading = false;
 
   List<String> _recentCodes = [];
+  String _receiveView = 'available'; // 'available' or 'downloaded'
+  List<Map<String, dynamic>> _downloadHistory = [];
 
   @override
   void initState() {
@@ -65,75 +67,95 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
   Future<void> _pickSaveFolder() async {
     String? result = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Select Folder to Save');
     setState(() => _saveFolder = result);
-    }
+  }
 
   Future<String> _getDefaultDownloadFolder() async {
     try {
-      // Get the Downloads directory
       final downloadsDir = await getDownloadsDirectory();
-      if (downloadsDir != null) {
-        return downloadsDir.path;
-      }
+      if (downloadsDir != null) return downloadsDir.path;
     } catch (e) {
-      print('Error getting default download folder: $e');
+      // ignore
     }
-    
-    // Fallback to a basic path
     return '${Platform.environment['USERPROFILE'] ?? 'C:\\Users\\User'}\\Downloads';
   }
 
-  bool _decodeCode(String code) {
-    try {
-      if (!RegExp(r'^[A-Z0-9]{8}$').hasMatch(code)) return false;
-      int n = int.parse(code, radix: 36);
-      final ip = '${(n >> 24) & 0xFF}.${(n >> 16) & 0xFF}.${(n >> 8) & 0xFF}.${n & 0xFF}';
-      final parts = ip.split('.').map(int.parse).toList();
-      if (parts.length != 4 || parts.any((p) => p < 0 || p > 255)) return false;
-      _serverIp = ip;
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
   Future<void> _fetchFileListAndStart(String code) async {
-    // Use default folder if none is selected
     if (_saveFolder == null) {
       _saveFolder = await _getDefaultDownloadFolder();
-      setState(() {}); // Update UI to show the default folder
+      setState(() {});
     }
-    
-    if (!_decodeCode(code)) {
-      return;
+
+    // decode code into IP
+    try {
+      if (!RegExp(r'^[A-Z0-9]{8}\$').hasMatch(code)) {
+        // still attempt; fallthrough
+      }
+    } catch (_) {}
+
+    // Very small, forgiving implementation: set serverIp if code decodes
+    try {
+      final n = int.parse(code, radix: 36);
+      final ip = '${(n >> 24) & 0xFF}.${(n >> 16) & 0xFF}.${(n >> 8) & 0xFF}.${n & 0xFF}';
+      _serverIp = ip;
+    } catch (_) {
+      // ignore - invalid code
     }
+
+    if (_serverIp == null) return;
+
     await _saveRecentCode(code);
     setState(() { _loading = true; _tasks.clear(); _fileList.clear(); });
     try {
-      final url = 'http://$_serverIp:8080/list';
+        final url = 'http://$_serverIp:8080/list';
       final resp = await http.get(Uri.parse(url));
       if (resp.statusCode == 200) {
         final List files = jsonDecode(resp.body);
         _fileList = files.cast<Map<String, dynamic>>();
-        _tasks = _fileList.map((f) => DownloadTask(
-          url: 'http://$_serverIp:8080/file/${f['index']}',
-          savePath: '',
-          progress: 0.0,
-          status: 'Waiting',
-        )).toList();
-        setState(() {});
-        
-        // Files found successfully
-        
+  _tasks = _fileList.map((f) => DownloadTask(url: 'http://$_serverIp:8080/file/${f['index']}', savePath: '', progress: 0.0)).toList();
+        setState(() { _loading = false; });
         _startQueuedDownloads();
       } else {
         setState(() { _loading = false; });
-        // Failed to fetch file list
       }
     } catch (e) {
       setState(() { _loading = false; });
-      // Error occurred while fetching file list
     }
   }
+
+  Future<void> _loadDownloadHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final history = prefs.getStringList('transfer_history') ?? [];
+    setState(() {
+      _downloadHistory = history.map((s) {
+        try {
+          return jsonDecode(s) as Map<String, dynamic>;
+        } catch (_) {
+          return {'fileName': s, 'fileLocation': ''};
+        }
+      }).toList();
+    });
+  }
+
+  Widget _buildDownloadedList() {
+    if (_downloadHistory.isEmpty) {
+      return Center(child: Text('No downloads yet', style: TextStyle(color: Colors.grey[400], fontSize: 16)));
+    }
+    return ListView.builder(
+      itemCount: _downloadHistory.length,
+      itemBuilder: (context, index) {
+        final item = _downloadHistory[index];
+        return Container(
+          margin: EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey[800]!, width: 1)),
+          child: ListTile(
+            title: Text(item['fileName'] ?? 'Unknown', style: TextStyle(color: Colors.white)),
+            subtitle: Text(item['fileLocation'] ?? '', style: TextStyle(color: Colors.grey[400])),
+          ),
+        );
+      },
+    );
+  }
+
 
   void _startQueuedDownloads() {
     while (_activeDownloads < _maxParallel) {
@@ -206,16 +228,12 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
               padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
               child: Row(
                 children: [
-                  IconButton(
-                    icon: Icon(Icons.arrow_back_ios_rounded, color: Colors.white, size: 20),
-                    onPressed: () => Navigator.pop(context),
-                  ),
                   Expanded(
                     child: Text(
                       'Receive Files',
                       style: TextStyle(
                         color: Colors.white,
-                        fontSize: 28,
+                        fontSize: 24,
                         fontWeight: FontWeight.w300,
                         letterSpacing: -0.5,
                       ),
@@ -230,67 +248,147 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
             // Main content
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Column(
-                    children: [
-                    // Recent codes section
-                    if (_recentCodes.isNotEmpty) ...[
-                      _buildSectionHeader('Recent Codes'),
-                      const SizedBox(height: 16),
-                      Container(
-                        height: 80,
-                        child: ListView.builder(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: _recentCodes.length,
-                          itemBuilder: (context, index) {
-                            final code = _recentCodes[index];
-                            return Container(
-                              margin: EdgeInsets.only(right: 12),
-                              child: _buildCodeChip(code),
-                            );
-                          },
+                // Reduce top padding and add some bottom padding
+                padding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            // Left panel (50%)
+                            Flexible(
+                              flex: 5,
+                              child: Container(
+                                padding: const EdgeInsets.only(top: 0, right: 12.0, bottom: 12.0),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey[850],
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      if (_recentCodes.isNotEmpty) ...[
+                                        _buildSectionHeader('Recent Codes'),
+                                        const SizedBox(height: 12),
+                                        Container(
+                                          height: 50,
+                                          child: ListView.builder(
+                                            scrollDirection: Axis.horizontal,
+                                            itemCount: _recentCodes.length,
+                                            itemBuilder: (context, index) {
+                                              final code = _recentCodes[index];
+                                              return Container(
+                                                margin: EdgeInsets.only(right: 12),
+                                                child: _buildCodeChip(code),
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                        const SizedBox(height: 10),
+                                      ],
+
+                                      _buildSectionHeader('Enter Code'),
+                                      const SizedBox(height: 10),
+                                      _buildCodeInput(),
+                                      const SizedBox(height: 10),
+
+                                      _buildSectionHeader('Save Location'),
+                                      const SizedBox(height: 10),
+                                      _buildFolderSelector(),
+                                      const SizedBox(height: 10),
+
+                                      if (_codeController.text.isNotEmpty) ...[
+                                        _buildDownloadButton(),
+                                        const SizedBox(height: 10),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                            const SizedBox(width: 10),
+
+                            // Right panel (50%)
+                            Flexible(
+                              flex: 5,
+                              child: Container(
+                                padding: const EdgeInsets.only(top: 0, left: 12.0, bottom: 12.0),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey[850],
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: GestureDetector(
+                                              onTap: () {
+                                                setState(() {
+                                                  _receiveView = 'available';
+                                                });
+                                              },
+                                              child: Container(
+                                                padding: EdgeInsets.symmetric(vertical: 12),
+                                                decoration: BoxDecoration(
+                                                  color: _receiveView == 'available' ? Colors.grey[850] : Colors.grey[900],
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  border: Border.all(color: _receiveView == 'available' ? Colors.yellow[300]! : Colors.grey[800]!, width: 1),
+                                                ),
+                                                child: Center(child: Text('Available', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600))),
+                                              ),
+                                            ),
+                                          ),
+                                          SizedBox(width: 12),
+                                          Expanded(
+                                            child: GestureDetector(
+                                              onTap: () async {
+                                                await _loadDownloadHistory();
+                                                setState(() {
+                                                  _receiveView = 'downloaded';
+                                                });
+                                              },
+                                              child: Container(
+                                                padding: EdgeInsets.symmetric(vertical: 12),
+                                                decoration: BoxDecoration(
+                                                  color: _receiveView == 'downloaded' ? Colors.grey[850] : Colors.grey[900],
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  border: Border.all(color: _receiveView == 'downloaded' ? Colors.yellow[300]! : Colors.grey[800]!, width: 1),
+                                                ),
+                                                child: Center(child: Text('Downloaded', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600))),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+
+                                      const SizedBox(height: 12),
+
+                                      Expanded(
+                                        child: _receiveView == 'available' ? _buildFileList() : _buildDownloadedList(),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 32),
-                    ],
-                    
-                    // Code input section
-                    _buildSectionHeader('Enter Code'),
-                    const SizedBox(height: 16),
-                    _buildCodeInput(),
-                    const SizedBox(height: 24),
-                    
-                    // Save folder section
-                    _buildSectionHeader('Save Location'),
-                    const SizedBox(height: 16),
-                    _buildFolderSelector(),
-                    const SizedBox(height: 32),
-                    
-                    // Download button
-                    if (_codeController.text.isNotEmpty) ...[
-                      _buildDownloadButton(),
-                      const SizedBox(height: 24),
-                    ],
-                    
-                    // Loading state
-                    if (_loading) ...[
-                      Expanded(
-                        child: _buildLoadingState(),
-                      ),
-                    ]
-                    // File list
-                    else if (_tasks.isNotEmpty) ...[
-                      _buildSectionHeader('Download Progress'),
-                      const SizedBox(height: 16),
-                      Expanded(child: _buildFileList()),
-                    ]
-                    // Empty state
-                    else if (_codeController.text.isNotEmpty && !_loading) ...[
-                      Expanded(
-                        child: _buildEmptyState(),
-                      ),
-                    ],
-                  ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -351,6 +449,7 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
 
   Widget _buildCodeInput() {
     return Container(
+      height: 50,
       decoration: BoxDecoration(
         color: Colors.grey[900],
         borderRadius: BorderRadius.circular(16),
@@ -375,70 +474,66 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
       ),
     );
   }
+Widget _buildFolderSelector() {
+  return Container(
+    height: 80,
+    padding: EdgeInsets.symmetric(horizontal: 20),
+    decoration: BoxDecoration(
+      color: Colors.grey[900],
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: Colors.grey[800]!, width: 1),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Icon(
+          Icons.folder_rounded,
+          color: Colors.yellow[300],
+          size: 26,
+        ),
 
-  Widget _buildFolderSelector() {
-    return Container(
-      padding: EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey[800]!, width: 1),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.folder_rounded,
+        SizedBox(width: 16),
+
+        Expanded(
+          child: Text(
+            _saveFolder ?? 'Downloads (default)',
+            style: TextStyle(
+              color: _saveFolder != null ? Colors.white : Colors.grey[500],
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+
+        SizedBox(width: 16),
+
+        // FIXED BUTTON
+        Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
             color: Colors.yellow[300],
-            size: 24,
+            borderRadius: BorderRadius.circular(12),
           ),
-          SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                    _saveFolder ?? 'Downloads (default)',
-                  style: TextStyle(
-                    color: _saveFolder != null ? Colors.white : Colors.grey[500],
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (_saveFolder != null)
-                  Text(
-                    'Files will be saved here',
-                    style: TextStyle(
-                      color: Colors.grey[400],
-                      fontSize: 12,
-                    ),
-                ),
-              ],
-            ),
+          child: IconButton(
+            padding: EdgeInsets.zero, // important fix
+            icon: Icon(Icons.edit_rounded, color: Colors.black, size: 20),
+            onPressed: _pickSaveFolder,
           ),
-          SizedBox(width: 16),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.yellow[300],
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: IconButton(
-              onPressed: _pickSaveFolder,
-              icon: Icon(Icons.edit_rounded, color: Colors.black, size: 20),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+        ),
+      ],
+    ),
+  );
+}
 
   Widget _buildDownloadButton() {
     final isEnabled = !_downloading;
     
     return Container(
       width: double.infinity,
-      height: 56,
+      height: 50,
       decoration: BoxDecoration(
         color: isEnabled ? Colors.yellow[300] : Colors.grey[700],
         borderRadius: BorderRadius.circular(16),

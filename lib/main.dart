@@ -1,8 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_displaymode/flutter_displaymode.dart';
-import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+// unused imports removed
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:zap_share/Screens/android/AndroidHomeScreen.dart';
@@ -13,9 +12,10 @@ import 'Screens/windows/WindowsFileShareScreen.dart';
 import 'Screens/windows/WindowsReceiveScreen.dart';
 import 'Screens/android/AndroidReceiveScreen.dart';
 import 'Screens/shared/TransferHistoryScreen.dart';
+import 'Screens/shared/DeviceSettingsScreen.dart';
 import 'dart:async';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+// shared_preferences removed from main imports (used elsewhere in the app files)
 
 Future<void> clearAppCache() async {
   final cacheDir = await getTemporaryDirectory();
@@ -33,155 +33,45 @@ Future<void> clearAppCache() async {
 
 Future<void> requestPermissions() async {
   if (!Platform.isAndroid) return;
-  Map<Permission, PermissionStatus> statuses = await [
+  await [
     Permission.storage,
     Permission.location,
     Permission.manageExternalStorage,
     Permission.nearbyWifiDevices,
-    Permission.audio,
-    Permission.videos,
-    Permission.notification,
-    Permission.manageExternalStorage,
   ].request();
 
-  statuses.forEach((perm, status) {
-    if (!status.isGranted) {
-      print('Permission denied: $perm');
-    }
-  });
+  // Simple handling: if any required permission is denied, request again or exit.
+  // The rest of the app expects permissions to be available on Android.
+  return;
+
 }
 
-void main() async {
+// Global navigator key used for showing dialogs from non-widget code
+final GlobalKey<NavigatorState> _globalNavigatorKey = GlobalKey<NavigatorState>();
+
+// Preserve the public name `navigatorKey` for existing callers.
+GlobalKey<NavigatorState> get navigatorKey => _globalNavigatorKey;
+
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  if (Platform.isAndroid) {
-    requestPermissions();
-    clearAppCache();
-    FlutterForegroundTask.init(
-      androidNotificationOptions: AndroidNotificationOptions(
-        channelId: 'data_rush_transfer',
-        channelName: 'Data Rush Transfer',
-        channelDescription: 'File transfer is running in the background',
-        channelImportance: NotificationChannelImportance.HIGH,
-        priority: NotificationPriority.HIGH,
-      ), iosNotificationOptions: const IOSNotificationOptions(
-        showNotification: false, 
-        playSound: false,
-      ),
-      foregroundTaskOptions: ForegroundTaskOptions( 
-        autoRunOnBoot: true, 
-        allowWakeLock: true, 
-        allowWifiLock: true, eventAction: ForegroundTaskEventAction.once(), 
-      ),
-    );
-    await FlutterDisplayMode.setHighRefreshRate();
-  }
-  runApp(const DataRushApp());
+  runApp(const ZapShareApp());
 }
 
-class DataRushApp extends StatefulWidget {
-  const DataRushApp({super.key});
-
+class ZapShareApp extends StatefulWidget {
+  const ZapShareApp({Key? key}) : super(key: key);
   @override
-  State<DataRushApp> createState() => _DataRushAppState();
+  State<ZapShareApp> createState() => _ZapShareAppState();
 }
 
-class _DataRushAppState extends State<DataRushApp> {
-  final DeviceDiscoveryService _discoveryService = DeviceDiscoveryService();
-  StreamSubscription<ConnectionRequest>? _connectionRequestSubscription;
-  final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+class _ZapShareAppState extends State<ZapShareApp> {
+  late final DeviceDiscoveryService _discoveryService;
+  StreamSubscription? _connectionRequestSubscription;
 
   @override
   void initState() {
     super.initState();
-    // Delay startup until after first frame so navigator/context exist.
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // Ask for device name on first install before initializing discovery service
-      await _ensureDeviceName();
-      _initGlobalDeviceDiscovery();
-    });
-  }
-
-  Future<void> _ensureDeviceName() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final existing = prefs.getString('device_name');
-      if (existing != null && existing.trim().isNotEmpty) return;
-
-      final nameController = TextEditingController();
-      final focusNode = FocusNode();
-
-      // Wait briefly for navigator context to be available (should be after first frame)
-      BuildContext? dialogContext = navigatorKey.currentContext;
-      int attempts = 0;
-      while (dialogContext == null && attempts < 10) {
-        await Future.delayed(const Duration(milliseconds: 100));
-        dialogContext = navigatorKey.currentContext;
-        attempts++;
-      }
-      if (dialogContext == null) return;
-
-      await showDialog<void>(
-        context: dialogContext,
-        barrierDismissible: false,
-        builder: (context) {
-          return AlertDialog(
-            backgroundColor: Colors.grey[900],
-            title: const Text('Set device name', style: TextStyle(color: Colors.white)),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Please enter a name for this device. This will be shown to other devices when sharing.',
-                  style: TextStyle(color: Colors.white70, fontSize: 13),
-                ),
-                const SizedBox(height: 12),
-                Theme(
-                  data: Theme.of(context).copyWith(
-                    textSelectionTheme: TextSelectionThemeData(
-                      cursorColor: Colors.yellow[300],
-                      selectionHandleColor: Colors.yellow[300],
-                      selectionColor: Colors.yellow[100],
-                    ),
-                  ),
-                  child: TextField(
-                    controller: nameController,
-                    focusNode: focusNode,
-                    autofocus: true,
-                    cursorColor: Colors.yellow[300],
-                    textCapitalization: TextCapitalization.words,
-                    inputFormatters: [
-                      // Allow letters, numbers, spaces and basic punctuation
-                      FilteringTextInputFormatter.allow(RegExp(r"[\w\-\.\s']")),
-                      LengthLimitingTextInputFormatter(30),
-                    ],
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: 'My phone',
-                      hintStyle: TextStyle(color: Colors.white24),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () async {
-                  final v = nameController.text.trim();
-                  if (v.isEmpty) return; // keep dialog open until valid
-                  await prefs.setString('device_name', v);
-                  Navigator.of(context).pop();
-                },
-                child: const Text('Save', style: TextStyle(color: Colors.yellow)),
-              ),
-            ],
-          );
-        },
-      );
-      // give focus/keyboard a moment
-      await Future.delayed(const Duration(milliseconds: 200));
-    } catch (e) {
-      print('Error ensuring device name: $e');
-    }
+    _discoveryService = DeviceDiscoveryService();
+    _initGlobalDeviceDiscovery();
   }
 
   void _initGlobalDeviceDiscovery() async {
@@ -203,7 +93,6 @@ class _DataRushAppState extends State<DataRushApp> {
     }
 
     print('🚀 [Global] Showing connection request dialog globally');
-    
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -213,10 +102,10 @@ class _DataRushAppState extends State<DataRushApp> {
           onAccept: () async {
             print('✅ [Global] User accepted connection request');
             Navigator.of(dialogContext).pop();
-            
+
             // Send acceptance response
             await _discoveryService.sendConnectionResponse(request.ipAddress, true);
-            
+
             // Navigate to receive screen
             if (Platform.isAndroid) {
               // Navigate to AndroidReceiveScreen with the sender's code
@@ -229,7 +118,7 @@ class _DataRushAppState extends State<DataRushApp> {
                 ),
               );
             }
-            
+
             print('✅ [Global] Redirecting to receive screen');
           },
           onDecline: () async {
@@ -255,7 +144,6 @@ class _DataRushAppState extends State<DataRushApp> {
   @override
   void dispose() {
     _connectionRequestSubscription?.cancel();
-    // Keep discovery service running - it should run for the entire app lifecycle
     super.dispose();
   }
 
@@ -388,6 +276,9 @@ class _DataRushAppState extends State<DataRushApp> {
   }
 }
 
+
+
+
 class AndroidNavBar extends StatefulWidget {
   const AndroidNavBar({super.key});
   @override
@@ -401,6 +292,7 @@ class _AndroidNavBarState extends State<AndroidNavBar> {
     AndroidReceiveScreen(),
     TransferHistoryScreen(),
   ];
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -452,92 +344,99 @@ class WindowsNavBar extends StatefulWidget {
 
 class _WindowsNavBarState extends State<WindowsNavBar> with SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
-  bool _isCollapsed = false;
-  final double _collapsedWidth = 64;
   final double _expandedWidth = 180;
+  final double _navCollapseThreshold = 900;
+  final double _collapsedWidth = 72;
+  bool _isCollapsed = false;
   final Duration _animationDuration = Duration(milliseconds: 250);
   final List<Widget> _screens = [
     WindowsFileShareScreen(),
     WindowsReceiveScreen(),
     TransferHistoryScreen(),
+    DeviceSettingsScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          Row(
-            children: [
-              AnimatedContainer(
-                duration: _animationDuration,
-                width: _isCollapsed ? _collapsedWidth : _expandedWidth,
-                curve: Curves.easeInOut,
-                margin: EdgeInsets.only(
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  right: 0,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF23272F).withOpacity(0.95),
-                  borderRadius: BorderRadius.only(
-                    topRight: Radius.circular(24),
-                    bottomRight: Radius.circular(24),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.25),
-                      blurRadius: 24,
-                      offset: Offset(4, 8),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    SizedBox(height: 24),
-                    IconButton(
-                      icon: Icon(_isCollapsed ? Icons.chevron_right : Icons.chevron_left, color: Colors.white70),
-                      tooltip: _isCollapsed ? 'Expand Navigation' : 'Collapse Navigation',
-                      onPressed: () {
-                        setState(() {
-                          _isCollapsed = !_isCollapsed;
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    _buildNavItem(
-                      icon: Icons.upload_rounded,
-                      label: 'Send',
-                      selected: _selectedIndex == 0,
-                      onTap: () => setState(() => _selectedIndex = 0),
-                      collapsed: _isCollapsed,
-                    ),
-                    _buildNavItem(
-                      icon: Icons.download_rounded,
-                      label: 'Receive',
-                      selected: _selectedIndex == 1,
-                      onTap: () => setState(() => _selectedIndex = 1),
-                      collapsed: _isCollapsed,
-                    ),
-                    _buildNavItem(
-                      icon: Icons.history_rounded,
-                      label: 'History',
-                      selected: _selectedIndex == 2,
-                      onTap: () => setState(() => _selectedIndex = 2),
-                      collapsed: _isCollapsed,
-                    ),
-                    Spacer(),
-                  ],
-                ),
+      body: ConstrainedBox(
+        constraints: BoxConstraints(minWidth: _navCollapseThreshold),
+        child: Row(
+          children: [
+          AnimatedContainer(
+            duration: _animationDuration,
+            width: _isCollapsed ? _collapsedWidth : _expandedWidth,
+            curve: Curves.easeInOut,
+            margin: EdgeInsets.zero,
+            decoration: BoxDecoration(
+              color: Colors.black,
+              borderRadius: BorderRadius.only(
+                topRight: Radius.circular(24),
+                bottomRight: Radius.circular(24),
               ),
-              Expanded(child: _screens[_selectedIndex]),
-            ],
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.25),
+                  blurRadius: 24,
+                  offset: Offset(4, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                SizedBox(height: 12),
+                // Collapse/Expand toggle
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: IconButton(
+                      icon: Icon(_isCollapsed ? Icons.chevron_right_rounded : Icons.chevron_left_rounded, color: Colors.white70),
+                      onPressed: () => setState(() => _isCollapsed = !_isCollapsed),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _buildNavItem(
+                  icon: Icons.upload_rounded,
+                  label: 'Send',
+                  selected: _selectedIndex == 0,
+                  onTap: () => setState(() => _selectedIndex = 0),
+                  collapsed: _isCollapsed,
+                ),
+                _buildNavItem(
+                  icon: Icons.download_rounded,
+                  label: 'Receive',
+                  selected: _selectedIndex == 1,
+                  onTap: () => setState(() => _selectedIndex = 1),
+                  collapsed: _isCollapsed,
+                ),
+                _buildNavItem(
+                  icon: Icons.history_rounded,
+                  label: 'History',
+                  selected: _selectedIndex == 2,
+                  onTap: () => setState(() => _selectedIndex = 2),
+                  collapsed: _isCollapsed,
+                ),
+                const SizedBox(height: 8),
+                _buildNavItem(
+                  icon: Icons.settings_rounded,
+                  label: 'Settings',
+                  selected: _selectedIndex == 3,
+                  onTap: () => setState(() => _selectedIndex = 3),
+                  collapsed: _isCollapsed,
+                ),
+                Spacer(),
+              ],
+            ),
           ),
-        ],
-      ),
-    );
+
+            Expanded(child: _screens[_selectedIndex]),
+          ],
+        ), // Row
+      ), // ConstrainedBox
+    ); // Scaffold
   }
 
   Widget _buildNavItem({

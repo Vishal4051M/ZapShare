@@ -225,8 +225,8 @@ Win32Window::MessageHandler(HWND hwnd,
 
         // Desired fixed window size in logical pixels (use threshold as fixed size)
         // NOTE: change these values if you want a different fixed window size.
-        const int kMinWidth = 900; // fixed width
-        const int kMinHeight = 700; // fixed height
+  const int kMinWidth = 900; // fixed width
+  const int kMinHeight = 560; // fixed height (reduced by 20%)
 
       HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
       UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
