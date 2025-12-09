@@ -216,6 +216,34 @@ Win32Window::MessageHandler(HWND hwnd,
     case WM_DWMCOLORIZATIONCOLORCHANGED:
       UpdateTheme(hwnd);
       return 0;
+
+    case WM_GETMINMAXINFO: {
+      // Enforce a minimum tracking size for the window. The values here are
+      // logical pixels and are scaled by the monitor DPI so the minimum is
+      // consistent across display scale factors.
+      auto mmi = reinterpret_cast<MINMAXINFO*>(lparam);
+
+        // Desired fixed window size in logical pixels (use threshold as fixed size)
+        // NOTE: change these values if you want a different fixed window size.
+  const int kMinWidth = 900; // fixed width
+  const int kMinHeight = 560; // fixed height (reduced by 20%)
+
+      HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+      UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+      double scale_factor = dpi / 96.0;
+
+  // Enforce a fixed window size by setting both min and max tracking sizes
+  // to the same scaled values. This prevents resizing smaller or larger
+  // than the threshold.
+  const int scaledWidth = Scale(kMinWidth, scale_factor);
+  const int scaledHeight = Scale(kMinHeight, scale_factor);
+  mmi->ptMinTrackSize.x = scaledWidth;
+  mmi->ptMinTrackSize.y = scaledHeight;
+  mmi->ptMaxTrackSize.x = scaledWidth;
+  mmi->ptMaxTrackSize.y = scaledHeight;
+
+      return 0;
+    }
   }
 
   return DefWindowProc(window_handle_, message, wparam, lparam);

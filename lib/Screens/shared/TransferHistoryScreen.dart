@@ -262,10 +262,6 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
         title: _isSearching
             ? TextField(
                 controller: _searchController,

@@ -1355,16 +1355,12 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
               padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
               child: Row(
                 children: [
-                  IconButton(
-                    icon: Icon(Icons.arrow_back_ios_rounded, color: Colors.white, size: 20),
-                    onPressed: () => Navigator.pop(context),
-                  ),
                   Expanded(
                     child: Text(
                       'Share Files',
                       style: TextStyle(
                         color: Colors.white,
-                        fontSize: 28,
+                        fontSize: 24,
                         fontWeight: FontWeight.w300,
                         letterSpacing: -0.5,
                       ),
@@ -1407,131 +1403,167 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
             Expanded(
               child: Container(
                 decoration: BoxDecoration(
-                  color: _isDragOver ? Colors.yellow[300]!.withOpacity(0.1) : Colors.transparent,
-                  border: _isDragOver ? Border.all(
-                    color: Colors.yellow[300]!,
-                    width: 2,
-                    style: BorderStyle.solid,
-                  ) : null,
+                  color: _isDragOver ? Colors.yellow[300]!.withOpacity(0.06) : Colors.transparent,
+                  border: _isDragOver
+                      ? Border.all(
+                          color: Colors.yellow[300]!,
+                          width: 2,
+                          style: BorderStyle.solid,
+                        )
+                      : null,
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: Column(
-                    children: [
-                      // Connection status
-                      if (_localIp != null) ...[
-                        _buildConnectionStatus(),
-                        const SizedBox(height: 16),
-                      ],
-                      
-                      // Nearby devices section (Windows discovery)
-                      if (_files.isNotEmpty) ...[
-                        _buildNearbyDevicesSection(),
-                        const SizedBox(height: 16),
-                      ],
-                      
-                      // Share code section
-                      if (_displayCode != null && _files.isNotEmpty) ...[
-                        _buildShareCode(),
-                        const SizedBox(height: 24),
-                      ],
-                      
-                      // File list section
-                      if (_files.isNotEmpty) ...[
-                        _buildFileListHeader(),
-                        const SizedBox(height: 16),
-                        Expanded(child: _buildFileList()),
-                      ],
-                      
-                      // Empty state
-                      if (_files.isEmpty && !_loading) ...[
-                        Expanded(
-                          child: _buildEmptyState(),
+                  // Reduce top padding, add bottom padding for visual breathing room
+                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: Colors.transparent,
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                      ],
-                      
-                      // Loading state
-                      if (_loading) ...[
-                        Expanded(
-                          child: _buildLoadingState(),
+                        child: IntrinsicHeight(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: <Widget>[
+                              // Left column (50%) - files list, drop area, add buttons
+                              Flexible(
+                                flex: 5,
+                                child: Container(
+                                  padding: const EdgeInsets.only(top: 0, right: 12.0, bottom: 12.0),
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey[850],
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    padding: const EdgeInsets.all(12),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: <Widget>[
+                                        _buildFileListHeader(),
+                                        const SizedBox(height: 8),
+                                        Expanded(
+                                          child: Builder(
+                                            builder: (context) {
+                                              if (_files.isNotEmpty) return _buildFileList();
+                                              if (_loading) return _buildLoadingState();
+                                              return _buildEmptyState();
+                                            },
+                                          ),
+                                        ),
+                                        // Push the Add buttons to the bottom so they align with
+                                        // the Clear/Start controls in the right column.
+                                        const SizedBox(height: 8),
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: _buildActionButton(
+                                                icon: Icons.attach_file_rounded,
+                                                label: 'Add Files',
+                                                onTap: _pickFiles,
+                                                color: Colors.grey[900]!,
+                                                textColor: Colors.white,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: _buildActionButton(
+                                                icon: Icons.folder_rounded,
+                                                label: 'Add Folder',
+                                                onTap: _pickFolder,
+                                                color: Colors.grey[900]!,
+                                                textColor: Colors.white,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(width: 10),
+
+                              // Right column (50%) - connection status and device discovery (always present)
+                              Flexible(
+                                flex: 5,
+                                child: Container(
+                                  padding: const EdgeInsets.only(top: 0, left: 12.0, bottom: 12.0),
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey[850],
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    padding: const EdgeInsets.all(12),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: <Widget>[
+                                        if (_localIp != null) ...[
+                                          _buildConnectionStatus(),
+                                          const SizedBox(height: 8),
+                                        ] else ...[
+                                          _buildNetworkErrorState(),
+                                          const SizedBox(height: 8),
+                                        ],
+                                        _buildNearbyDevicesSection(),
+
+                                        // Spacer so share code and controls sit at the bottom
+                                        Expanded(child: SizedBox()),
+
+                                        if (_displayCode != null) ...[
+                                          _buildShareCode(),
+                                          const SizedBox(height: 8),
+                                          Container(
+                                            padding: const EdgeInsets.only(top: 8),
+                                            child: Row(
+                                              children: [
+                                                Expanded(
+                                                  child: _buildActionButton(
+                                                    icon: Icons.clear_all_rounded,
+                                                    label: 'Clear All',
+                                                    onTap: _files.isEmpty ? null : _clearFiles,
+                                                    color: _files.isEmpty ? Colors.grey[700]! : Colors.red[600]!,
+                                                    textColor: _files.isEmpty ? Colors.grey[400]! : Colors.white,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 12),
+                                                Expanded(
+                                                  child: _buildActionButton(
+                                                    icon: _isSharing ? Icons.stop_circle_rounded : Icons.send_rounded,
+                                                    label: _isSharing ? 'Stop Sharing' : 'Start Sharing',
+                                                    onTap: _files.isEmpty ? null : (_isSharing ? _stopServer : _startServer),
+                                                    color: _files.isEmpty
+                                                        ? Colors.grey[700]!
+                                                        : _isSharing
+                                                            ? Colors.red[600]!
+                                                            : Colors.yellow[300]!,
+                                                    textColor: _files.isEmpty
+                                                        ? Colors.grey[400]!
+                                                        : _isSharing
+                                                            ? Colors.white
+                                                            : Colors.black,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ],
-                      
-                      // Network error state
-                      if (_localIp == null && !_loading) ...[
-                        Expanded(
-                          child: _buildNetworkErrorState(),
-                        ),
-                      ],
-                    ],
+                      );
+                    },
                   ),
                 ),
               ),
             ),
-            
-            // Action buttons
-            if (_files.isNotEmpty) ...[
-              Container(
-                padding: const EdgeInsets.all(24),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _buildActionButton(
-                        icon: Icons.attach_file_rounded,
-                        label: 'Add Files',
-                        onTap: _pickFiles,
-                        color: Colors.grey[900]!,
-                        textColor: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: _buildActionButton(
-                        icon: Icons.folder_rounded,
-                        label: 'Add Folder',
-                        onTap: _pickFolder,
-                        color: Colors.grey[900]!,
-                        textColor: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.only(bottom: 24, left: 24, right: 24),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _buildActionButton(
-                        icon: Icons.clear_all_rounded,
-                        label: 'Clear All',
-                        onTap: _files.isEmpty ? null : _clearFiles,
-                        color: _files.isEmpty ? Colors.grey[700]! : Colors.red[600]!,
-                        textColor: _files.isEmpty ? Colors.grey[400]! : Colors.white,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: _buildActionButton(
-                        icon: _isSharing ? Icons.stop_circle_rounded : Icons.send_rounded,
-                        label: _isSharing ? 'Stop Sharing' : 'Start Sharing',
-                        onTap: _files.isEmpty ? null : (_isSharing ? _stopServer : _startServer),
-                        color: _files.isEmpty
-                            ? Colors.grey[700]!
-                            : _isSharing
-                                ? Colors.red[600]!
-                                : Colors.yellow[300]!,
-                        textColor: _files.isEmpty
-                            ? Colors.grey[400]!
-                            : _isSharing
-                                ? Colors.white
-                                : Colors.black,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+            // Action buttons are integrated into the two-column layout.
           ],
         ),
       ),
@@ -2070,16 +2102,6 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            'Drag and drop files here or use the buttons below',
-            style: TextStyle(
-              color: Colors.grey[400],
-              fontSize: 16,
-              fontWeight: FontWeight.w400,
-            ),
-            textAlign: TextAlign.center,
-          ),
           const SizedBox(height: 16),
           Container(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -2098,7 +2120,7 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
                 ),
                 SizedBox(width: 8),
                 Text(
-                  'Drop files anywhere on this screen',
+                  'Drage and Drop files', 
                   style: TextStyle(
                     color: Colors.yellow[300],
                     fontSize: 14,
@@ -2109,34 +2131,6 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
             ),
           ),
           const SizedBox(height: 32),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 120,
-                height: 48,
-                child: _buildActionButton(
-                  icon: Icons.attach_file_rounded,
-                  label: 'Add Files',
-                  onTap: _pickFiles,
-                  color: Colors.yellow[300]!,
-                  textColor: Colors.black,
-                ),
-              ),
-              SizedBox(width: 16),
-              Container(
-                width: 120,
-                height: 48,
-                child: _buildActionButton(
-                  icon: Icons.folder_rounded,
-                  label: 'Add Folder',
-                  onTap: _pickFolder,
-                  color: Colors.grey[900]!,
-                  textColor: Colors.white,
-                ),
-              ),
-            ],
-          ),
         ],
       ),
     );
