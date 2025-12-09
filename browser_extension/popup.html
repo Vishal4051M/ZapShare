@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZapShare</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* Palette */
+      --accent: #FFF176;
+      --accent-hover: #FFEE58;
+
+      --bg: #000000;
+      --surface: #141414;
+      --surface-hover: #1f1f1f;
+      --border: #333333;
+
+      --text: #ffffff;
+      --text-muted: #a1a1aa;
+      --text-dark: #000000;
+
+      --radius: 20px;
+      --nav-height: 56px;
+    }
+
+    * {
+      box-sizing: border-box;
+      user-select: none;
+    }
+
+    html,
+    body {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+      background: #000000;
+      overflow: hidden;
+      font-family: 'Inter', sans-serif;
+    }
+
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 340px;
+      height: 520px;
+    }
+
+    .app-frame {
+      width: calc(100% - 6px);
+      height: calc(100% - 6px);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+    }
+
+    button {
+      font-family: inherit;
+      cursor: pointer;
+      border: none;
+      outline: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* --- Views --- */
+    .view-layer {
+      flex: 1;
+      display: none;
+      flex-direction: column;
+      overflow-y: auto;
+      overflow-x: hidden;
+      /* Padding for persistent elements if needed */
+      padding-bottom: 20px;
+    }
+
+    .view-layer.active {
+      display: flex;
+      animation: fadeIn 0.2s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+      }
+
+      to {
+        opacity: 1;
+      }
+    }
+
+    /* Home */
+    .home-content {
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .hero-header {
+      margin-top: 20px;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    .logo-box {
+      width: 64px;
+      height: 64px;
+      border-radius: 18px;
+      background: #111;
+      margin: 0 auto 12px;
+      box-shadow: 0 0 24px rgba(255, 241, 118, 0.1);
+    }
+
+    .logo-img {
+      width: 100%;
+      height: 100%;
+      border-radius: 18px;
+      object-fit: cover;
+    }
+
+    .brand-name {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: -0.5px;
+    }
+
+    .input-box {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      color: var(--accent);
+      padding: 14px;
+      font-family: monospace;
+      font-size: 24px;
+      font-weight: 700;
+      text-align: center;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+      transition: 0.2s;
+    }
+
+    .input-box:focus {
+      border-color: var(--accent);
+      background: #1a1a1a;
+      box-shadow: 0 0 0 2px rgba(255, 241, 118, 0.1);
+    }
+
+    .btn-action {
+      width: 100%;
+      padding: 14px;
+      border-radius: 16px;
+      font-weight: 700;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      transition: 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: var(--text-dark);
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: var(--surface);
+      color: var(--text-muted);
+    }
+
+    .btn-secondary:hover {
+      background: var(--surface-hover);
+      color: #fff;
+    }
+
+    .btn-secondary-link {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--accent);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .recent-chips {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 6px;
+      margin-bottom: 24px;
+      width: 100%;
+    }
+
+    .chip {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-family: monospace;
+      color: #888;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .chip:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .chip-del {
+      opacity: 0.5;
+      font-size: 14px;
+    }
+
+    .chip-del:hover {
+      color: var(--danger);
+      opacity: 1;
+    }
+
+    /* Files View & Headers */
+    .files-sticky-header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(0, 0, 0, 0.95);
+      backdrop-filter: blur(10px);
+      padding: 16px 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 0;
+      width: 100%;
+    }
+
+    .files-sticky-header h2 {
+      margin: 0;
+      font-size: 18px;
+      color: #fff;
+    }
+
+    .btn-toggle-all {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      background: rgba(255, 241, 118, 0.1);
+      padding: 6px 12px;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+
+    .file-list {
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-bottom: 70px;
+    }
+
+    .file-item {
+      background: var(--surface);
+      padding: 10px;
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: 0.2s;
+    }
+
+    .file-item:hover {
+      background: var(--surface-hover);
+      border-color: #333;
+    }
+
+    .file-item.selected {
+      background: rgba(255, 241, 118, 0.08);
+      border-color: var(--accent);
+    }
+
+    .file-item.sent {
+      border-color: #22c55e;
+    }
+
+    .f-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: #222;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 800;
+      color: #fff;
+      flex-shrink: 0;
+    }
+
+    .f-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .f-info {
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .f-name {
+      font-size: 13px;
+      font-weight: 500;
+      color: #eee;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 2px;
+    }
+
+    .f-meta {
+      font-size: 11px;
+      color: #777;
+      font-family: monospace;
+    }
+
+    .f-chk {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 2px solid #555;
+      display: grid;
+      place-content: center;
+      transition: 0.2s;
+    }
+
+    .item-selected .f-chk {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .f-chk::after {
+      content: '';
+      width: 8px;
+      height: 4px;
+      border-left: 2px solid #000;
+      border-bottom: 2px solid #000;
+      transform: rotate(-45deg) translate(1px, -1px);
+      opacity: 0;
+    }
+
+    .item-selected .f-chk::after {
+      opacity: 1;
+    }
+
+    /* SEND VIEW specific */
+    .drop-zone {
+      margin: 20px;
+      padding: 20px;
+      border: 2px dashed #444;
+      border-radius: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      color: #666;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+
+    .drop-zone:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(255, 241, 118, 0.05);
+    }
+
+    .drop-zone h3 {
+      margin: 10px 0 5px;
+      font-size: 14px;
+      color: #fff;
+    }
+
+    .drop-zone p {
+      margin: 0;
+      font-size: 11px;
+    }
+
+    .web-link-card {
+      margin: 0 20px 20px;
+      padding: 12px;
+      background: #111;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border: 1px solid #222;
+    }
+
+    .web-link-text {
+      font-size: 11px;
+      color: #999;
+      line-height: 1.3;
+    }
+
+    .btn-web-go {
+      padding: 6px 12px;
+      background: #222;
+      color: var(--accent);
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      margin-left: 10px;
+    }
+
+    .btn-web-go:hover {
+      background: #333;
+    }
+
+    .upload-actions {
+      padding: 0 20px;
+      margin-top: 5px;
+    }
+
+    .warning-note {
+      font-size: 10px;
+      color: #666;
+      text-align: center;
+      margin-top: 8px;
+    }
+
+    /* Bottom Bars */
+    .bottom-bars {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: var(--nav-height);
+      background: transparent;
+      border-bottom-left-radius: var(--radius);
+      border-bottom-right-radius: var(--radius);
+      overflow: hidden;
+      pointer-events: none;
+      /* Let clicks pass unless active */
+    }
+
+    .bottom-bars>* {
+      pointer-events: auto;
+    }
+
+    .navbar {
+      width: 100%;
+      height: 100%;
+      background: rgba(15, 15, 15, 0.96);
+      backdrop-filter: blur(12px);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      position: absolute;
+      top: 0;
+      left: 0;
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .navbar.hidden {
+      transform: translateY(100%);
+    }
+
+    .nav-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      width: 100%;
+      color: #666;
+      background: transparent;
+      transition: 0.2s;
+    }
+
+    .nav-item:hover {
+      color: #999;
+    }
+
+    .nav-item.active {
+      color: var(--accent);
+    }
+
+    .nav-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+
+    .selection-bar {
+      width: 100%;
+      height: 100%;
+      background: #18181a;
+      border-top: 1px solid var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform: translateY(100%);
+      transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+
+    .selection-bar.visible {
+      transform: translateY(0);
+    }
+
+    .sel-count {
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .sel-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn-dl-now {
+      background: var(--accent);
+      color: #000;
+      padding: 10px 20px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .btn-dl-now:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn-close-sel {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: grid;
+      place-content: center;
+      font-size: 18px;
+      cursor: pointer;
+    }
+
+    .btn-close-sel:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .toast {
+      position: absolute;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-60px);
+      background: #ef4444;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      transition: 0.3s;
+      opacity: 0;
+      z-index: 200;
+      white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+
+    .toast.visible {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    ::-webkit-scrollbar {
+      width: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #444;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="app-frame">
+    <div id="toast" class="toast">Alert</div>
+
+    <!-- Home View -->
+    <div id="view-home" class="view-layer active">
+      <div class="home-content">
+        <div class="hero-header">
+          <div class="logo-box">
+            <img src="logo.png" class="logo-img" onerror="this.src='./icon-128.png'">
+          </div>
+          <div class="brand-name">ZapShare</div>
+        </div>
+
+        <input type="text" id="code-input" class="input-box" placeholder="CODE" maxlength="8">
+        <div class="recent-chips" id="recent-list"></div>
+
+        <button id="btn-connect" class="btn-action btn-primary">Receive</button>
+        <button id="btn-web-send" class="btn-action btn-secondary">Send</button>
+      </div>
+    </div>
+
+    <!-- Receive (Files) View -->
+    <div id="view-files" class="view-layer">
+      <div class="files-sticky-header">
+        <h2 id="file-count-text">Files (0)</h2>
+        <div id="btn-select-all" class="btn-toggle-all">Select All</div>
+      </div>
+      <div id="file-list" class="file-list" style="padding-bottom:70px;">
+        <!-- RENDER -->
+      </div>
+    </div>
+
+    <!-- Send View -->
+    <div id="view-send" class="view-layer">
+      <div class="files-sticky-header" style="background: rgba(0,0,0,0.8);">
+        <h2>Send Files</h2>
+        <div id="btn-send-back" class="btn-toggle-all" style="background:#333; color:#fff;">Back</div>
+      </div>
+
+      <input type="file" id="file-input-el" multiple style="display:none">
+
+      <div class="drop-zone" id="drop-zone">
+        <div style="font-size: 32px;">📤</div>
+        <h3>Select Files</h3>
+        <p>Tap to browse</p>
+      </div>
+
+      <div class="web-link-card">
+        <div class="web-link-text">For background uploads or large files</div>
+        <button id="btn-open-web" class="btn-web-go">Open Web ↗</button>
+      </div>
+
+      <div class="upload-actions">
+        <button id="btn-upload-start" class="btn-action btn-primary" style="display:none; margin-bottom: 5px;">
+          Send Now (<span id="upload-count">0</span>)
+        </button>
+        <div id="send-status" style="font-size:11px; text-align:center; color:#888;"></div>
+        <div class="warning-note" id="warning-note" style="display:none;">Keep popup open while sending</div>
+      </div>
+
+      <div id="upload-list" class="file-list" style="padding-bottom: 20px;">
+        <!-- Upload Items -->
+      </div>
+    </div>
+
+
+    <!-- Bottom Bars (Only for Receive Mode) -->
+    <div class="bottom-bars" id="bottom-bars-container">
+      <div id="navbar" class="navbar">
+        <button class="nav-item active" data-target="view-home">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            <polyline points="9 22 9 12 15 12 15 22" />
+          </svg>
+          <span class="nav-label">Home</span>
+        </button>
+        <button class="nav-item" data-target="view-files">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          </svg>
+          <span class="nav-label">Files</span>
+        </button>
+      </div>
+
+      <div id="selection-bar" class="selection-bar">
+        <div class="sel-count" id="sel-count-text">0 selected</div>
+        <div class="sel-actions">
+          <button id="btn-dl-now" class="btn-dl-now">Download</button>
+          <button id="btn-close-sel" class="btn-close-sel">&times;</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>

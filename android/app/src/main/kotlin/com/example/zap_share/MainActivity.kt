@@ -19,9 +19,12 @@ import android.content.Context
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "zapshare.saf"
+    private val WIFI_DIRECT_CHANNEL = "zapshare.wifi_direct"
     private val inputStreams = mutableMapOf<String, InputStream>()
     private var initialSharedUris: List<String>? = null
     private var methodChannel: MethodChannel? = null
+    private var wifiDirectChannel: MethodChannel? = null
+    private var wifiDirectManager: WiFiDirectManager? = null
 
     // --- SAF Folder Picker additions ---
     private var folderResult: MethodChannel.Result? = null
@@ -34,10 +37,67 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        wifiDirectChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, WIFI_DIRECT_CHANNEL)
+
+        // Initialize Wi-Fi Direct Manager
+        wifiDirectManager = WiFiDirectManager(this, wifiDirectChannel!!)
+
 
         // Acquire multicast lock for UDP discovery
         acquireMulticastLock()
 
+        // Set up Wi-Fi Direct channel handler
+        wifiDirectChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "initialize" -> {
+                    val success = wifiDirectManager?.initialize() ?: false
+                    result.success(success)
+                }
+                "startPeerDiscovery" -> {
+                    val success = wifiDirectManager?.startPeerDiscovery() ?: false
+                    result.success(success)
+                }
+                "stopPeerDiscovery" -> {
+                    val success = wifiDirectManager?.stopPeerDiscovery() ?: false
+                    result.success(success)
+                }
+                "connectToPeer" -> {
+                    val deviceAddress = call.argument<String>("deviceAddress")
+                    val isGroupOwner = call.argument<Boolean>("isGroupOwner") ?: true
+                    if (deviceAddress != null) {
+                        val success = wifiDirectManager?.connectToPeer(deviceAddress, isGroupOwner) ?: false
+                        result.success(success)
+                    } else {
+                        result.error("INVALID_ARGS", "Device address required", null)
+                    }
+                }
+                "removeGroup" -> {
+                    val success = wifiDirectManager?.removeGroup() ?: false
+                    result.success(success)
+                }
+                "requestGroupInfo" -> {
+                    val groupInfo = wifiDirectManager?.requestGroupInfo()
+                    result.success(groupInfo)
+                }
+                "getDiscoveredPeers" -> {
+                    val peers = wifiDirectManager?.getDiscoveredPeers() ?: emptyList()
+                    result.success(peers)
+                }
+                "disconnect" -> {
+                    val success = wifiDirectManager?.disconnect() ?: false
+                    result.success(success)
+                }
+                "isWifiP2pEnabled" -> {
+                    val enabled = wifiDirectManager?.isWifiP2pEnabled() ?: false
+                    result.success(enabled)
+                }
+                else -> {
+                    result.notImplemented()
+                }
+            }
+        }
+
+        
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "openReadStream" -> {
@@ -78,7 +138,7 @@ class MainActivity : FlutterActivity() {
 
                 "readChunk" -> {
                     val uriStr = call.argument<String>("uri")
-                    val size = call.argument<Int>("size") ?: 65536
+                    val size = call.argument<Int>("size") ?: 4194304
                     
                     val stream = inputStreams[uriStr]
                     
@@ -175,7 +235,7 @@ class MainActivity : FlutterActivity() {
                             zos.putNextEntry(entry)
                             val input = contentResolver.openInputStream(uri)
                             if (input != null) {
-                                val buffer = ByteArray(64 * 1024)
+                                val buffer = ByteArray(4 * 1024 * 1024)
                                 var len: Int
                                 while (input.read(buffer).also { len = it } > 0) {
                                     zos.write(buffer, 0, len)
@@ -484,8 +544,14 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Cleanup Wi-Fi Direct
+        wifiDirectManager?.cleanup()
+        // Cleanup Local Only Hotspot
+        // Cleanup Credential Manager
+        
         // Always release multicast lock when app is destroyed
         releaseMulticastLock()
     }
+
 
 }
