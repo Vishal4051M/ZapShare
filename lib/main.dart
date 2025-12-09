@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:zap_share/Screens/android/AndroidHomeScreen.dart';
 import 'package:zap_share/Screens/android/AndroidHttpFileShareScreen.dart';
 import 'package:zap_share/services/device_discovery_service.dart';
+import 'package:zap_share/services/wifi_direct_service.dart';
 import 'package:zap_share/widgets/connection_request_dialog.dart';
 import 'Screens/windows/WindowsFileShareScreen.dart';
 import 'Screens/windows/WindowsReceiveScreen.dart';
@@ -33,16 +34,17 @@ Future<void> clearAppCache() async {
 
 Future<void> requestPermissions() async {
   if (!Platform.isAndroid) return;
-  Map<Permission, PermissionStatus> statuses = await [
-    Permission.storage,
-    Permission.location,
-    Permission.manageExternalStorage,
-    Permission.nearbyWifiDevices,
-    Permission.audio,
-    Permission.videos,
-    Permission.notification,
-    Permission.manageExternalStorage,
-  ].request();
+  Map<Permission, PermissionStatus> statuses =
+      await [
+        Permission.storage,
+        Permission.location,
+        Permission.manageExternalStorage,
+        Permission.nearbyWifiDevices,
+        Permission.audio,
+        Permission.videos,
+        Permission.notification,
+        Permission.manageExternalStorage,
+      ].request();
 
   statuses.forEach((perm, status) {
     if (!status.isGranted) {
@@ -54,7 +56,7 @@ Future<void> requestPermissions() async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (Platform.isAndroid) {
-    requestPermissions();
+    // requestPermissions(); // Moved to AppState for sequential execution
     clearAppCache();
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
@@ -63,14 +65,16 @@ void main() async {
         channelDescription: 'File transfer is running in the background',
         channelImportance: NotificationChannelImportance.HIGH,
         priority: NotificationPriority.HIGH,
-      ), iosNotificationOptions: const IOSNotificationOptions(
-        showNotification: false, 
+      ),
+      iosNotificationOptions: const IOSNotificationOptions(
+        showNotification: false,
         playSound: false,
       ),
-      foregroundTaskOptions: ForegroundTaskOptions( 
-        autoRunOnBoot: true, 
-        allowWakeLock: true, 
-        allowWifiLock: true, eventAction: ForegroundTaskEventAction.once(), 
+      foregroundTaskOptions: ForegroundTaskOptions(
+        autoRunOnBoot: true,
+        allowWakeLock: true,
+        allowWifiLock: true,
+        eventAction: ForegroundTaskEventAction.once(),
       ),
     );
     await FlutterDisplayMode.setHighRefreshRate();
@@ -95,6 +99,11 @@ class _DataRushAppState extends State<DataRushApp> {
     super.initState();
     // Delay startup until after first frame so navigator/context exist.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Ensure permissions are granted before starting services
+      if (Platform.isAndroid) {
+        await requestPermissions();
+      }
+
       // Ask for device name on first install before initializing discovery service
       await _ensureDeviceName();
       _initGlobalDeviceDiscovery();
@@ -126,7 +135,10 @@ class _DataRushAppState extends State<DataRushApp> {
         builder: (context) {
           return AlertDialog(
             backgroundColor: Colors.grey[900],
-            title: const Text('Set device name', style: TextStyle(color: Colors.white)),
+            title: const Text(
+              'Set device name',
+              style: TextStyle(color: Colors.white),
+            ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -171,7 +183,10 @@ class _DataRushAppState extends State<DataRushApp> {
                   await prefs.setString('device_name', v);
                   Navigator.of(context).pop();
                 },
-                child: const Text('Save', style: TextStyle(color: Colors.yellow)),
+                child: const Text(
+                  'Save',
+                  style: TextStyle(color: Colors.yellow),
+                ),
               ),
             ],
           );
@@ -189,10 +204,33 @@ class _DataRushAppState extends State<DataRushApp> {
     await _discoveryService.initialize();
     await _discoveryService.start();
 
-    _connectionRequestSubscription = _discoveryService.connectionRequestStream.listen((request) {
-      print('🔔 [Global] Received connection request from ${request.deviceName}');
-      _showGlobalConnectionRequestDialog(request);
-    });
+    // Initialize Wi-Fi Direct on Android
+    if (Platform.isAndroid) {
+      print('📡 [Global] Initializing Wi-Fi Direct...');
+      final wifiDirect = WiFiDirectService();
+      final initialized = await wifiDirect.initialize();
+
+      if (initialized) {
+        print('✅ [Global] Wi-Fi Direct initialized successfully');
+        // Start peer discovery
+        final discoveryStarted = await wifiDirect.startPeerDiscovery();
+        if (discoveryStarted) {
+          print('✅ [Global] Wi-Fi Direct peer discovery started');
+        } else {
+          print('⚠️  [Global] Failed to start Wi-Fi Direct peer discovery');
+        }
+      } else {
+        print('⚠️  [Global] Failed to initialize Wi-Fi Direct');
+      }
+    }
+
+    _connectionRequestSubscription = _discoveryService.connectionRequestStream
+        .listen((request) {
+          print(
+            '🔔 [Global] Received connection request from ${request.deviceName}',
+          );
+          _showGlobalConnectionRequestDialog(request);
+        });
   }
 
   void _showGlobalConnectionRequestDialog(ConnectionRequest request) {
@@ -203,7 +241,7 @@ class _DataRushAppState extends State<DataRushApp> {
     }
 
     print('🚀 [Global] Showing connection request dialog globally');
-    
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -213,29 +251,35 @@ class _DataRushAppState extends State<DataRushApp> {
           onAccept: () async {
             print('✅ [Global] User accepted connection request');
             Navigator.of(dialogContext).pop();
-            
+
             // Send acceptance response
-            await _discoveryService.sendConnectionResponse(request.ipAddress, true);
-            
+            await _discoveryService.sendConnectionResponse(
+              request.ipAddress,
+              true,
+            );
+
             // Navigate to receive screen
             if (Platform.isAndroid) {
               // Navigate to AndroidReceiveScreen with the sender's code
               final senderCode = _ipToCode(request.ipAddress);
               navigatorKey.currentState?.pushReplacement(
                 MaterialPageRoute(
-                  builder: (context) => AndroidReceiveScreen(
-                    autoConnectCode: senderCode,
-                  ),
+                  builder:
+                      (context) =>
+                          AndroidReceiveScreen(autoConnectCode: senderCode),
                 ),
               );
             }
-            
+
             print('✅ [Global] Redirecting to receive screen');
           },
           onDecline: () async {
             print('❌ [Global] User declined connection request');
             Navigator.of(dialogContext).pop();
-            await _discoveryService.sendConnectionResponse(request.ipAddress, false);
+            await _discoveryService.sendConnectionResponse(
+              request.ipAddress,
+              false,
+            );
           },
         );
       },
@@ -245,7 +289,8 @@ class _DataRushAppState extends State<DataRushApp> {
   String _ipToCode(String ipAddress) {
     final parts = ipAddress.split('.');
     if (parts.length != 4) return '';
-    final n = (int.parse(parts[0]) << 24) |
+    final n =
+        (int.parse(parts[0]) << 24) |
         (int.parse(parts[1]) << 16) |
         (int.parse(parts[2]) << 8) |
         int.parse(parts[3]);
@@ -371,16 +416,20 @@ class _DataRushAppState extends State<DataRushApp> {
             borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: Color(0xFFFFD600), width: 2),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 16,
+          ),
           hintStyle: TextStyle(
             color: Colors.white.withOpacity(0.5),
             fontSize: 16,
           ),
         ),
       ),
-      home: Platform.isAndroid
-          ? const AndroidHomeScreen()
-          : Platform.isWindows
+      home:
+          Platform.isAndroid
+              ? const AndroidHomeScreen()
+              : Platform.isWindows
               ? const WindowsNavBar()
               : AndroidHttpFileShareScreen(),
       debugShowCheckedModeBanner: false,
@@ -450,7 +499,8 @@ class WindowsNavBar extends StatefulWidget {
   State<WindowsNavBar> createState() => _WindowsNavBarState();
 }
 
-class _WindowsNavBarState extends State<WindowsNavBar> with SingleTickerProviderStateMixin {
+class _WindowsNavBarState extends State<WindowsNavBar>
+    with SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
   bool _isCollapsed = false;
   final double _collapsedWidth = 64;
@@ -474,12 +524,7 @@ class _WindowsNavBarState extends State<WindowsNavBar> with SingleTickerProvider
                 duration: _animationDuration,
                 width: _isCollapsed ? _collapsedWidth : _expandedWidth,
                 curve: Curves.easeInOut,
-                margin: EdgeInsets.only(
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  right: 0,
-                ),
+                margin: EdgeInsets.only(left: 0, top: 0, bottom: 0, right: 0),
                 decoration: BoxDecoration(
                   color: const Color(0xFF23272F).withOpacity(0.95),
                   borderRadius: BorderRadius.only(
@@ -498,8 +543,14 @@ class _WindowsNavBarState extends State<WindowsNavBar> with SingleTickerProvider
                   children: [
                     SizedBox(height: 24),
                     IconButton(
-                      icon: Icon(_isCollapsed ? Icons.chevron_right : Icons.chevron_left, color: Colors.white70),
-                      tooltip: _isCollapsed ? 'Expand Navigation' : 'Collapse Navigation',
+                      icon: Icon(
+                        _isCollapsed ? Icons.chevron_right : Icons.chevron_left,
+                        color: Colors.white70,
+                      ),
+                      tooltip:
+                          _isCollapsed
+                              ? 'Expand Navigation'
+                              : 'Collapse Navigation',
                       onPressed: () {
                         setState(() {
                           _isCollapsed = !_isCollapsed;
@@ -553,13 +604,18 @@ class _WindowsNavBarState extends State<WindowsNavBar> with SingleTickerProvider
       child: AnimatedContainer(
         duration: _animationDuration,
         margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-        padding: EdgeInsets.symmetric(vertical: 12, horizontal: collapsed ? 0 : 10),
+        padding: EdgeInsets.symmetric(
+          vertical: 12,
+          horizontal: collapsed ? 0 : 10,
+        ),
         decoration: BoxDecoration(
-          color: selected ? kAccentYellow.withOpacity(0.18) : Colors.transparent,
+          color:
+              selected ? kAccentYellow.withOpacity(0.18) : Colors.transparent,
           borderRadius: BorderRadius.circular(16),
         ),
         child: Row(
-          mainAxisAlignment: collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
+          mainAxisAlignment:
+              collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
           children: [
             Icon(
               icon,

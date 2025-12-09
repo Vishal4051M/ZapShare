@@ -50,6 +50,9 @@ dependencies:
   flutter_local_notifications: ^17.1.2
   open_file: ^3.3.2
   basic_utils: ^5.8.2
+  device_info_plus: ^12.2.0
+  qr_flutter: ^4.1.0
+  screen_brightness: ^2.1.7
 
 
 dev_dependencies:

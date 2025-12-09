@@ -456,18 +456,74 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
   void _openConversationDetail(DeviceConversation conversation) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => ConversationDetailScreen(conversation: conversation),
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) => ConversationDetailScreen(conversation: conversation),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          const begin = Offset(1.0, 0.0);
+          const end = Offset.zero;
+          const curve = Curves.easeInOut;
+
+          var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+          var offsetAnimation = animation.drive(tween);
+
+          return SlideTransition(
+            position: offsetAnimation,
+            child: child,
+          );
+        },
+        transitionDuration: const Duration(milliseconds: 300),
       ),
     );
   }
 }
 
 // Detail screen showing chat-like conversation
-class ConversationDetailScreen extends StatelessWidget {
+class ConversationDetailScreen extends StatefulWidget {
   final DeviceConversation conversation;
 
   const ConversationDetailScreen({super.key, required this.conversation});
+
+  @override
+  State<ConversationDetailScreen> createState() => _ConversationDetailScreenState();
+}
+
+class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
+  final ScrollController _scrollController = ScrollController();
+  bool _showScrollToBottom = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollController.hasClients) {
+      final isAtBottom = _scrollController.offset >= _scrollController.position.maxScrollExtent - 100;
+      if (isAtBottom != !_showScrollToBottom) {
+        setState(() {
+          _showScrollToBottom = !isAtBottom;
+        });
+      }
+    }
+  }
+
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
 
   String _formatBytes(int bytes) {
     if (bytes < 1024) return "$bytes B";
@@ -570,7 +626,7 @@ class ConversationDetailScreen extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              conversation.deviceName,
+              widget.conversation.deviceName,
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 16,
@@ -578,7 +634,7 @@ class ConversationDetailScreen extends StatelessWidget {
               ),
             ),
             Text(
-              '${conversation.transfers.length} transfers',
+              '${widget.conversation.transfers.length} transfers',
               style: TextStyle(
                 color: Colors.grey[400],
                 fontSize: 12,
@@ -587,13 +643,55 @@ class ConversationDetailScreen extends StatelessWidget {
           ],
         ),
       ),
-      body: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: conversation.transfers.length,
-        itemBuilder: (context, index) {
-          final transfer = conversation.transfers[index];
-          return _buildMessageBubble(context, transfer);
-        },
+      body: Stack(
+        children: [
+          ListView.builder(
+            controller: _scrollController,
+            padding: const EdgeInsets.all(16),
+            itemCount: widget.conversation.transfers.length,
+            itemBuilder: (context, index) {
+              final transfer = widget.conversation.transfers[index];
+              return _buildMessageBubble(context, transfer);
+            },
+          ),
+          // Scroll to bottom FAB
+          if (_showScrollToBottom)
+            Positioned(
+              right: 16,
+              bottom: 16,
+              child: Material(
+                elevation: 4,
+                borderRadius: BorderRadius.circular(30),
+                color: Colors.yellow[300],
+                child: InkWell(
+                  onTap: _scrollToBottom,
+                  borderRadius: BorderRadius.circular(30),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.arrow_downward,
+                          color: Colors.black,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Latest',
+                          style: TextStyle(
+                            color: Colors.black,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

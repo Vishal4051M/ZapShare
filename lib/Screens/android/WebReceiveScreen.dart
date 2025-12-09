@@ -9,6 +9,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:open_file/open_file.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:screen_brightness/screen_brightness.dart';
 
 enum FileType {
   image,
@@ -78,14 +80,14 @@ class PendingFileWithPreview extends PendingFile {
     required this.previewPath,
     required this.previewSize,
   }) : super(
-    id: id,
-    name: name,
-    size: size,
-    uploadedAt: uploadedAt,
-    browserSessionId: browserSessionId,
-    isSelected: isSelected,
-    fileType: fileType,
-  );
+         id: id,
+         name: name,
+         size: size,
+         uploadedAt: uploadedAt,
+         browserSessionId: browserSessionId,
+         isSelected: isSelected,
+         fileType: fileType,
+       );
 }
 
 class WebReceiveScreen extends StatefulWidget {
@@ -104,16 +106,18 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   String? _customSaveFolder; // User-selected folder (persisted)
   bool _uploadApprovalActive = false;
   DateTime? _uploadApprovalExpiresAt;
-  
+
   List<ReceivedFile> _receivedFiles = [];
   List<PendingFile> _pendingFiles = []; // Files uploaded but not yet received
-  Map<String, ReceivedFile> _ongoingDownloads = {}; // Track downloads in progress
-  final FlutterLocalNotificationsPlugin _notificationsPlugin = FlutterLocalNotificationsPlugin();
+  Map<String, ReceivedFile> _ongoingDownloads =
+      {}; // Track downloads in progress
+  final FlutterLocalNotificationsPlugin _notificationsPlugin =
+      FlutterLocalNotificationsPlugin();
   final Map<String, int> _fileToNotificationId = {};
-  
+
   int _currentTab = 0; // 0 = Pending Files, 1 = Received Files
   final PageController _pageController = PageController();
-  
+
   @override
   void initState() {
     super.initState();
@@ -122,8 +126,11 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   }
 
   Future<void> _initLocalNotifications() async {
-    const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    final InitializationSettings initSettings = InitializationSettings(android: androidSettings);
+    const AndroidInitializationSettings androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    final InitializationSettings initSettings = InitializationSettings(
+      android: androidSettings,
+    );
     await _notificationsPlugin.initialize(initSettings);
   }
 
@@ -139,29 +146,61 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   }
 
   int _notificationIdFor(String key) {
-    return _fileToNotificationId.putIfAbsent(key, () => 5000 + key.hashCode.abs() % 2000);
+    return _fileToNotificationId.putIfAbsent(
+      key,
+      () => 5000 + key.hashCode.abs() % 2000,
+    );
   }
 
   Future<void> _showProgressNotification({
     required String key,
-    required String title,
-    required String body,
+    required String fileName,
     required int progress,
+    double speedMbps = 0.0,
   }) async {
+    final percent = progress.clamp(0, 100);
+    final speedText =
+        speedMbps > 0 ? '${speedMbps.toStringAsFixed(2)} Mbps' : '--';
+
+    // Calculate estimated time remaining
+    String timeRemaining = '';
+    if (speedMbps > 0 && progress > 0 && progress < 100) {
+      final remainingPercent = 100 - progress;
+      final estimatedSeconds = (remainingPercent / speedMbps * 0.8).round();
+
+      if (estimatedSeconds < 60) {
+        timeRemaining = ' • ${estimatedSeconds}s';
+      } else if (estimatedSeconds < 3600) {
+        final minutes = (estimatedSeconds / 60).floor();
+        timeRemaining = ' • ${minutes}m';
+      } else {
+        final hours = (estimatedSeconds / 3600).floor();
+        final minutes = ((estimatedSeconds % 3600) / 60).floor();
+        timeRemaining = ' • ${hours}h ${minutes}m';
+      }
+    }
+
     final android = AndroidNotificationDetails(
-      'web_receive_progress_$key',
-      'Web Receive Progress $key',
-      channelDescription: 'Shows the progress of an incoming file',
-      importance: Importance.max,
-      priority: Priority.high,
+      'web_receive_channel',
+      'Web Receive',
+      channelDescription: 'Web file receiving progress notifications',
+      importance: Importance.low,
+      priority: Priority.low,
       showProgress: true,
       maxProgress: 100,
-      progress: progress.clamp(0, 100),
+      progress: percent,
       onlyAlertOnce: true,
-      styleInformation: BigTextStyleInformation(body),
+      ongoing: true,
+      autoCancel: false,
     );
+
     final details = NotificationDetails(android: android);
-    await _notificationsPlugin.show(_notificationIdFor(key), title, body, details);
+    await _notificationsPlugin.show(
+      _notificationIdFor(key),
+      '🌐 Receiving from Web',
+      '$fileName • $percent% • $speedText$timeRemaining',
+      details,
+    );
   }
 
   Future<void> _cancelProgressNotification(String key) async {
@@ -180,7 +219,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       if (await Permission.storage.isDenied) {
         await Permission.storage.request();
       }
-      
+
       if (await Permission.manageExternalStorage.isDenied) {
         await Permission.manageExternalStorage.request();
       }
@@ -201,7 +240,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       }
 
       // Prefer public Downloads/ZapShare on Android
-      final downloadsCandidate = Directory('/storage/emulated/0/Download/ZapShare');
+      final downloadsCandidate = Directory(
+        '/storage/emulated/0/Download/ZapShare',
+      );
       if (Platform.isAndroid) {
         try {
           if (!await downloadsCandidate.exists()) {
@@ -269,12 +310,23 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
 
   Future<String?> _getLocalIpv4() async {
     try {
-      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4, includeLoopback: false);
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
       for (final iface in interfaces) {
         for (final addr in iface.addresses) {
           final ip = addr.address;
           if (ip.startsWith('127.') || ip.startsWith('169.254.')) continue;
-          if (ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('172.16.') || ip.startsWith('172.17.') || ip.startsWith('172.18.') || ip.startsWith('172.19.') || ip.startsWith('172.2') || ip.startsWith('172.30.') || ip.startsWith('172.31.')) {
+          if (ip.startsWith('10.') ||
+              ip.startsWith('192.168.') ||
+              ip.startsWith('172.16.') ||
+              ip.startsWith('172.17.') ||
+              ip.startsWith('172.18.') ||
+              ip.startsWith('172.19.') ||
+              ip.startsWith('172.2') ||
+              ip.startsWith('172.30.') ||
+              ip.startsWith('172.31.')) {
             return ip;
           }
         }
@@ -317,15 +369,21 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       }
 
       if (sc != null) {
-        _uploadServer = await HttpServer.bindSecure(InternetAddress.anyIPv4, 8090, sc);
+        _uploadServer = await HttpServer.bindSecure(
+          InternetAddress.anyIPv4,
+          8090,
+          sc,
+        );
         _useHttps = true;
       } else {
         _uploadServer = await HttpServer.bind(InternetAddress.anyIPv4, 8090);
         _useHttps = false;
       }
-      setState(() { _isHosting = true; });
+      setState(() {
+        _isHosting = true;
+      });
       await _startForegroundService();
-      
+
       _uploadServer!.listen((HttpRequest request) async {
         final path = request.uri.path;
         if (request.method == 'GET' && (path == '/' || path == '/index.html')) {
@@ -355,17 +413,21 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         request.response.statusCode = HttpStatus.notFound;
         await request.response.close();
       });
-      
+
       _showSnackBar('Web server started! Share the URL with others.');
     } catch (e) {
-      setState(() { _isHosting = false; });
+      setState(() {
+        _isHosting = false;
+      });
       _showSnackBar('Failed to start web server: $e');
     }
   }
 
   Future<void> _stopWebServer() async {
     await _uploadServer?.close(force: true);
-    setState(() { _isHosting = false; });
+    setState(() {
+      _isHosting = false;
+    });
     _showSnackBar('Web server stopped');
     await _stopForegroundService();
   }
@@ -374,7 +436,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     try {
       final ByteData logoData = await rootBundle.load('assets/images/logo.png');
       final bytes = logoData.buffer.asUint8List();
-      
+
       request.response.statusCode = HttpStatus.ok;
       request.response.headers.contentType = ContentType('image', 'png');
       request.response.headers.set('Cache-Control', 'public, max-age=86400');
@@ -1055,7 +1117,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   }
 
   Future<void> _promptForFolderPath() async {
-    final controller = TextEditingController(text: _customSaveFolder ?? _saveFolder ?? '');
+    final controller = TextEditingController(
+      text: _customSaveFolder ?? _saveFolder ?? '',
+    );
     final chosen = await showDialog<String>(
       context: context,
       builder: (context) {
@@ -1066,7 +1130,10 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Enter a folder path. If it does not exist, it will be created.', style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+              Text(
+                'Enter a folder path. If it does not exist, it will be created.',
+                style: TextStyle(color: Colors.grey[400], fontSize: 12),
+              ),
               const SizedBox(height: 10),
               TextField(
                 controller: controller,
@@ -1076,7 +1143,10 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                   hintStyle: TextStyle(color: Colors.grey[600]),
                   filled: true,
                   fillColor: Colors.grey[850],
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: Colors.grey[800]!)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: Colors.grey[800]!),
+                  ),
                 ),
               ),
             ],
@@ -1088,10 +1158,14 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
             ),
             TextButton(
               onPressed: () => Navigator.of(context).pop(''),
-              child: Text('Use Default', style: TextStyle(color: Colors.yellow[300])),
+              child: Text(
+                'Use Default',
+                style: TextStyle(color: Colors.yellow[300]),
+              ),
             ),
             TextButton(
-              onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+              onPressed:
+                  () => Navigator.of(context).pop(controller.text.trim()),
               child: Text('Save', style: TextStyle(color: Colors.yellow[300])),
             ),
           ],
@@ -1122,7 +1196,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     try {
       // Enforce approval window
       final now = DateTime.now();
-      if (!_uploadApprovalActive || _uploadApprovalExpiresAt == null || now.isAfter(_uploadApprovalExpiresAt!)) {
+      if (!_uploadApprovalActive ||
+          _uploadApprovalExpiresAt == null ||
+          now.isAfter(_uploadApprovalExpiresAt!)) {
         request.response.statusCode = HttpStatus.forbidden;
         request.response.headers.set('Access-Control-Allow-Origin', '*');
         request.response.write('Upload not approved on device');
@@ -1143,10 +1219,11 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     try {
       final body = await utf8.decodeStream(request);
       final data = jsonDecode(body);
-      final files = (data['files'] as List).cast<Map>().map((m) => {
-        'name': m['name'],
-        'size': m['size']
-      }).toList();
+      final files =
+          (data['files'] as List)
+              .cast<Map>()
+              .map((m) => {'name': m['name'], 'size': m['size']})
+              .toList();
 
       if (!mounted) {
         request.response.statusCode = HttpStatus.ok;
@@ -1161,7 +1238,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       if (approved) {
         setState(() {
           _uploadApprovalActive = true;
-          _uploadApprovalExpiresAt = DateTime.now().add(const Duration(minutes: 2));
+          _uploadApprovalExpiresAt = DateTime.now().add(
+            const Duration(minutes: 2),
+          );
         });
       }
 
@@ -1177,88 +1256,113 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     }
   }
 
-  Future<bool> _showUploadApprovalDialog(List<Map<String, dynamic>> files) async {
-    final totalSize = files.fold<int>(0, (sum, f) => sum + (f['size'] as int? ?? 0));
+  Future<bool> _showUploadApprovalDialog(
+    List<Map<String, dynamic>> files,
+  ) async {
+    final totalSize = files.fold<int>(
+      0,
+      (sum, f) => sum + (f['size'] as int? ?? 0),
+    );
     return await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: Colors.grey[900],
-          title: Text('Allow upload?', style: TextStyle(color: Colors.white)),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${files.length} file(s) • ${_formatBytes(totalSize)}',
-                  style: TextStyle(color: Colors.grey[300]),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  constraints: const BoxConstraints(maxHeight: 180),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[850],
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.grey[800]!),
-                  ),
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: files.length,
-                    itemBuilder: (context, index) {
-                      final f = files[index];
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        child: Row(
-                          children: [
-                            Icon(Icons.insert_drive_file, color: Colors.yellow[300], size: 16),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                '${f['name']}',
-                                style: TextStyle(color: Colors.white, fontSize: 13),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
+          context: context,
+          barrierDismissible: false,
+          builder: (context) {
+            return AlertDialog(
+              backgroundColor: Colors.grey[900],
+              title: Text(
+                'Allow upload?',
+                style: TextStyle(color: Colors.white),
+              ),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${files.length} file(s) • ${_formatBytes(totalSize)}',
+                      style: TextStyle(color: Colors.grey[300]),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      constraints: const BoxConstraints(maxHeight: 180),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[850],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey[800]!),
+                      ),
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: files.length,
+                        itemBuilder: (context, index) {
+                          final f = files[index];
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              _formatBytes((f['size'] as int?) ?? 0),
-                              style: TextStyle(color: Colors.grey[400], fontSize: 12),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.insert_drive_file,
+                                  color: Colors.yellow[300],
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '${f['name']}',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _formatBytes((f['size'] as int?) ?? 0),
+                                  style: TextStyle(
+                                    color: Colors.grey[400],
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Uploads will be allowed for 2 minutes.',
+                      style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  'Uploads will be allowed for 2 minutes.',
-                  style: TextStyle(color: Colors.grey[500], fontSize: 12),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).pop(false);
+                  },
+                  child: Text('Deny', style: TextStyle(color: Colors.red[300])),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).pop(true);
+                  },
+                  child: Text(
+                    'Allow',
+                    style: TextStyle(color: Colors.yellow[300]),
+                  ),
                 ),
               ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop(false);
-              },
-              child: Text('Deny', style: TextStyle(color: Colors.red[300])),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop(true);
-              },
-              child: Text('Allow', style: TextStyle(color: Colors.yellow[300])),
-            ),
-          ],
-        );
-      },
-    ) ?? false;
+            );
+          },
+        ) ??
+        false;
   }
 
   // (Removed preview chunk handler as previews are no longer used)
@@ -1270,7 +1374,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       final fileName = request.uri.queryParameters['name'] ?? 'unknown_file';
       String savePath = '$_saveFolder/$fileName';
       final totalBytes = request.headers.contentLength; // -1 if unknown
-      
+
       // Handle duplicate filenames
       int count = 1;
       String originalFileName = fileName;
@@ -1285,7 +1389,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         }
         count++;
       }
-      
+
       // Prepare ongoing download entry for progress UI
       setState(() {
         _ongoingDownloads[fileName] = ReceivedFile(
@@ -1304,8 +1408,10 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       final sink = file.openWrite();
       int bytesReceived = 0;
       int bytesSinceFlush = 0;
-      const int flushThreshold = 512 * 1024; // flush every 512KB to limit memory buffering
+      const int flushThreshold =
+          512 * 1024; // flush every 512KB to limit memory buffering
       var lastUiUpdate = DateTime.now();
+      final startTime = DateTime.now();
 
       // Use an explicit StreamSubscription so we can apply simple backpressure:
       // pause the incoming stream while we flush the file sink occasionally.
@@ -1336,25 +1442,35 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                 final entry = _ongoingDownloads[fileName];
                 if (entry != null) {
                   final hasTotal = totalBytes > 0;
-                  entry.progress = hasTotal ? (bytesReceived / totalBytes).clamp(0.0, 1.0) : entry.progress;
-                  entry.status = hasTotal
-                      ? 'Receiving... ${((entry.progress) * 100).toInt()}%'
-                      : 'Receiving... ${_formatBytes(bytesReceived)}';
+                  entry.progress =
+                      hasTotal
+                          ? (bytesReceived / totalBytes).clamp(0.0, 1.0)
+                          : entry.progress;
+                  entry.status =
+                      hasTotal
+                          ? 'Receiving... ${((entry.progress) * 100).toInt()}%'
+                          : 'Receiving... ${_formatBytes(bytesReceived)}';
                 }
               });
             }
 
             // Update notification
             final hasTotal = totalBytes > 0;
-            final pct = hasTotal ? ((bytesReceived / totalBytes) * 100).clamp(0, 100).toInt() : 0;
-            final body = hasTotal
-                ? 'Receiving $fileName • $pct%'
-                : 'Receiving $fileName • ${_formatBytes(bytesReceived)}';
+            final pct =
+                hasTotal
+                    ? ((bytesReceived / totalBytes) * 100).clamp(0, 100).toInt()
+                    : 0;
+
+            // Calculate speed
+            final elapsed = now.difference(startTime).inMilliseconds / 1000.0;
+            final speedMbps =
+                elapsed > 0 ? (bytesReceived / (1024 * 1024)) / elapsed : 0.0;
+
             _showProgressNotification(
               key: fileName,
-              title: 'Receiving file',
-              body: body,
+              fileName: fileName,
               progress: hasTotal ? pct : 0,
+              speedMbps: speedMbps,
             );
           }
         } catch (e) {
@@ -1383,16 +1499,19 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       setState(() {
         // Remove from ongoing downloads
         _ongoingDownloads.remove(fileName);
-        _receivedFiles.insert(0, ReceivedFile(
-          name: fileName,
-          size: bytesReceived,
-          path: savePath,
-          receivedAt: DateTime.now(),
-          progress: 1.0,
-          status: 'Complete',
-          isUploading: false,
-        ));
-        
+        _receivedFiles.insert(
+          0,
+          ReceivedFile(
+            name: fileName,
+            size: bytesReceived,
+            path: savePath,
+            receivedAt: DateTime.now(),
+            progress: 1.0,
+            status: 'Complete',
+            isUploading: false,
+          ),
+        );
+
         // Remove from pending files
         _pendingFiles.removeWhere((pf) => pf.name == fileName);
       });
@@ -1427,7 +1546,11 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       request.response.write('File transfer failed: $e');
       await request.response.close();
       // Try to cancel notification on error
-      try { await _cancelProgressNotification(request.uri.queryParameters['name'] ?? 'unknown_file'); } catch (_) {}
+      try {
+        await _cancelProgressNotification(
+          request.uri.queryParameters['name'] ?? 'unknown_file',
+        );
+      } catch (_) {}
     }
   }
 
@@ -1436,13 +1559,13 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     try {
       final path = request.uri.path;
       final fileName = Uri.decodeComponent(path.substring('/download/'.length));
-      
+
       // Find the file in received files
       final file = _receivedFiles.firstWhere(
         (f) => f.name == fileName,
         orElse: () => throw Exception('File not found'),
       );
-      
+
       final fileObj = File(file.path);
       if (!await fileObj.exists()) {
         request.response.statusCode = HttpStatus.notFound;
@@ -1450,11 +1573,17 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         await request.response.close();
         return;
       }
-      
+
       request.response.headers.set('Content-Type', 'application/octet-stream');
-      request.response.headers.set('Content-Disposition', 'attachment; filename="$fileName"');
-      request.response.headers.set('Content-Length', '${await fileObj.length()}');
-      
+      request.response.headers.set(
+        'Content-Disposition',
+        'attachment; filename="$fileName"',
+      );
+      request.response.headers.set(
+        'Content-Length',
+        '${await fileObj.length()}',
+      );
+
       await request.response.addStream(fileObj.openRead());
       await request.response.close();
     } catch (e) {
@@ -1467,13 +1596,18 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   // Serve files list as JSON for web interface
   Future<void> _serveFilesList(HttpRequest request) async {
     try {
-      final filesList = _receivedFiles.map((file) => {
-        'name': file.name,
-        'size': file.size,
-        'receivedAt': file.receivedAt.toIso8601String(),
-        'downloadUrl': '/download/${Uri.encodeComponent(file.name)}',
-      }).toList();
-      
+      final filesList =
+          _receivedFiles
+              .map(
+                (file) => {
+                  'name': file.name,
+                  'size': file.size,
+                  'receivedAt': file.receivedAt.toIso8601String(),
+                  'downloadUrl': '/download/${Uri.encodeComponent(file.name)}',
+                },
+              )
+              .toList();
+
       request.response.headers.set('Content-Type', 'application/json');
       request.response.headers.set('Access-Control-Allow-Origin', '*');
       request.response.write(jsonEncode(filesList));
@@ -1494,14 +1628,15 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   String _formatBytes(int bytes) {
     if (bytes < 1024) return "$bytes B";
     if (bytes < 1024 * 1024) return "${(bytes / 1024).toStringAsFixed(1)} KB";
-    if (bytes < 1024 * 1024 * 1024) return "${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB";
+    if (bytes < 1024 * 1024 * 1024)
+      return "${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB";
     return "${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB";
   }
 
   String _formatTime(DateTime dateTime) {
     final now = DateTime.now();
     final difference = now.difference(dateTime);
-    
+
     if (difference.inDays > 0) {
       return '${difference.inDays}d ago';
     } else if (difference.inHours > 0) {
@@ -1520,26 +1655,24 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   void _showStorageInfo() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.grey[900],
-        title: Text(
-          'Storage Information',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: Text(
-          'Files are received and stored in app storage. Use the "Download" button to copy files to your Downloads folder.',
-          style: TextStyle(color: Colors.grey[300]),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(
-              'OK',
-              style: TextStyle(color: Colors.yellow[300]),
+      builder:
+          (context) => AlertDialog(
+            backgroundColor: Colors.grey[900],
+            title: Text(
+              'Storage Information',
+              style: TextStyle(color: Colors.white),
             ),
+            content: Text(
+              'Files are received and stored in app storage. Use the "Download" button to copy files to your Downloads folder.',
+              style: TextStyle(color: Colors.grey[300]),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text('OK', style: TextStyle(color: Colors.yellow[300])),
+              ),
+            ],
           ),
-        ],
-      ),
     );
   }
 
@@ -1548,12 +1681,13 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     try {
       final parts = ip.split('.');
       if (parts.length != 4) return '--------';
-      
-      final num = (int.parse(parts[0]) << 24) |
-                  (int.parse(parts[1]) << 16) |
-                  (int.parse(parts[2]) << 8) |
-                  int.parse(parts[3]);
-      
+
+      final num =
+          (int.parse(parts[0]) << 24) |
+          (int.parse(parts[1]) << 16) |
+          (int.parse(parts[2]) << 8) |
+          int.parse(parts[3]);
+
       return num.toRadixString(36).toUpperCase().padLeft(8, '0');
     } catch (e) {
       return '--------';
@@ -1567,6 +1701,106 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     _showSnackBar('URL copied to clipboard');
   }
 
+  Future<void> _showQrDialog() async {
+    if (_localIp == null) return;
+
+    final scheme = _useHttps ? 'https' : 'http';
+    final url = '$scheme://${_localIp}:8090';
+
+    try {
+      // Set high brightness
+      double originalBrightness = 0.5;
+      try {
+        originalBrightness = await ScreenBrightness().current;
+        await ScreenBrightness().setScreenBrightness(1.0);
+      } catch (e) {
+        print('Error setting brightness: $e');
+      }
+
+      if (!mounted) return;
+
+      await showDialog(
+        context: context,
+        builder:
+            (context) => Dialog(
+              backgroundColor: Colors.grey[900],
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: BorderSide(color: Colors.yellow[300]!, width: 2),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Scan to Connect',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Container(
+                      padding: EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.yellow[300],
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: QrImageView(
+                        data: url,
+                        version: QrVersions.auto,
+                        size: 240.0,
+                        backgroundColor: Colors.transparent,
+                        eyeStyle: QrEyeStyle(
+                          eyeShape: QrEyeShape.square,
+                          color: Colors.black,
+                        ),
+                        dataModuleStyle: QrDataModuleStyle(
+                          dataModuleShape: QrDataModuleShape.square,
+                          color: Colors.black,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      url,
+                      style: TextStyle(
+                        color: Colors.grey[400],
+                        fontSize: 14,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: Text(
+                        'Close',
+                        style: TextStyle(
+                          color: Colors.yellow[300],
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+      );
+
+      // Restore brightness
+      try {
+        await ScreenBrightness().setScreenBrightness(originalBrightness);
+      } catch (e) {
+        print('Error restoring brightness: $e');
+      }
+    } catch (e) {
+      print('Error showing QR dialog: $e');
+    }
+  }
+
   @override
   void dispose() {
     _uploadServer?.close(force: true);
@@ -1576,9 +1810,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
 
   @override
   Widget build(BuildContext context) {
-  final scheme = _useHttps ? 'https' : 'http';
-  final url = '$scheme://${_localIp ?? '0.0.0.0'}:8090';
-    
+    final scheme = _useHttps ? 'https' : 'http';
+    final url = '$scheme://${_localIp ?? '0.0.0.0'}:8090';
+
     return Scaffold(
       backgroundColor: Colors.black,
       resizeToAvoidBottomInset: false,
@@ -1591,7 +1825,11 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
               child: Row(
                 children: [
                   IconButton(
-                    icon: Icon(Icons.arrow_back_ios_rounded, color: Colors.white, size: 20),
+                    icon: Icon(
+                      Icons.arrow_back_ios_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
                     onPressed: () => Navigator.pop(context),
                   ),
                   Expanded(
@@ -1606,7 +1844,14 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                       textAlign: TextAlign.center,
                     ),
                   ),
-                  const SizedBox(width: 48), // Balance the back button
+                  IconButton(
+                    icon: Icon(
+                      Icons.qr_code_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                    onPressed: _showQrDialog,
+                  ),
                 ],
               ),
             ),
@@ -1618,16 +1863,16 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                 child: Column(
                   children: [
                     const SizedBox(height: 8),
-                    
+
                     // Server status section
                     _buildServerSection(url),
-                    
+
                     const SizedBox(height: 12),
-                    
+
                     // Swipe tabs for files
                     _buildSwipeTabs(),
                     const SizedBox(height: 12),
-                    
+
                     // Content area with swipe
                     Expanded(
                       child: PageView(
@@ -1658,11 +1903,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.file_upload,
-            color: Colors.grey[600],
-            size: 48,
-          ),
+          Icon(Icons.file_upload, color: Colors.grey[600], size: 48),
           const SizedBox(height: 16),
           Text(
             'No files received yet',
@@ -1675,10 +1916,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
           const SizedBox(height: 8),
           Text(
             'Files uploaded through the web interface\nwill appear here',
-            style: TextStyle(
-              color: Colors.grey[600],
-              fontSize: 14,
-            ),
+            style: TextStyle(color: Colors.grey[600], fontSize: 14),
             textAlign: TextAlign.center,
           ),
         ],
@@ -1724,7 +1962,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        _isHosting ? 'Web Server Running' : 'Web Server Stopped',
+                        _isHosting
+                            ? 'Web Server Running'
+                            : 'Web Server Stopped',
                         style: TextStyle(
                           color: _isHosting ? Colors.yellow[300] : Colors.red,
                           fontSize: 16,
@@ -1735,9 +1975,14 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                     ElevatedButton(
                       onPressed: _isHosting ? _stopWebServer : _startWebServer,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _isHosting ? Colors.red : Colors.yellow[300],
-                        foregroundColor: _isHosting ? Colors.white : Colors.black,
-                        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        backgroundColor:
+                            _isHosting ? Colors.red : Colors.yellow[300],
+                        foregroundColor:
+                            _isHosting ? Colors.white : Colors.black,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
                         minimumSize: Size(0, 32),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
@@ -1745,7 +1990,10 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                       ),
                       child: Text(
                         _isHosting ? 'Stop' : 'Start',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],
@@ -1755,7 +2003,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                   // 8-Digit Code Display - Compact & Tappable
                   GestureDetector(
                     onTap: () {
-                      Clipboard.setData(ClipboardData(text: _ipToCode(_localIp)));
+                      Clipboard.setData(
+                        ClipboardData(text: _ipToCode(_localIp)),
+                      );
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text('Code copied to clipboard!'),
@@ -1766,11 +2016,17 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                     },
                     child: Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.grey[850],
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.yellow[300]!, width: 1.5),
+                        border: Border.all(
+                          color: Colors.yellow[300]!,
+                          width: 1.5,
+                        ),
                       ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -1786,11 +2042,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                             ),
                           ),
                           const SizedBox(width: 8),
-                          Icon(
-                            Icons.copy,
-                            color: Colors.yellow[300],
-                            size: 16,
-                          ),
+                          Icon(Icons.copy, color: Colors.yellow[300], size: 16),
                         ],
                       ),
                     ),
@@ -1808,11 +2060,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                       ),
                       child: Row(
                         children: [
-                          Icon(
-                            Icons.link,
-                            color: Colors.yellow[300],
-                            size: 16,
-                          ),
+                          Icon(Icons.link, color: Colors.yellow[300], size: 16),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -1825,11 +2073,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                               ),
                             ),
                           ),
-                          Icon(
-                            Icons.copy,
-                            color: Colors.grey[400],
-                            size: 14,
-                          ),
+                          Icon(Icons.copy, color: Colors.grey[400], size: 14),
                         ],
                       ),
                     ),
@@ -1837,23 +2081,16 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                   const SizedBox(height: 8),
                   Text(
                     'Share this URL with others to let them upload files',
-                    style: TextStyle(
-                      color: Colors.grey[400],
-                      fontSize: 12,
-                    ),
+                    style: TextStyle(color: Colors.grey[400], fontSize: 12),
                     textAlign: TextAlign.center,
                   ),
                 ],
-                
+
                 // Save Location
                 const SizedBox(height: 16),
                 Row(
                   children: [
-                    Icon(
-                      Icons.folder,
-                      color: Colors.yellow[300],
-                      size: 16,
-                    ),
+                    Icon(Icons.folder, color: Colors.yellow[300], size: 16),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Column(
@@ -1868,7 +2105,8 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                             ),
                           ),
                           Text(
-                            _customSaveFolder != null && _customSaveFolder!.isNotEmpty
+                            _customSaveFolder != null &&
+                                    _customSaveFolder!.isNotEmpty
                                 ? _customSaveFolder!
                                 : 'Download/ZapShare',
                             style: TextStyle(
@@ -1887,13 +2125,24 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                         minimumSize: Size(28, 28),
                         padding: EdgeInsets.all(4),
                       ),
-                      icon: Icon(Icons.create_new_folder_outlined, color: Colors.yellow[300], size: 18),
+                      icon: Icon(
+                        Icons.create_new_folder_outlined,
+                        color: Colors.yellow[300],
+                        size: 18,
+                      ),
                     ),
                     IconButton(
                       onPressed: () => _showStorageInfo(),
-                      style: IconButton.styleFrom(minimumSize: Size(28, 28), padding: EdgeInsets.all(4)),
-                      icon: Icon(Icons.info_outline, color: Colors.grey[400], size: 16),
-                    )
+                      style: IconButton.styleFrom(
+                        minimumSize: Size(28, 28),
+                        padding: EdgeInsets.all(4),
+                      ),
+                      icon: Icon(
+                        Icons.info_outline,
+                        color: Colors.grey[400],
+                        size: 16,
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -1908,7 +2157,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   Widget _buildSwipeTabs() {
     final screenWidth = MediaQuery.of(context).size.width;
     final isCompact = screenWidth < 400;
-    
+
     return Container(
       height: isCompact ? 44 : 48,
       decoration: BoxDecoration(
@@ -1922,7 +2171,10 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
           AnimatedPositioned(
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeInOut,
-            left: _currentTab == 0 ? 4 : MediaQuery.of(context).size.width / 2 - 20,
+            left:
+                _currentTab == 0
+                    ? 4
+                    : MediaQuery.of(context).size.width / 2 - 20,
             top: 4,
             bottom: 4,
             child: Container(
@@ -1947,9 +2199,11 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
               Expanded(
                 child: GestureDetector(
                   onTap: () {
-                    _pageController.animateToPage(0, 
-                      duration: const Duration(milliseconds: 300), 
-                      curve: Curves.easeInOut);
+                    _pageController.animateToPage(
+                      0,
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOut,
+                    );
                   },
                   child: Container(
                     child: Center(
@@ -1958,14 +2212,20 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                         children: [
                           Icon(
                             Icons.wifi_tethering,
-                            color: _currentTab == 0 ? Colors.black : Colors.grey[400],
+                            color:
+                                _currentTab == 0
+                                    ? Colors.black
+                                    : Colors.grey[400],
                             size: 18,
                           ),
                           const SizedBox(width: 6),
                           Text(
                             isCompact ? 'Available' : 'Available',
                             style: TextStyle(
-                              color: _currentTab == 0 ? Colors.black : Colors.grey[400],
+                              color:
+                                  _currentTab == 0
+                                      ? Colors.black
+                                      : Colors.grey[400],
                               fontSize: isCompact ? 13 : 14,
                               fontWeight: FontWeight.w600,
                             ),
@@ -1980,9 +2240,11 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
               Expanded(
                 child: GestureDetector(
                   onTap: () {
-                    _pageController.animateToPage(1, 
-                      duration: const Duration(milliseconds: 300), 
-                      curve: Curves.easeInOut);
+                    _pageController.animateToPage(
+                      1,
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOut,
+                    );
                   },
                   child: Container(
                     child: Center(
@@ -1991,16 +2253,22 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                         children: [
                           Icon(
                             Icons.check_circle_outline,
-                            color: _currentTab == 1 ? Colors.black : Colors.grey[400],
+                            color:
+                                _currentTab == 1
+                                    ? Colors.black
+                                    : Colors.grey[400],
                             size: 18,
                           ),
                           const SizedBox(width: 6),
                           Text(
-                            isCompact 
+                            isCompact
                                 ? 'Pending (${_pendingFiles.length})'
                                 : 'Received (${_receivedFiles.length + _ongoingDownloads.length})',
                             style: TextStyle(
-                              color: _currentTab == 1 ? Colors.black : Colors.grey[400],
+                              color:
+                                  _currentTab == 1
+                                      ? Colors.black
+                                      : Colors.grey[400],
                               fontSize: isCompact ? 13 : 14,
                               fontWeight: FontWeight.w600,
                             ),
@@ -2071,7 +2339,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                   ],
                   if (_pendingFiles.isNotEmpty) ...[
                     // Download selected files button
-                    if (_pendingFiles.any((f) => f.isSelected)) 
+                    if (_pendingFiles.any((f) => f.isSelected))
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: SizedBox(
@@ -2088,7 +2356,10 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                             ),
                             child: Text(
                               'Download Selected Files (${_pendingFiles.where((f) => f.isSelected).length})',
-                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         ),
@@ -2098,7 +2369,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
               ],
             ),
           ),
-          
+
           // Ongoing transfers summary with progress (Android UI)
           if (_ongoingDownloads.isNotEmpty)
             Container(
@@ -2109,17 +2380,25 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.downloading, color: Colors.yellow[300], size: 18),
+                      Icon(
+                        Icons.downloading,
+                        color: Colors.yellow[300],
+                        size: 18,
+                      ),
                       const SizedBox(width: 8),
                       Text(
                         'Receiving ${_ongoingDownloads.length} file(s)...',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 8),
                   ..._ongoingDownloads.values.map((file) {
-                    final progressPercent = (file.progress * 100).clamp(0, 100).toInt();
+                    final progressPercent =
+                        (file.progress * 100).clamp(0, 100).toInt();
                     return Container(
                       margin: const EdgeInsets.only(bottom: 8),
                       padding: const EdgeInsets.all(10),
@@ -2138,13 +2417,21 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                                   file.name,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
                               ),
                               const SizedBox(width: 8),
                               Text(
                                 '${progressPercent}%',
-                                style: TextStyle(color: Colors.yellow[300], fontSize: 12, fontWeight: FontWeight.w600),
+                                style: TextStyle(
+                                  color: Colors.yellow[300],
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ],
                           ),
@@ -2169,7 +2456,10 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                           const SizedBox(height: 4),
                           Text(
                             file.status,
-                            style: TextStyle(color: Colors.grey[400], fontSize: 11),
+                            style: TextStyle(
+                              color: Colors.grey[400],
+                              fontSize: 11,
+                            ),
                           ),
                         ],
                       ),
@@ -2180,10 +2470,13 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
             ),
 
           // Files list - show pending files
-          if (_isHosting && _pendingFiles.isNotEmpty) 
+          if (_isHosting && _pendingFiles.isNotEmpty)
             Expanded(
               child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 itemCount: _pendingFiles.length,
                 itemBuilder: (context, index) {
                   final file = _pendingFiles[index];
@@ -2191,18 +2484,14 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                 },
               ),
             ),
-            
+
           if (!_isHosting)
             Expanded(
               child: Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(
-                      Icons.cloud_off,
-                      color: Colors.grey[600],
-                      size: 64,
-                    ),
+                    Icon(Icons.cloud_off, color: Colors.grey[600], size: 64),
                     const SizedBox(height: 16),
                     Text(
                       'Server Stopped',
@@ -2215,10 +2504,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                     const SizedBox(height: 8),
                     Text(
                       'Start the server to begin receiving files',
-                      style: TextStyle(
-                        color: Colors.grey[400],
-                        fontSize: 14,
-                      ),
+                      style: TextStyle(color: Colors.grey[400], fontSize: 14),
                       textAlign: TextAlign.center,
                     ),
                   ],
@@ -2234,7 +2520,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   Widget _buildPendingFileItem(PendingFile file, int index) {
     final screenWidth = MediaQuery.of(context).size.width;
     final isCompact = screenWidth < 400;
-    
+
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 3),
       padding: EdgeInsets.all(isCompact ? 10 : 12),
@@ -2242,7 +2528,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         color: file.isSelected ? Colors.grey[800] : Colors.grey[850],
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: file.isSelected ? Colors.yellow[300]! : Colors.grey[700]!, 
+          color: file.isSelected ? Colors.yellow[300]! : Colors.grey[700]!,
           width: file.isSelected ? 2 : 1,
         ),
       ),
@@ -2260,7 +2546,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
             checkColor: Colors.black,
           ),
           const SizedBox(width: 8),
-          
+
           // File type icon
           Container(
             padding: const EdgeInsets.all(8),
@@ -2275,7 +2561,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
             ),
           ),
           const SizedBox(width: 12),
-          
+
           // File info
           Expanded(
             child: Column(
@@ -2302,15 +2588,11 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
               ],
             ),
           ),
-          
+
           // Remove button
           IconButton(
             onPressed: () => _removePendingFile(index),
-            icon: Icon(
-              Icons.delete_outline,
-              color: Colors.red[400],
-              size: 20,
-            ),
+            icon: Icon(Icons.delete_outline, color: Colors.red[400], size: 20),
             tooltip: 'Remove file',
           ),
         ],
@@ -2324,7 +2606,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     if (selectedFiles.isEmpty) return;
 
     await _ensureSaveFolder();
-    
+
     for (final pendingFile in selectedFiles) {
       await _requestFileFromBrowser(pendingFile);
     }
@@ -2348,14 +2630,16 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
 
       // Register file request - browser will poll and send file when detected
       final requestData = jsonEncode({'fileName': pendingFile.name});
-      final response = await HttpClient().postUrl(Uri.parse('http://localhost:8090/request-file'))
-        ..headers.contentType = ContentType.json
-        ..write(requestData);
-      
+      final response =
+          await HttpClient().postUrl(
+              Uri.parse('http://localhost:8090/request-file'),
+            )
+            ..headers.contentType = ContentType.json
+            ..write(requestData);
+
       await response.close();
-      
+
       _showSnackBar('Requesting ${pendingFile.name} from browser...');
-      
     } catch (e) {
       setState(() {
         _ongoingDownloads.remove(pendingFile.id);
@@ -2367,14 +2651,13 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   // Remove pending file
   void _removePendingFile(int index) {
     final file = _pendingFiles[index];
-    
+
     setState(() {
       _pendingFiles.removeAt(index);
     });
-    
+
     _showSnackBar('${file.name} removed');
   }
-
 
   // Received files content matching AndroidReceiveScreen style
   Widget _buildReceivedFilesContent() {
@@ -2383,7 +2666,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       ..._ongoingDownloads.values.toList(),
       ..._receivedFiles,
     ];
-    
+
     if (allFiles.isEmpty) {
       return Container(
         margin: const EdgeInsets.all(8),
@@ -2419,7 +2702,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     final fileType = _getFileType(file.name);
     final screenWidth = MediaQuery.of(context).size.width;
     final isCompact = screenWidth < 400;
-    
+
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 3),
       padding: EdgeInsets.all(isCompact ? 10 : 12),
@@ -2445,7 +2728,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
             ),
           ),
           SizedBox(width: isCompact ? 10 : 12),
-          
+
           // File info
           Expanded(
             child: Column(
@@ -2548,13 +2831,16 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
               ],
             ),
           ),
-          
+
           // Open button (only show for completed files)
           if (!file.isUploading)
             GestureDetector(
               onTap: () => _openFile(file),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.yellow[300],
                   borderRadius: BorderRadius.circular(6),
@@ -2582,7 +2868,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                 height: 16,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.yellow[300]!),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    Colors.yellow[300]!,
+                  ),
                 ),
               ),
             ),
@@ -2594,12 +2882,45 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   // Get file type category (matching AndroidReceiveScreen)
   FileType _getFileType(String fileName) {
     final ext = fileName.split('.').last.toLowerCase();
-    
-    if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'ico', 'tiff', 'tif', 'heic', 'heif', 'avif', 'jxl'].contains(ext)) {
+
+    if ([
+      'jpg',
+      'jpeg',
+      'png',
+      'gif',
+      'bmp',
+      'webp',
+      'svg',
+      'ico',
+      'tiff',
+      'tif',
+      'heic',
+      'heif',
+      'avif',
+      'jxl',
+    ].contains(ext)) {
       return FileType.image;
-    } else if (['mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm', 'm4v', '3gp'].contains(ext)) {
+    } else if ([
+      'mp4',
+      'mov',
+      'avi',
+      'mkv',
+      'wmv',
+      'flv',
+      'webm',
+      'm4v',
+      '3gp',
+    ].contains(ext)) {
       return FileType.video;
-    } else if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'].contains(ext)) {
+    } else if ([
+      'mp3',
+      'wav',
+      'flac',
+      'aac',
+      'ogg',
+      'm4a',
+      'wma',
+    ].contains(ext)) {
       return FileType.audio;
     } else if (['pdf'].contains(ext)) {
       return FileType.pdf;

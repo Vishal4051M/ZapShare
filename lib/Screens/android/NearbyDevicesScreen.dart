@@ -10,7 +10,8 @@ class NearbyDevicesScreen extends StatefulWidget {
   State<NearbyDevicesScreen> createState() => _NearbyDevicesScreenState();
 }
 
-class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTickerProviderStateMixin {
+class _NearbyDevicesScreenState extends State<NearbyDevicesScreen>
+    with SingleTickerProviderStateMixin {
   final DeviceDiscoveryService _discoveryService = DeviceDiscoveryService();
   List<DiscoveredDevice> _devices = [];
   bool _isScanning = false;
@@ -24,13 +25,13 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat();
-    
+
     _initializeDiscovery();
   }
 
   Future<void> _initializeDiscovery() async {
     await _discoveryService.initialize();
-    
+
     _devicesSubscription = _discoveryService.devicesStream.listen((devices) {
       if (mounted) {
         setState(() {
@@ -38,7 +39,7 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
         });
       }
     });
-    
+
     await _startScanning();
   }
 
@@ -97,6 +98,47 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
     Navigator.pop(context, device);
   }
 
+  Future<void> _requestFilesFromDevice(DiscoveredDevice device) async {
+    print(
+      '📤 [NearbyDevices] Sending connection request to ${device.deviceName} at ${device.ipAddress}',
+    );
+
+    // Send a connection request to the device asking them to share files
+    // This will trigger a dialog on the receiver's device
+    await _discoveryService.sendConnectionRequest(device.ipAddress, [
+      'File transfer request',
+    ], 1024); // 1KB placeholder
+
+    print('✅ [NearbyDevices] Connection request sent successfully');
+
+    // Show confirmation
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.send, color: Colors.white, size: 20),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Request sent to ${device.deviceName}',
+                  style: TextStyle(fontSize: 14),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: Colors.green[700],
+          duration: Duration(seconds: 2),
+          action: SnackBarAction(
+            label: 'OK',
+            textColor: Colors.white,
+            onPressed: () {},
+          ),
+        ),
+      );
+    }
+  }
+
   void _copyShareCode(DiscoveredDevice device) {
     Clipboard.setData(ClipboardData(text: device.shareCode));
     print('Share code copied: ${device.shareCode}');
@@ -149,7 +191,11 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
                 children: [
                   RotationTransition(
                     turns: _scanAnimationController,
-                    child: Icon(Icons.radar, color: Colors.yellow[300], size: 20),
+                    child: Icon(
+                      Icons.radar,
+                      color: Colors.yellow[300],
+                      size: 20,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Text(
@@ -185,16 +231,20 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
 
           // Devices list
           Expanded(
-            child: _devices.isEmpty
-                ? _buildEmptyState()
-                : ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                    itemCount: _devices.length,
-                    itemBuilder: (context, index) {
-                      final device = _devices[index];
-                      return _buildDeviceCard(device);
-                    },
-                  ),
+            child:
+                _devices.isEmpty
+                    ? _buildEmptyState()
+                    : ListView.builder(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 8,
+                      ),
+                      itemCount: _devices.length,
+                      itemBuilder: (context, index) {
+                        final device = _devices[index];
+                        return _buildDeviceCard(device);
+                      },
+                    ),
           ),
         ],
       ),
@@ -206,14 +256,12 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.search_off,
-            size: 80,
-            color: Colors.grey[800],
-          ),
+          Icon(Icons.search_off, size: 80, color: Colors.grey[800]),
           const SizedBox(height: 16),
           Text(
-            _isScanning ? 'No devices found yet' : 'Start scanning to find devices',
+            _isScanning
+                ? 'No devices found yet'
+                : 'Start scanning to find devices',
             style: TextStyle(
               color: Colors.grey[400],
               fontSize: 18,
@@ -225,10 +273,7 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
             _isScanning
                 ? 'Make sure ZapShare is open on other devices'
                 : 'Tap the refresh button to scan',
-            style: TextStyle(
-              color: Colors.grey[600],
-              fontSize: 14,
-            ),
+            style: TextStyle(color: Colors.grey[600], fontSize: 14),
             textAlign: TextAlign.center,
           ),
           if (!_isScanning) ...[
@@ -240,7 +285,10 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.yellow[300],
                 foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -262,20 +310,22 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
         color: Colors.grey[900],
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: device.isFavorite
-              ? Colors.yellow[300]!.withOpacity(0.5)
-              : Colors.grey[800]!,
+          color:
+              device.isFavorite
+                  ? Colors.yellow[300]!.withOpacity(0.5)
+                  : Colors.grey[800]!,
           width: 1.5,
         ),
-        boxShadow: device.isFavorite
-            ? [
-                BoxShadow(
-                  color: Colors.yellow[300]!.withOpacity(0.1),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                )
-              ]
-            : null,
+        boxShadow:
+            device.isFavorite
+                ? [
+                  BoxShadow(
+                    color: Colors.yellow[300]!.withOpacity(0.1),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+                : null,
       ),
       child: Material(
         color: Colors.transparent,
@@ -311,7 +361,10 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
                         decoration: BoxDecoration(
                           color: isOnline ? Colors.green : Colors.grey[700],
                           shape: BoxShape.circle,
-                          border: Border.all(color: Colors.grey[900]!, width: 2),
+                          border: Border.all(
+                            color: Colors.grey[900]!,
+                            width: 2,
+                          ),
                         ),
                       ),
                     ),
@@ -350,10 +403,7 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
                       const SizedBox(height: 4),
                       Text(
                         device.platform,
-                        style: TextStyle(
-                          color: Colors.grey[400],
-                          fontSize: 13,
-                        ),
+                        style: TextStyle(color: Colors.grey[400], fontSize: 13),
                       ),
                       const SizedBox(height: 2),
                       Row(
@@ -385,12 +435,18 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
                     IconButton(
                       icon: Icon(
                         device.isFavorite ? Icons.star : Icons.star_border,
-                        color: device.isFavorite ? Colors.yellow[300] : Colors.grey[600],
+                        color:
+                            device.isFavorite
+                                ? Colors.yellow[300]
+                                : Colors.grey[600],
                       ),
                       onPressed: () {
                         _discoveryService.toggleFavorite(device.deviceId);
                       },
-                      tooltip: device.isFavorite ? 'Remove from favorites' : 'Add to favorites',
+                      tooltip:
+                          device.isFavorite
+                              ? 'Remove from favorites'
+                              : 'Add to favorites',
                     ),
                     // More options
                     PopupMenuButton<String>(
@@ -399,33 +455,66 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen> with SingleTi
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      itemBuilder: (context) => [
-                        PopupMenuItem(
-                          value: 'copy_code',
-                          child: Row(
-                            children: [
-                              Icon(Icons.copy, size: 18, color: Colors.grey[400]),
-                              const SizedBox(width: 12),
-                              const Text('Copy Share Code'),
-                            ],
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'connect',
-                          enabled: isOnline,
-                          child: Row(
-                            children: [
-                              Icon(Icons.send, size: 18, color: isOnline ? Colors.yellow[300] : Colors.grey[600]),
-                              const SizedBox(width: 12),
-                              const Text('Send Files'),
-                            ],
-                          ),
-                        ),
-                      ],
+                      itemBuilder:
+                          (context) => [
+                            PopupMenuItem(
+                              value: 'copy_code',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.copy,
+                                    size: 18,
+                                    color: Colors.grey[400],
+                                  ),
+                                  const SizedBox(width: 12),
+                                  const Text('Copy Share Code'),
+                                ],
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'request_files',
+                              enabled: isOnline,
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.download_rounded,
+                                    size: 18,
+                                    color:
+                                        isOnline
+                                            ? Colors.green[300]
+                                            : Colors.grey[600],
+                                  ),
+                                  const SizedBox(width: 12),
+                                  const Text('Request Files'),
+                                ],
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'connect',
+                              enabled: isOnline,
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.send,
+                                    size: 18,
+                                    color:
+                                        isOnline
+                                            ? Colors.yellow[300]
+                                            : Colors.grey[600],
+                                  ),
+                                  const SizedBox(width: 12),
+                                  const Text('Send Files'),
+                                ],
+                              ),
+                            ),
+                          ],
                       onSelected: (value) {
                         switch (value) {
                           case 'copy_code':
                             _copyShareCode(device);
+                            break;
+                          case 'request_files':
+                            if (isOnline) _requestFilesFromDevice(device);
                             break;
                           case 'connect':
                             if (isOnline) _connectToDevice(device);

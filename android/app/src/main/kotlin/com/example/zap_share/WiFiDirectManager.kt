@@ -1,0 +1,449 @@
+package com.example.zap_share
+
+import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.net.NetworkInfo
+import android.net.wifi.p2p.WifiP2pConfig
+import android.net.wifi.p2p.WifiP2pDevice
+import android.net.wifi.p2p.WifiP2pDeviceList
+import android.net.wifi.p2p.WifiP2pGroup
+import android.net.wifi.p2p.WifiP2pInfo
+import android.net.wifi.p2p.WifiP2pManager
+import android.os.Build
+import android.os.Looper
+import android.util.Log
+import io.flutter.plugin.common.MethodChannel
+import java.lang.reflect.Method
+
+/**
+ * Wi-Fi Direct Manager for ZapShare
+ * 
+ * Implements Quick Share-like behavior:
+ * - Temporary P2P group
+ * - NO persistent (saved) group
+ * - NO group shown in Wi-Fi Direct settings
+ * - NO remembered Group Owner
+ * - GO must be recalculated every session
+ * - Using ONLY public WifiP2pManager.connect() and reflection for hidden APIs.
+ */
+class WiFiDirectManager(
+    private val context: Context,
+    private val methodChannel: MethodChannel
+) {
+    companion object {
+        private const val TAG = "WiFiDirectManager"
+    }
+
+    private var wifiP2pManager: WifiP2pManager? = null
+    private var channel: WifiP2pManager.Channel? = null
+    private var receiver: BroadcastReceiver? = null
+    private val intentFilter = IntentFilter()
+
+    private var isInitialized = false
+    private var isWifiP2pEnabled = false
+    private var currentGroup: WifiP2pGroup? = null
+    private val discoveredPeers = mutableListOf<WifiP2pDevice>()
+
+    init {
+        // Set up intent filter for Wi-Fi P2P broadcasts
+        intentFilter.apply {
+            addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION)
+            addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
+            addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
+            addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION)
+        }
+    }
+
+    /**
+     * Initialize Wi-Fi Direct manager
+     */
+    fun initialize(): Boolean {
+        try {
+            Log.d(TAG, "Initializing Wi-Fi Direct manager...")
+
+            wifiP2pManager = context.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
+            if (wifiP2pManager == null) {
+                Log.e(TAG, "Wi-Fi P2P not supported on this device")
+                return false
+            }
+
+            channel = wifiP2pManager?.initialize(context, Looper.getMainLooper(), null)
+            if (channel == null) {
+                Log.e(TAG, "Failed to initialize Wi-Fi P2P channel")
+                return false
+            }
+
+            // Register broadcast receiver
+            receiver = WiFiDirectBroadcastReceiver()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(receiver, intentFilter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(receiver, intentFilter)
+            }
+
+            // CRITICAL: Clear any existing persistent groups on startup
+            deletePersistentGroups()
+
+            isInitialized = true
+            Log.d(TAG, "Wi-Fi Direct manager initialized successfully")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error initializing Wi-Fi Direct manager", e)
+            return false
+        }
+    }
+
+    /**
+     * Delete all persistent Wi-Fi Direct groups using reflection.
+     * This is CRITICAL for Quick Share-like behavior (no saved groups).
+     * Iterates through netId 0..31 to ensure all possible groups are removed.
+     */
+    private fun deletePersistentGroups() {
+        if (wifiP2pManager == null || channel == null) return
+
+        try {
+            val methods: Array<Method> = WifiP2pManager::class.java.methods
+            for (method in methods) {
+                if (method.name == "deletePersistentGroup") {
+                    Log.d(TAG, "Found deletePersistentGroup method, invoking for netId 0..31")
+                    for (netId in 0..31) {
+                        method.invoke(wifiP2pManager, channel, netId, object : WifiP2pManager.ActionListener {
+                            override fun onSuccess() {
+                                // Log.v(TAG, "Deleted persistent group $netId")
+                            }
+                            override fun onFailure(reason: Int) {
+                                // Log.v(TAG, "Failed to delete persistent group $netId: $reason")
+                            }
+                        })
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error deleting persistent groups via reflection", e)
+        }
+    }
+
+    /**
+     * Start discovering Wi-Fi Direct peers
+     */
+    @SuppressLint("MissingPermission")
+    fun startPeerDiscovery(): Boolean {
+        if (!isInitialized || wifiP2pManager == null || channel == null) {
+            Log.e(TAG, "Wi-Fi Direct not initialized")
+            return false
+        }
+
+        try {
+            Log.d(TAG, "Starting peer discovery...")
+            wifiP2pManager?.discoverPeers(channel, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    Log.d(TAG, "Peer discovery initiated successfully")
+                }
+
+                override fun onFailure(reason: Int) {
+                    Log.e(TAG, "Failed to start peer discovery. Reason: ${getFailureReason(reason)}")
+                }
+            })
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting peer discovery", e)
+            return false
+        }
+    }
+
+    /**
+     * Stop discovering Wi-Fi Direct peers
+     */
+    @SuppressLint("MissingPermission")
+    fun stopPeerDiscovery(): Boolean {
+        if (!isInitialized || wifiP2pManager == null || channel == null) return false
+
+        try {
+            Log.d(TAG, "Stopping peer discovery...")
+            wifiP2pManager?.stopPeerDiscovery(channel, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    Log.d(TAG, "Peer discovery stopped successfully")
+                }
+                override fun onFailure(reason: Int) {
+                    Log.e(TAG, "Failed to stop peer discovery. Reason: ${getFailureReason(reason)}")
+                }
+            })
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping peer discovery", e)
+            return false
+        }
+    }
+
+    /**
+     * Connect to a Wi-Fi Direct peer using non-persistent group logic.
+     * 
+     * 1. Deletes all persistent groups first.
+     * 2. Connects with appropriate Group Owner intent.
+     */
+    @SuppressLint("MissingPermission")
+    fun connectToPeer(deviceAddress: String, isGroupOwner: Boolean = true): Boolean {
+        if (!isInitialized || wifiP2pManager == null || channel == null) {
+            Log.e(TAG, "Wi-Fi Direct not initialized")
+            return false
+        }
+
+        try {
+            // CRITICAL: Delete persistent groups BEFORE connecting to ensure clean slate
+            deletePersistentGroups()
+
+            Log.d(TAG, "Connecting to peer: $deviceAddress (as ${if (isGroupOwner) "Group Owner" else "Client"})")
+
+            val config = WifiP2pConfig().apply {
+                this.deviceAddress = deviceAddress
+                // Set group owner intent (0-15)
+                // 15 = strongly prefer to be group owner
+                // 0 = prefer to be client
+                this.groupOwnerIntent = if (isGroupOwner) 15 else 0
+            }
+
+            wifiP2pManager?.connect(channel, config, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    Log.d(TAG, "Connection initiated successfully to $deviceAddress")
+                }
+
+                override fun onFailure(reason: Int) {
+                    Log.e(TAG, "Failed to connect to peer. Reason: ${getFailureReason(reason)}")
+                    methodChannel.invokeMethod("onConnectionFailed", mapOf(
+                        "deviceAddress" to deviceAddress,
+                        "reason" to getFailureReason(reason)
+                    ))
+                }
+            })
+
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error connecting to peer", e)
+            return false
+        }
+    }
+
+    /**
+     * Remove the current Wi-Fi Direct group and clean up persistent groups.
+     */
+    @SuppressLint("MissingPermission")
+    fun removeGroup(): Boolean {
+        if (!isInitialized || wifiP2pManager == null || channel == null) return false
+
+        try {
+            Log.d(TAG, "Removing Wi-Fi Direct group...")
+            wifiP2pManager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    Log.d(TAG, "Group removed successfully")
+                    currentGroup = null
+                    methodChannel.invokeMethod("onGroupRemoved", null)
+                    
+                    // CRITICAL: Delete persistent groups AFTER removing group
+                    deletePersistentGroups()
+                }
+
+                override fun onFailure(reason: Int) {
+                    Log.e(TAG, "Failed to remove group. Reason: ${getFailureReason(reason)}")
+                }
+            })
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error removing Wi-Fi Direct group", e)
+            return false
+        }
+    }
+
+    /**
+     * Disconnect from current Wi-Fi Direct connection
+     */
+    @SuppressLint("MissingPermission")
+    fun disconnect(): Boolean {
+        if (!isInitialized || wifiP2pManager == null || channel == null) return false
+
+        try {
+            Log.d(TAG, "Disconnecting from Wi-Fi Direct...")
+
+            wifiP2pManager?.cancelConnect(channel, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    Log.d(TAG, "Connect cancelled successfully")
+                }
+                override fun onFailure(reason: Int) {
+                    Log.d(TAG, "Failed to cancel connect: ${getFailureReason(reason)}")
+                }
+            })
+
+            // Also remove group
+            removeGroup()
+
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error disconnecting", e)
+            return false
+        }
+    }
+
+    /**
+     * Request group info (SSID, password, etc.)
+     */
+    @SuppressLint("MissingPermission")
+    fun requestGroupInfo(): Map<String, Any>? {
+        if (!isInitialized || wifiP2pManager == null || channel == null) return null
+
+        try {
+            Log.d(TAG, "Requesting group info...")
+            wifiP2pManager?.requestGroupInfo(channel) { group ->
+                if (group != null) {
+                    currentGroup = group
+                    val groupInfo = extractGroupInfo(group)
+                    
+                    Log.d(TAG, "Group info received: SSID=${groupInfo["ssid"]}, IsGO=${groupInfo["isGroupOwner"]}")
+                    methodChannel.invokeMethod("onGroupInfoAvailable", groupInfo)
+                } else {
+                    Log.w(TAG, "No group info available")
+                }
+            }
+            return null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error requesting group info", e)
+            return null
+        }
+    }
+
+    /**
+     * Get list of discovered peers
+     */
+    fun getDiscoveredPeers(): List<Map<String, Any>> {
+        return discoveredPeers.map { device ->
+            mapOf(
+                "deviceName" to (device.deviceName ?: "Unknown Device"),
+                "deviceAddress" to device.deviceAddress,
+                "status" to device.status,
+                "isGroupOwner" to (device.status == WifiP2pDevice.CONNECTED),
+                "primaryDeviceType" to (device.primaryDeviceType ?: ""),
+                "secondaryDeviceType" to (device.secondaryDeviceType ?: "")
+            )
+        }
+    }
+
+    fun isWifiP2pEnabled(): Boolean = isWifiP2pEnabled
+
+    /**
+     * Cleanup resources
+     */
+    fun cleanup() {
+        try {
+            stopPeerDiscovery()
+            disconnect()
+            deletePersistentGroups() // Final cleanup
+            
+            receiver?.let {
+                context.unregisterReceiver(it)
+            }
+            receiver = null
+            
+            channel = null
+            wifiP2pManager = null
+            isInitialized = false
+            discoveredPeers.clear()
+            
+            Log.d(TAG, "Wi-Fi Direct manager cleaned up")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during cleanup", e)
+        }
+    }
+
+    private fun extractGroupInfo(group: WifiP2pGroup): Map<String, Any> {
+        return mapOf(
+            "ssid" to (group.networkName ?: ""),
+            "password" to (group.passphrase ?: ""),
+            "ownerAddress" to (group.owner?.deviceAddress ?: ""),
+            "isGroupOwner" to group.isGroupOwner,
+            "networkId" to group.networkId,
+            "interface" to (group.`interface` ?: "")
+        )
+    }
+
+    private fun getFailureReason(reason: Int): String {
+        return when (reason) {
+            WifiP2pManager.ERROR -> "ERROR"
+            WifiP2pManager.P2P_UNSUPPORTED -> "P2P_UNSUPPORTED"
+            WifiP2pManager.BUSY -> "BUSY"
+            else -> "UNKNOWN ($reason)"
+        }
+    }
+
+    /**
+     * Broadcast receiver for Wi-Fi P2P events
+     */
+    private inner class WiFiDirectBroadcastReceiver : BroadcastReceiver() {
+        @SuppressLint("MissingPermission")
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION -> {
+                    val state = intent.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1)
+                    isWifiP2pEnabled = state == WifiP2pManager.WIFI_P2P_STATE_ENABLED
+                    Log.d(TAG, "Wi-Fi P2P state changed: ${if (isWifiP2pEnabled) "ENABLED" else "DISABLED"}")
+                    
+                    methodChannel.invokeMethod("onWifiP2pStateChanged", mapOf(
+                        "enabled" to isWifiP2pEnabled
+                    ))
+                }
+
+                WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> {
+                    Log.d(TAG, "Wi-Fi P2P peers changed")
+                    wifiP2pManager?.requestPeers(channel) { peerList ->
+                        discoveredPeers.clear()
+                        discoveredPeers.addAll(peerList.deviceList)
+                        
+                        Log.d(TAG, "Discovered ${discoveredPeers.size} peers")
+                        methodChannel.invokeMethod("onPeersDiscovered", mapOf(
+                            "peers" to getDiscoveredPeers()
+                        ))
+                    }
+                }
+
+                WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
+                    Log.d(TAG, "Wi-Fi P2P connection changed")
+                    val networkInfo = intent.getParcelableExtra<NetworkInfo>(WifiP2pManager.EXTRA_NETWORK_INFO)
+                    
+                    if (networkInfo?.isConnected == true) {
+                        Log.d(TAG, "Device connected to Wi-Fi P2P group")
+                        wifiP2pManager?.requestConnectionInfo(channel) { info ->
+                            if (info != null) {
+                                val connectionInfo = mapOf(
+                                    "groupFormed" to info.groupFormed,
+                                    "isGroupOwner" to info.isGroupOwner,
+                                    "groupOwnerAddress" to (info.groupOwnerAddress?.hostAddress ?: "")
+                                )
+                                methodChannel.invokeMethod("onConnectionInfoAvailable", connectionInfo)
+                                requestGroupInfo()
+                            }
+                        }
+                    } else {
+                        Log.d(TAG, "Device disconnected from Wi-Fi P2P group")
+                    }
+                }
+
+                WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION -> {
+                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_DEVICE, WifiP2pDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_DEVICE)
+                    }
+                    
+                    device?.let {
+                        methodChannel.invokeMethod("onThisDeviceChanged", mapOf(
+                            "deviceName" to (it.deviceName ?: "Unknown"),
+                            "deviceAddress" to it.deviceAddress,
+                            "status" to it.status
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}

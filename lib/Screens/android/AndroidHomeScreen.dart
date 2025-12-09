@@ -14,24 +14,29 @@ class AndroidHomeScreen extends StatefulWidget {
 
 class _AndroidHomeScreenState extends State<AndroidHomeScreen> {
   static const MethodChannel _platform = MethodChannel('zapshare.saf');
-  
+
   @override
   void initState() {
     super.initState();
     _listenForSharedFiles();
   }
-  
+
   void _listenForSharedFiles() {
     _platform.setMethodCallHandler((call) async {
       if (call.method == 'sharedFiles') {
         final List<dynamic> files = call.arguments as List<dynamic>;
         if (files.isNotEmpty && mounted) {
-          print('📁 [HomeScreen] Received shared files: ${files.length} files, navigating to send screen');
+          print(
+            '📁 [HomeScreen] Received shared files: ${files.length} files, navigating to send screen',
+          );
           // Navigate to send screen with the files
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (context) => AndroidHttpFileShareScreen(initialSharedFiles: files.cast<Map<dynamic, dynamic>>()),
+              builder:
+                  (context) => AndroidHttpFileShareScreen(
+                    initialSharedFiles: files.cast<Map<dynamic, dynamic>>(),
+                  ),
             ),
           );
         }
@@ -39,7 +44,7 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen> {
       return null;
     });
   }
-  
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -88,12 +93,16 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen> {
                         right: 0,
                         top: 0,
                         child: IconButton(
-                          icon: Icon(Icons.settings_outlined, color: Colors.grey[400]),
+                          icon: Icon(
+                            Icons.settings_outlined,
+                            color: Colors.grey[400],
+                          ),
                           onPressed: () {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (context) => const DeviceSettingsScreen(),
+                                builder:
+                                    (context) => const DeviceSettingsScreen(),
                               ),
                             );
                           },
@@ -207,10 +216,7 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen> {
       decoration: BoxDecoration(
         color: Colors.grey[900],
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.grey[800]!,
-          width: 1,
-        ),
+        border: Border.all(color: Colors.grey[800]!, width: 1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.1),
@@ -245,11 +251,7 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen> {
                       ),
                     ],
                   ),
-                  child: Icon(
-                    icon,
-                    color: Colors.black,
-                    size: 24,
-                  ),
+                  child: Icon(icon, color: Colors.black, size: 24),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
@@ -290,7 +292,6 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen> {
     );
   }
 
-
   void _navigateToScreen(int index) {
     Widget targetScreen;
     if (index == 0) {
@@ -311,8 +312,10 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen> {
           var end = Offset.zero;
           var curve = Curves.easeInOutCubic;
 
-          var tween = Tween(begin: begin, end: end)
-              .chain(CurveTween(curve: curve));
+          var tween = Tween(
+            begin: begin,
+            end: end,
+          ).chain(CurveTween(curve: curve));
 
           return SlideTransition(
             position: animation.drive(tween),
