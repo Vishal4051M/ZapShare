@@ -74,7 +74,9 @@ Future<void> requestPermissions() async {
 
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
-  MediaKit.ensureInitialized();
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    MediaKit.ensureInitialized();
+  }
   try {
     await dotenv.load(fileName: ".env");
   } catch (e) {
