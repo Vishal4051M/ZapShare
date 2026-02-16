@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:path_provider/path_provider.dart';
@@ -8,15 +9,29 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:zap_share/Screens/android/AndroidHomeScreen.dart';
 import 'package:zap_share/Screens/android/AndroidHttpFileShareScreen.dart';
 import 'package:zap_share/services/device_discovery_service.dart';
-import 'package:zap_share/services/wifi_direct_service.dart';
+// import 'package:zap_share/services/wifi_direct_service.dart'; // REMOVED: Using Bluetooth + Hotspot
 import 'package:zap_share/widgets/connection_request_dialog.dart';
+import 'package:tray_manager/tray_manager.dart';
+import 'package:window_manager/window_manager.dart';
+import 'package:zap_share/services/supabase_service.dart';
 import 'Screens/windows/WindowsFileShareScreen.dart';
+import 'Screens/windows/WindowsCastScreen.dart';
 import 'Screens/windows/WindowsReceiveScreen.dart';
+import 'Screens/windows/WindowsHomeScreen.dart';
 import 'Screens/android/AndroidReceiveScreen.dart';
 import 'Screens/shared/TransferHistoryScreen.dart';
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:app_links/app_links.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:media_kit/media_kit.dart';
+
+import 'package:zap_share/Screens/shared/FirstTimeSetupScreen.dart';
+import 'package:zap_share/Screens/shared/VideoPlayerScreen.dart';
+import 'package:zap_share/Screens/shared/ScreenMirrorViewerScreen.dart';
+
+const Color kAccentYellow = Color(0xFFFFD600);
 
 Future<void> clearAppCache() async {
   final cacheDir = await getTemporaryDirectory();
@@ -40,6 +55,10 @@ Future<void> requestPermissions() async {
         Permission.location,
         Permission.manageExternalStorage,
         Permission.nearbyWifiDevices,
+        Permission.bluetooth,
+        Permission.bluetoothScan,
+        Permission.bluetoothAdvertise,
+        Permission.bluetoothConnect,
         Permission.audio,
         Permission.videos,
         Permission.notification,
@@ -53,15 +72,21 @@ Future<void> requestPermissions() async {
   });
 }
 
-void main() async {
+void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  MediaKit.ensureInitialized();
+  try {
+    await dotenv.load(fileName: ".env");
+  } catch (e) {
+    print("Warning: .env file not found or invalid. Using defaults.");
+  }
   if (Platform.isAndroid) {
     // requestPermissions(); // Moved to AppState for sequential execution
     clearAppCache();
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
-        channelId: 'data_rush_transfer',
-        channelName: 'Data Rush Transfer',
+        channelId: 'zapshare_transfer_channel_v2',
+        channelName: 'ZapShare Transfer',
         channelDescription: 'File transfer is running in the background',
         channelImportance: NotificationChannelImportance.HIGH,
         priority: NotificationPriority.HIGH,
@@ -79,24 +104,55 @@ void main() async {
     );
     await FlutterDisplayMode.setHighRefreshRate();
   }
-  runApp(const DataRushApp());
+
+  if (Platform.isWindows) {
+    await windowManager.ensureInitialized();
+    WindowOptions windowOptions = const WindowOptions(
+      size: Size(900, 650),
+      minimumSize: Size(800, 600),
+      center: true,
+      backgroundColor: Colors.transparent,
+      skipTaskbar: false,
+      titleBarStyle: TitleBarStyle.normal,
+    );
+    windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.show();
+      await windowManager.focus();
+    });
+  }
+
+  // Initialize Supabase
+  try {
+    await SupabaseService().initialize();
+    print('✅ Supabase Initialized');
+  } catch (e) {
+    print('❌ Failed to initialize Supabase: $e');
+  }
+
+  runApp(DataRushApp(launchArgs: args));
 }
 
 class DataRushApp extends StatefulWidget {
-  const DataRushApp({super.key});
+  final List<String>? launchArgs;
+  const DataRushApp({super.key, this.launchArgs});
 
   @override
   State<DataRushApp> createState() => _DataRushAppState();
 }
 
-class _DataRushAppState extends State<DataRushApp> {
+class _DataRushAppState extends State<DataRushApp>
+    with WindowListener, TrayListener {
   final DeviceDiscoveryService _discoveryService = DeviceDiscoveryService();
   StreamSubscription<ConnectionRequest>? _connectionRequestSubscription;
+  StreamSubscription<CastRequest>? _castRequestSubscription;
+  StreamSubscription<ScreenMirrorRequest>? _screenMirrorSubscription;
   final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+  bool? _isFirstRun; // Null initially to show loading/splash
 
   @override
   void initState() {
     super.initState();
+    _checkFirstRun();
     // Delay startup until after first frame so navigator/context exist.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       // Ensure permissions are granted before starting services
@@ -104,13 +160,103 @@ class _DataRushAppState extends State<DataRushApp> {
         await requestPermissions();
       }
 
-      // Ask for device name on first install before initializing discovery service
-      await _ensureDeviceName();
+      // Expect existing logic to handle window/tray
+      if (Platform.isWindows) {
+        windowManager.addListener(this);
+        trayManager.addListener(this);
+        await _initSystemTray();
+        await _registerContextMenu();
+        await windowManager.setPreventClose(true);
+      }
+
+      // We wait for _checkFirstRun to complete in its own future,
+      // so we don't need to block here. The UI will update when valid.
+
       _initGlobalDeviceDiscovery();
+      _initDeepLinks();
     });
   }
 
+  void _initDeepLinks() {
+    final _appLinks = AppLinks();
+
+    // Check initial link if app was started by the link
+    _appLinks.getInitialLink().then((uri) {
+      if (uri != null) {
+        _handleDeepLink(uri);
+      }
+    });
+
+    _appLinks.uriLinkStream.listen((uri) {
+      _handleDeepLink(uri);
+    });
+
+    // Windows-specific: Listen for deep links from other instances via method channel
+    if (Platform.isWindows) {
+      const MethodChannel('zapshare/deeplink').setMethodCallHandler((
+        call,
+      ) async {
+        if (call.method == 'onDeepLink') {
+          final String url = call.arguments as String;
+          print('📨 Received deep link from another instance: $url');
+
+          // Parse the URL and handle it
+          try {
+            final uri = Uri.parse(url);
+            _handleDeepLink(uri);
+          } catch (e) {
+            print('❌ Error parsing deep link URL: $e');
+          }
+        }
+      });
+    }
+  }
+
+  void _handleDeepLink(Uri uri) async {
+    print("🔗 Deep link received: $uri");
+    print("   Scheme: ${uri.scheme}");
+    print("   Host: ${uri.host}");
+    print("   Path: ${uri.path}");
+    print("   Fragment: ${uri.fragment}");
+    print("   Query: ${uri.query}");
+    print("   Full URL: ${uri.toString()}");
+
+    if (uri.scheme == 'io.supabase.zapshare' && uri.host == 'login-callback') {
+      try {
+        // Let Supabase handle the OAuth callback
+        // The full URI needs to be passed including fragment/query params
+        print("🔄 Processing Supabase OAuth callback...");
+        await Supabase.instance.client.auth.getSessionFromUrl(uri);
+        print("✅ Supabase Auth callback processed successfully");
+
+        // Check if we have a session now
+        final session = Supabase.instance.client.auth.currentSession;
+        if (session != null) {
+          print("✅ User is now logged in: ${session.user.email}");
+        } else {
+          print("⚠️ No session found after processing callback");
+        }
+      } catch (e) {
+        print("❌ Error handling deep link session: $e");
+        print("   Stack trace: ${StackTrace.current}");
+      }
+    } else {
+      print("⚠️ Deep link does not match expected pattern");
+    }
+  }
+
+  Future<void> _checkFirstRun() async {
+    final prefs = await SharedPreferences.getInstance();
+    final isDone = prefs.getBool('first_run_complete') ?? false;
+    if (mounted) {
+      setState(() {
+        _isFirstRun = !isDone;
+      });
+    }
+  }
+
   Future<void> _ensureDeviceName() async {
+    if (_isFirstRun == true) return; // Skip if in first set-up mode
     try {
       final prefs = await SharedPreferences.getInstance();
       final existing = prefs.getString('device_name');
@@ -204,26 +350,6 @@ class _DataRushAppState extends State<DataRushApp> {
     await _discoveryService.initialize();
     await _discoveryService.start();
 
-    // Initialize Wi-Fi Direct on Android
-    if (Platform.isAndroid) {
-      print('📡 [Global] Initializing Wi-Fi Direct...');
-      final wifiDirect = WiFiDirectService();
-      final initialized = await wifiDirect.initialize();
-
-      if (initialized) {
-        print('✅ [Global] Wi-Fi Direct initialized successfully');
-        // Start peer discovery
-        final discoveryStarted = await wifiDirect.startPeerDiscovery();
-        if (discoveryStarted) {
-          print('✅ [Global] Wi-Fi Direct peer discovery started');
-        } else {
-          print('⚠️  [Global] Failed to start Wi-Fi Direct peer discovery');
-        }
-      } else {
-        print('⚠️  [Global] Failed to initialize Wi-Fi Direct');
-      }
-    }
-
     _connectionRequestSubscription = _discoveryService.connectionRequestStream
         .listen((request) {
           print(
@@ -231,6 +357,29 @@ class _DataRushAppState extends State<DataRushApp> {
           );
           _showGlobalConnectionRequestDialog(request);
         });
+
+    _castRequestSubscription = _discoveryService.castRequestStream.listen((
+      request,
+    ) {
+      print('🔔 [Global] Received cast request');
+      _showGlobalCastRequestDialog(request);
+    });
+
+    _screenMirrorSubscription = _discoveryService.screenMirrorRequestStream
+        .listen((request) {
+          print('\n🔔🔔🔔 [Global] ═══════════════════════════════════════');
+          print('🔔 [Global] RECEIVED SCREEN MIRROR REQUEST!');
+          print('🔔 [Global]   deviceName: ${request.deviceName}');
+          print('🔔 [Global]   deviceId: ${request.deviceId}');
+          print('🔔 [Global]   streamUrl: ${request.streamUrl}');
+          print('🔔 [Global]   senderIp: ${request.senderIp}');
+          print('🔔 [Global]   timestamp: ${request.timestamp}');
+          print('🔔 [Global] ═══════════════════════════════════════');
+          _showScreenMirrorDialog(request);
+        });
+    print(
+      '🔔 [Global] Screen mirror subscription ACTIVE - listening for incoming requests',
+    );
   }
 
   void _showGlobalConnectionRequestDialog(ConnectionRequest request) {
@@ -238,6 +387,17 @@ class _DataRushAppState extends State<DataRushApp> {
     if (context == null) {
       print('❌ [Global] No context available to show dialog');
       return;
+    }
+
+    // Bring window to foreground on Windows if minimized/hidden
+    if (Platform.isWindows) {
+      windowManager.show();
+      windowManager.focus();
+      windowManager.setAlwaysOnTop(true);
+      // Remove always on top after a brief moment so it doesn't stay on top
+      Future.delayed(const Duration(milliseconds: 500), () {
+        windowManager.setAlwaysOnTop(false);
+      });
     }
 
     print('🚀 [Global] Showing connection request dialog globally');
@@ -261,12 +421,34 @@ class _DataRushAppState extends State<DataRushApp> {
             // Navigate to receive screen
             if (Platform.isAndroid) {
               // Navigate to AndroidReceiveScreen with the sender's code
-              final senderCode = _ipToCode(request.ipAddress);
+              final senderCode = _ipToCode(
+                request.ipAddress,
+                port: request.port,
+              );
               navigatorKey.currentState?.pushReplacement(
                 MaterialPageRoute(
                   builder:
+                      (context) => AndroidReceiveScreen(
+                        autoConnectCode: senderCode,
+                        useTcp:
+                            true, // Always use TCP for app-to-app dialog accept
+                      ),
+                ),
+              );
+            } else if (Platform.isWindows) {
+              // For Windows, we are likely inside WindowsHomeScreen which manages screens.
+              // However, since this is a global dialog, we need to push the Receive Screen
+              // or signal the WindowsHomeScreen to switch tabs.
+              // Pushing a new route stack is safer for now to ensure visibility.
+              final senderCode = _ipToCode(
+                request.ipAddress,
+                port: request.port,
+              );
+              navigatorKey.currentState?.push(
+                MaterialPageRoute(
+                  builder:
                       (context) =>
-                          AndroidReceiveScreen(autoConnectCode: senderCode),
+                          WindowsReceiveScreen(autoConnectCode: senderCode),
                 ),
               );
             }
@@ -286,7 +468,409 @@ class _DataRushAppState extends State<DataRushApp> {
     );
   }
 
-  String _ipToCode(String ipAddress) {
+  void _showGlobalCastRequestDialog(CastRequest request) {
+    // Retry getting context if null (can happen during screen transitions)
+    BuildContext? context = navigatorKey.currentContext;
+    if (context == null) {
+      print('⚠️ [Cast] Context is null, retrying in 500ms...');
+      Future.delayed(const Duration(milliseconds: 500), () {
+        final retryContext = navigatorKey.currentContext;
+        if (retryContext != null) {
+          _showCastDialogWithContext(retryContext, request);
+        } else {
+          print('❌ [Cast] Context still null after retry, cannot show dialog');
+        }
+      });
+      return;
+    }
+    _showCastDialogWithContext(context, request);
+  }
+
+  void _showCastDialogWithContext(BuildContext context, CastRequest request) {
+    // Bring window to foreground on Windows if minimized/hidden
+    if (Platform.isWindows) {
+      windowManager.show();
+      windowManager.focus();
+      windowManager.setAlwaysOnTop(true);
+      // Remove always on top after a brief moment so it doesn't stay on top
+      Future.delayed(const Duration(milliseconds: 500), () {
+        windowManager.setAlwaysOnTop(false);
+      });
+    }
+
+    final displayFileName = request.fileName ?? _extractFileName(request.url);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: const Color(0xFFFFD600).withOpacity(0.2)),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFD600).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.cast_rounded,
+                  color: Color(0xFFFFD600),
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Text(
+                'Cast Request',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Sender info
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.person_rounded,
+                      color: Color(0xFFFFD600),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'From',
+                            style: TextStyle(
+                              color: Colors.white54,
+                              fontSize: 11,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            request.deviceName,
+                            style: const TextStyle(
+                              color: Color(0xFFFFD600),
+                              fontWeight: FontWeight.w700,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              // File info
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.movie_rounded,
+                      color: Colors.white70,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'File',
+                            style: TextStyle(
+                              color: Colors.white54,
+                              fontSize: 11,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            displayFileName,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Do you want to play this video?',
+                style: TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                // Send decline acknowledgement to sender
+                _discoveryService.sendCastAck(request.senderIp, false);
+              },
+              child: const Text('Decline', style: TextStyle(color: Colors.red)),
+            ),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                // Send accept acknowledgement to sender
+                _discoveryService.sendCastAck(request.senderIp, true);
+                // Play with built-in video player
+                final navContext = navigatorKey.currentContext;
+                if (navContext != null) {
+                  Navigator.of(navContext).push(
+                    MaterialPageRoute(
+                      builder:
+                          (_) => VideoPlayerScreen(
+                            videoSource: request.url,
+                            title: displayFileName,
+                            castControllerIp: request.senderIp,
+                            subtitlePath: request.subtitleUrl,
+                          ),
+                    ),
+                  );
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFFD600),
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 10,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              icon: const Icon(Icons.play_arrow_rounded, size: 20),
+              label: const Text(
+                'Play',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  String _extractFileName(String url) {
+    try {
+      final uri = Uri.parse(url);
+      final path = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : '';
+      if (path.isNotEmpty && path.contains('.')) return path;
+    } catch (_) {}
+    return 'Cast Video';
+  }
+
+  void _showScreenMirrorDialog(ScreenMirrorRequest request) {
+    print(
+      '🪞 [Global] _showScreenMirrorDialog called for ${request.deviceName}',
+    );
+    BuildContext? context = navigatorKey.currentContext;
+    print(
+      '🪞 [Global]   navigatorKey.currentContext is ${context == null ? "NULL" : "available"}',
+    );
+    if (context == null) {
+      print('🪞 [Global]   Context null, retrying in 500ms...');
+      Future.delayed(const Duration(milliseconds: 500), () {
+        final retryContext = navigatorKey.currentContext;
+        print(
+          '🪞 [Global]   Retry context is ${retryContext == null ? "NULL" : "available"}',
+        );
+        if (retryContext != null) {
+          _showScreenMirrorDialogWithContext(retryContext, request);
+        } else {
+          print(
+            '❌ [Global]   Retry also failed - no context available to show screen mirror dialog!',
+          );
+        }
+      });
+      return;
+    }
+    _showScreenMirrorDialogWithContext(context, request);
+  }
+
+  void _showScreenMirrorDialogWithContext(
+    BuildContext context,
+    ScreenMirrorRequest request,
+  ) {
+    // Bring window to foreground on Windows
+    if (Platform.isWindows) {
+      windowManager.show();
+      windowManager.focus();
+      windowManager.setAlwaysOnTop(true);
+      Future.delayed(const Duration(milliseconds: 500), () {
+        windowManager.setAlwaysOnTop(false);
+      });
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: const Color(0xFFFFD600).withOpacity(0.2)),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFD600).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.screen_share_rounded,
+                  color: Color(0xFFFFD600),
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Screen Mirror',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.phone_android_rounded,
+                      color: Color(0xFFFFD600),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'From',
+                            style: TextStyle(
+                              color: Colors.white54,
+                              fontSize: 11,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            request.deviceName,
+                            style: const TextStyle(
+                              color: Color(0xFFFFD600),
+                              fontWeight: FontWeight.w700,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'This device wants to share its screen with you.',
+                style: TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('Decline', style: TextStyle(color: Colors.red)),
+            ),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                final navContext = navigatorKey.currentContext;
+                if (navContext != null) {
+                  Navigator.of(navContext).push(
+                    MaterialPageRoute(
+                      builder:
+                          (_) => ScreenMirrorViewerScreen(
+                            streamUrl: request.streamUrl,
+                            deviceName: request.deviceName,
+                            senderIp: request.senderIp,
+                          ),
+                    ),
+                  );
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFFD600),
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 10,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              icon: const Icon(Icons.screen_share_rounded, size: 20),
+              label: const Text(
+                'View',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  String _ipToCode(String ipAddress, {int port = 8080}) {
     final parts = ipAddress.split('.');
     if (parts.length != 4) return '';
     final n =
@@ -294,18 +878,122 @@ class _DataRushAppState extends State<DataRushApp> {
         (int.parse(parts[1]) << 16) |
         (int.parse(parts[2]) << 8) |
         int.parse(parts[3]);
-    return n.toRadixString(36).toUpperCase().padLeft(8, '0');
+    String ipCode = n.toRadixString(36).toUpperCase().padLeft(8, '0');
+    String portCode = port.toRadixString(36).toUpperCase().padLeft(3, '0');
+    return ipCode + portCode;
   }
 
   @override
   void dispose() {
+    if (Platform.isWindows) {
+      windowManager.removeListener(this);
+      trayManager.removeListener(this);
+    }
     _connectionRequestSubscription?.cancel();
+    _castRequestSubscription?.cancel();
+    _screenMirrorSubscription?.cancel();
     // Keep discovery service running - it should run for the entire app lifecycle
     super.dispose();
   }
 
+  Future<void> _initSystemTray() async {
+    await trayManager.setIcon(
+      Platform.isWindows
+          ? 'assets/images/tray_icon.ico'
+          : 'assets/images/logo.png',
+    );
+
+    // Set tooltip
+    await trayManager.setToolTip('ZapShare - Fast File Sharing');
+
+    Menu menu = Menu(
+      items: [
+        MenuItem(key: 'show_window', label: 'Show ZapShare'),
+        MenuItem.separator(),
+        MenuItem(key: 'exit_app', label: 'Exit'),
+      ],
+    );
+    await trayManager.setContextMenu(menu);
+  }
+
+  Future<void> _registerContextMenu() async {
+    // Only for Windows
+    if (!Platform.isWindows) return;
+
+    try {
+      final String exePath = Platform.resolvedExecutable;
+      // Register "ZapShare" in Context Menu
+      // HKCU\Software\Classes\*\shell\ZapShare
+      await Process.run('reg', [
+        'add',
+        'HKCU\\Software\\Classes\\*\\shell\\ZapShare',
+        '/ve',
+        '/d',
+        'Share with ZapShare',
+        '/f',
+      ]);
+      await Process.run('reg', [
+        'add',
+        'HKCU\\Software\\Classes\\*\\shell\\ZapShare',
+        '/v',
+        'Icon',
+        '/d',
+        '"$exePath"',
+        '/f',
+      ]);
+
+      // Command to run
+      // HKCU\Software\Classes\*\shell\ZapShare\command
+      // "path/to/exe" "%1"
+      await Process.run('reg', [
+        'add',
+        'HKCU\\Software\\Classes\\*\\shell\\ZapShare\\command',
+        '/ve',
+        '/d',
+        '"$exePath" "%1"',
+        '/f',
+      ]);
+
+      print('✅ Context menu registered');
+    } catch (e) {
+      print('❌ Failed to register context menu: $e');
+    }
+  }
+
+  @override
+  void onWindowClose() async {
+    bool _isPreventClose = await windowManager.isPreventClose();
+    if (_isPreventClose) {
+      windowManager.hide();
+    }
+  }
+
+  @override
+  void onTrayIconMouseDown() {
+    windowManager.show();
+    windowManager.focus();
+  }
+
+  @override
+  void onTrayIconRightMouseDown() {
+    trayManager.popUpContextMenu();
+  }
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) {
+    if (menuItem.key == 'show_window') {
+      windowManager.show();
+      windowManager.focus();
+    } else if (menuItem.key == 'exit_app') {
+      windowManager.destroy();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_isFirstRun == null) {
+      return Container(color: Colors.black);
+    }
     return MaterialApp(
       navigatorKey: navigatorKey,
       theme: ThemeData(
@@ -427,10 +1115,31 @@ class _DataRushAppState extends State<DataRushApp> {
         ),
       ),
       home:
-          Platform.isAndroid
+          _isFirstRun!
+              ? FirstTimeSetupScreen(
+                onSetupComplete: () async {
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('first_run_complete', true);
+                  setState(() {
+                    _isFirstRun = false;
+                  });
+                  _ensureDeviceName(); // Double check name is set
+                  if (Platform.isAndroid && mounted) {
+                    // Re-init permissions/services if needed now that we are "in"
+                    // But typically permissions are asked on startup.
+                  }
+                },
+              )
+              : Platform.isAndroid
               ? const AndroidHomeScreen()
               : Platform.isWindows
-              ? const WindowsNavBar()
+              ? (widget.launchArgs != null &&
+                      widget.launchArgs!.isNotEmpty &&
+                      File(widget.launchArgs!.first).existsSync())
+                  ? WindowsCastScreen(
+                    initialFile: File(widget.launchArgs!.first),
+                  )
+                  : const WindowsHomeScreen()
               : AndroidHttpFileShareScreen(),
       debugShowCheckedModeBanner: false,
     );

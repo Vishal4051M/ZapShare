@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:open_file/open_file.dart';
+import 'package:zap_share/blocs/navigation/smooth_page_route.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -38,16 +40,17 @@ class TransferHistoryEntry {
   });
 
   Map<String, dynamic> toJson() => {
-        'fileName': fileName,
-        'fileSize': fileSize,
-        'direction': direction,
-        'peer': peer,
-        'peerDeviceName': peerDeviceName,
-        'dateTime': dateTime.toIso8601String(),
-        'fileLocation': fileLocation,
-      };
+    'fileName': fileName,
+    'fileSize': fileSize,
+    'direction': direction,
+    'peer': peer,
+    'peerDeviceName': peerDeviceName,
+    'dateTime': dateTime.toIso8601String(),
+    'fileLocation': fileLocation,
+  };
 
-  static TransferHistoryEntry fromJson(Map<String, dynamic> json) => TransferHistoryEntry(
+  static TransferHistoryEntry fromJson(Map<String, dynamic> json) =>
+      TransferHistoryEntry(
         fileName: json['fileName'],
         fileSize: json['fileSize'],
         direction: json['direction'],
@@ -83,6 +86,7 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
   List<DeviceConversation> _conversations = [];
   final TextEditingController _searchController = TextEditingController();
   bool _isSearching = false;
+  bool _isLoading = true;
 
   @override
   void initState() {
@@ -101,14 +105,18 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
     final prefs = await SharedPreferences.getInstance();
     final list = prefs.getStringList('transfer_history') ?? [];
     setState(() {
-      _history = list.map((e) => TransferHistoryEntry.fromJson(jsonDecode(e))).toList();
+      _history =
+          list
+              .map((e) => TransferHistoryEntry.fromJson(jsonDecode(e)))
+              .toList();
       _groupByDevice();
+      _isLoading = false;
     });
   }
 
   void _groupByDevice() {
     final Map<String, List<TransferHistoryEntry>> deviceMap = {};
-    
+
     for (var entry in _history) {
       final key = entry.peer;
       if (!deviceMap.containsKey(key)) {
@@ -117,33 +125,40 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
       deviceMap[key]!.add(entry);
     }
 
-    _conversations = deviceMap.entries.map((entry) {
-      final transfers = entry.value;
-      // Sort oldest first (for chat-like display, oldest at top, newest at bottom)
-      transfers.sort((a, b) => a.dateTime.compareTo(b.dateTime));
-      
-      return DeviceConversation(
-        deviceName: _getDeviceName(entry.key),
-        deviceIp: entry.key,
-        transfers: transfers,
-        lastTransferTime: transfers.last.dateTime, // Last is now the most recent
-      );
-    }).toList();
+    _conversations =
+        deviceMap.entries.map((entry) {
+          final transfers = entry.value;
+          // Sort oldest first (for chat-like display, oldest at top, newest at bottom)
+          transfers.sort((a, b) => a.dateTime.compareTo(b.dateTime));
+
+          return DeviceConversation(
+            deviceName: _getDeviceName(entry.key),
+            deviceIp: entry.key,
+            transfers: transfers,
+            lastTransferTime:
+                transfers.last.dateTime, // Last is now the most recent
+          );
+        }).toList();
 
     // Sort conversations by last transfer time
-    _conversations.sort((a, b) => b.lastTransferTime.compareTo(a.lastTransferTime));
+    _conversations.sort(
+      (a, b) => b.lastTransferTime.compareTo(a.lastTransferTime),
+    );
   }
 
   String _getDeviceName(String ip) {
     // Try to get device name from the first transfer's peerDeviceName
     final transfersForIp = _history.where((t) => t.peer == ip).toList();
-    if (transfersForIp.isNotEmpty && transfersForIp.first.peerDeviceName != null) {
+    if (transfersForIp.isNotEmpty &&
+        transfersForIp.first.peerDeviceName != null) {
       return transfersForIp.first.peerDeviceName!;
     }
-    
+
     // Fallback logic
     if (ip.isEmpty || ip == 'Web Upload') return 'Web Browser';
-    if (ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
+    if (ip.startsWith('192.168.') ||
+        ip.startsWith('10.') ||
+        ip.startsWith('172.')) {
       return 'Device ($ip)';
     }
     return ip;
@@ -156,10 +171,13 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
       _groupByDevice();
     } else {
       setState(() {
-        _conversations = _conversations.where((conv) {
-          return conv.deviceName.toLowerCase().contains(query) ||
-                 conv.transfers.any((t) => t.fileName.toLowerCase().contains(query));
-        }).toList();
+        _conversations =
+            _conversations.where((conv) {
+              return conv.deviceName.toLowerCase().contains(query) ||
+                  conv.transfers.any(
+                    (t) => t.fileName.toLowerCase().contains(query),
+                  );
+            }).toList();
       });
     }
   }
@@ -177,7 +195,8 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
   String _formatBytes(int bytes) {
     if (bytes < 1024) return "$bytes B";
     if (bytes < 1024 * 1024) return "${(bytes / 1024).toStringAsFixed(1)} KB";
-    if (bytes < 1024 * 1024 * 1024) return "${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB";
+    if (bytes < 1024 * 1024 * 1024)
+      return "${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB";
     return "${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB";
   }
 
@@ -199,7 +218,7 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
 
   FileType _getFileType(String fileName) {
     final ext = fileName.split('.').last.toLowerCase();
-    
+
     if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].contains(ext)) {
       return FileType.image;
     } else if (['mp4', 'mov', 'avi', 'mkv', 'webm'].contains(ext)) {
@@ -257,54 +276,76 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
+    return Hero(
+      tag: 'history_card_container',
+      createRectTween: (begin, end) {
+        return RectTween(begin: begin, end: end);
+      },
+      child: Scaffold(
         backgroundColor: Colors.black,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: _isSearching
-            ? TextField(
-                controller: _searchController,
-                autofocus: true,
-                style: const TextStyle(color: Colors.white, fontSize: 16),
-                decoration: InputDecoration(
-                  hintText: 'Search devices or files...',
-                  hintStyle: TextStyle(color: Colors.grey[600], fontSize: 16),
-                  border: InputBorder.none,
-                ),
-              )
-            : const Text(
-                'Transfer History',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 24,
-                  fontWeight: FontWeight.w300,
-                  letterSpacing: -0.5,
-                ),
-              ),
-        actions: [
-          IconButton(
-            icon: Icon(
-              _isSearching ? Icons.close : Icons.search,
-              color: Colors.grey[400],
-            ),
-            onPressed: _toggleSearch,
+        appBar: AppBar(
+          systemOverlayStyle: SystemUiOverlayStyle.light,
+          backgroundColor: Colors.black,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white),
+            onPressed: () => context.navigateBack(),
           ),
-        ],
-      ),
-      body: _history.isEmpty
-          ? _buildEmptyState()
-          : ListView.builder(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: _conversations.length,
-              itemBuilder: (context, index) {
-                return _buildConversationCard(_conversations[index]);
-              },
+          title:
+              _isSearching
+                  ? TextField(
+                    controller: _searchController,
+                    autofocus: true,
+                    style: GoogleFonts.outfit(
+                      color: Colors.white,
+                      fontSize: 16,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: 'Search devices or files...',
+                      hintStyle: GoogleFonts.outfit(
+                        color: Colors.grey[600],
+                        fontSize: 16,
+                      ),
+                      border: InputBorder.none,
+                    ),
+                  )
+                  : Text(
+                    'Transfer History',
+                    style: GoogleFonts.outfit(
+                      color: Colors.white,
+                      fontSize: 28,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+          actions: [
+            IconButton(
+              icon: Icon(
+                _isSearching ? Icons.close : Icons.search,
+                color: Colors.grey[400],
+              ),
+              onPressed: _toggleSearch,
             ),
+          ],
+        ),
+        body:
+            _isLoading
+                ? const Center(
+                  child: CircularProgressIndicator(color: Color(0xFFFFD600)),
+                )
+                : _history.isEmpty
+                ? _buildEmptyState()
+                : ListView.builder(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 8,
+                    horizontal: 16,
+                  ),
+                  itemCount: _conversations.length,
+                  itemBuilder: (context, index) {
+                    return _buildConversationCard(_conversations[index]);
+                  },
+                ),
+      ),
     );
   }
 
@@ -313,27 +354,20 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.history,
-            size: 80,
-            color: Colors.grey[800],
-          ),
+          Icon(Icons.history_rounded, size: 80, color: Colors.grey[800]),
           const SizedBox(height: 16),
           Text(
             'No Transfer History',
-            style: TextStyle(
+            style: GoogleFonts.outfit(
               color: Colors.grey[400],
-              fontSize: 18,
-              fontWeight: FontWeight.w500,
+              fontSize: 20,
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 8),
           Text(
             'Sent and received files will appear here',
-            style: TextStyle(
-              color: Colors.grey[600],
-              fontSize: 14,
-            ),
+            style: GoogleFonts.outfit(color: Colors.grey[600], fontSize: 14),
           ),
         ],
       ),
@@ -342,71 +376,91 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
 
   Widget _buildConversationCard(DeviceConversation conversation) {
     final totalFiles = conversation.transfers.length;
-    final sentCount = conversation.transfers.where((t) => t.direction == 'Sent').length;
-    final receivedCount = conversation.transfers.where((t) => t.direction == 'Received').length;
-    final lastTransfer = conversation.transfers.first;
+    final lastTransfer = conversation.transfers.last;
+    final isSent = lastTransfer.direction == 'Sent';
 
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      margin: const EdgeInsets.only(bottom: 4),
       decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[800]!, width: 1),
+        color: Colors.transparent,
+        border: Border(bottom: BorderSide(color: Colors.grey[900]!, width: 1)),
       ),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: () => _openConversationDetail(conversation),
-          borderRadius: BorderRadius.circular(12),
           child: Padding(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
             child: Row(
               children: [
-                // Device icon/avatar
+                // Circular Avatar (WhatsApp style)
                 Container(
-                  width: 50,
-                  height: 50,
+                  width: 56,
+                  height: 56,
                   decoration: BoxDecoration(
-                    color: Colors.yellow[300]!.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(12),
+                    color: const Color(0xFFFFD600).withOpacity(0.15),
+                    shape: BoxShape.circle,
                   ),
-                  child: Icon(
-                    Icons.devices,
-                    color: Colors.yellow[300],
-                    size: 24,
+                  child: const Icon(
+                    Icons.devices_rounded,
+                    color: Color(0xFFFFD600),
+                    size: 28,
                   ),
                 ),
-                const SizedBox(width: 14),
-                
+
+                const SizedBox(width: 16),
+
                 // Device info and last transfer
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        conversation.deviceName,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        overflow: TextOverflow.ellipsis,
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              conversation.deviceName,
+                              style: GoogleFonts.outfit(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _formatTime(lastTransfer.dateTime),
+                            style: GoogleFonts.outfit(
+                              color: Colors.grey[500],
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 6),
                       Row(
                         children: [
                           Icon(
-                            _getFileIcon(_getFileType(lastTransfer.fileName)),
-                            size: 14,
-                            color: Colors.grey[500],
+                            isSent
+                                ? Icons.arrow_upward_rounded
+                                : Icons.arrow_downward_rounded,
+                            size: 18,
+                            color:
+                                isSent
+                                    ? const Color(0xFFFFD600)
+                                    : Colors.grey[500],
                           ),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: 6),
                           Expanded(
                             child: Text(
                               lastTransfer.fileName,
-                              style: TextStyle(
-                                color: Colors.grey[400],
-                                fontSize: 13,
+                              style: GoogleFonts.outfit(
+                                color: Colors.grey[300],
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
                               ),
                               overflow: TextOverflow.ellipsis,
                               maxLines: 1,
@@ -416,34 +470,15 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '$totalFiles files • ↑ $sentCount sent • ↓ $receivedCount received',
-                        style: TextStyle(
-                          color: Colors.grey[600],
-                          fontSize: 11,
+                        '$totalFiles ${totalFiles == 1 ? 'file' : 'files'}',
+                        style: GoogleFonts.outfit(
+                          color: Colors.grey[500],
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
                   ),
-                ),
-                
-                // Time
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      _formatTime(lastTransfer.dateTime),
-                      style: TextStyle(
-                        color: Colors.grey[500],
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Icon(
-                      Icons.chevron_right,
-                      color: Colors.grey[700],
-                      size: 18,
-                    ),
-                  ],
                 ),
               ],
             ),
@@ -454,25 +489,8 @@ class _TransferHistoryScreenState extends State<TransferHistoryScreen> {
   }
 
   void _openConversationDetail(DeviceConversation conversation) {
-    Navigator.push(
-      context,
-      PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) => ConversationDetailScreen(conversation: conversation),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          const begin = Offset(1.0, 0.0);
-          const end = Offset.zero;
-          const curve = Curves.easeInOut;
-
-          var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
-          var offsetAnimation = animation.drive(tween);
-
-          return SlideTransition(
-            position: offsetAnimation,
-            child: child,
-          );
-        },
-        transitionDuration: const Duration(milliseconds: 300),
-      ),
+    context.navigateSlideRight(
+      ConversationDetailScreen(conversation: conversation),
     );
   }
 }
@@ -484,7 +502,8 @@ class ConversationDetailScreen extends StatefulWidget {
   const ConversationDetailScreen({super.key, required this.conversation});
 
   @override
-  State<ConversationDetailScreen> createState() => _ConversationDetailScreenState();
+  State<ConversationDetailScreen> createState() =>
+      _ConversationDetailScreenState();
 }
 
 class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
@@ -506,7 +525,9 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
 
   void _onScroll() {
     if (_scrollController.hasClients) {
-      final isAtBottom = _scrollController.offset >= _scrollController.position.maxScrollExtent - 100;
+      final isAtBottom =
+          _scrollController.offset >=
+          _scrollController.position.maxScrollExtent - 100;
       if (isAtBottom != !_showScrollToBottom) {
         setState(() {
           _showScrollToBottom = !isAtBottom;
@@ -528,7 +549,8 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
   String _formatBytes(int bytes) {
     if (bytes < 1024) return "$bytes B";
     if (bytes < 1024 * 1024) return "${(bytes / 1024).toStringAsFixed(1)} KB";
-    if (bytes < 1024 * 1024 * 1024) return "${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB";
+    if (bytes < 1024 * 1024 * 1024)
+      return "${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB";
     return "${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB";
   }
 
@@ -538,7 +560,7 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
 
   FileType _getFileType(String fileName) {
     final ext = fileName.split('.').last.toLowerCase();
-    
+
     if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].contains(ext)) {
       return FileType.image;
     } else if (['mp4', 'mov', 'avi', 'mkv', 'webm'].contains(ext)) {
@@ -594,7 +616,11 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
     }
   }
 
-  Future<void> _openFile(BuildContext context, String? filePath, String fileName) async {
+  Future<void> _openFile(
+    BuildContext context,
+    String? filePath,
+    String fileName,
+  ) async {
     if (filePath == null || filePath.isEmpty) {
       print('File location not available');
       return;
@@ -616,28 +642,29 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        backgroundColor: Colors.grey[900],
+        backgroundColor: Colors.black,
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => context.navigateBack(),
         ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               widget.conversation.deviceName,
-              style: const TextStyle(
+              style: GoogleFonts.outfit(
                 color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
+                fontSize: 19,
+                fontWeight: FontWeight.w700,
               ),
             ),
             Text(
               '${widget.conversation.transfers.length} transfers',
-              style: TextStyle(
+              style: GoogleFonts.outfit(
                 color: Colors.grey[400],
-                fontSize: 12,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ],
@@ -696,7 +723,10 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
     );
   }
 
-  Widget _buildMessageBubble(BuildContext context, TransferHistoryEntry transfer) {
+  Widget _buildMessageBubble(
+    BuildContext context,
+    TransferHistoryEntry transfer,
+  ) {
     final isSent = transfer.direction == 'Sent';
     final fileType = _getFileType(transfer.fileName);
     final fileColor = _getFileColor(fileType);
@@ -706,32 +736,48 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
       alignment: isSent ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.75,
+        ),
         child: Column(
-          crossAxisAlignment: isSent ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment:
+              isSent ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
             Container(
               decoration: BoxDecoration(
-                color: isSent ? Colors.yellow[300] : Colors.grey[850],
+                color:
+                    isSent ? const Color(0xFFFFD600) : const Color(0xFF1C1C1E),
                 borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isSent ? 16 : 4),
-                  bottomRight: Radius.circular(isSent ? 4 : 16),
+                  topLeft: const Radius.circular(20),
+                  topRight: const Radius.circular(20),
+                  bottomLeft: Radius.circular(isSent ? 20 : 4),
+                  bottomRight: Radius.circular(isSent ? 4 : 20),
                 ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.2),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: () => _openFile(context, transfer.fileLocation, transfer.fileName),
+                  onTap:
+                      () => _openFile(
+                        context,
+                        transfer.fileLocation,
+                        transfer.fileName,
+                      ),
                   borderRadius: BorderRadius.only(
-                    topLeft: const Radius.circular(16),
-                    topRight: const Radius.circular(16),
-                    bottomLeft: Radius.circular(isSent ? 16 : 4),
-                    bottomRight: Radius.circular(isSent ? 4 : 16),
+                    topLeft: const Radius.circular(20),
+                    topRight: const Radius.circular(20),
+                    bottomLeft: Radius.circular(isSent ? 20 : 4),
+                    bottomRight: Radius.circular(isSent ? 4 : 20),
                   ),
                   child: Padding(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(14),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -739,42 +785,46 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(10),
                               decoration: BoxDecoration(
-                                color: isSent
-                                    ? Colors.black.withOpacity(0.1)
-                                    : fileColor.withOpacity(0.15),
-                                borderRadius: BorderRadius.circular(8),
+                                color:
+                                    isSent
+                                        ? Colors.black.withOpacity(0.1)
+                                        : fileColor.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(12),
                               ),
                               child: Icon(
                                 fileIcon,
                                 color: isSent ? Colors.black : fileColor,
-                                size: 24,
+                                size: 28,
                               ),
                             ),
-                            const SizedBox(width: 10),
+                            const SizedBox(width: 12),
                             Flexible(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
                                     transfer.fileName,
-                                    style: TextStyle(
-                                      color: isSent ? Colors.black : Colors.white,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
+                                    style: GoogleFonts.outfit(
+                                      color:
+                                          isSent ? Colors.black : Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
                                     ),
                                     overflow: TextOverflow.ellipsis,
                                     maxLines: 2,
                                   ),
-                                  const SizedBox(height: 2),
+                                  const SizedBox(height: 4),
                                   Text(
                                     _formatBytes(transfer.fileSize),
-                                    style: TextStyle(
-                                      color: isSent
-                                          ? Colors.black.withOpacity(0.6)
-                                          : Colors.grey[400],
-                                      fontSize: 12,
+                                    style: GoogleFonts.outfit(
+                                      color:
+                                          isSent
+                                              ? Colors.black.withOpacity(0.7)
+                                              : Colors.grey[400],
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
                                     ),
                                   ),
                                 ],
@@ -793,9 +843,10 @@ class _ConversationDetailScreenState extends State<ConversationDetailScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: Text(
                 _formatDateTime(transfer.dateTime),
-                style: TextStyle(
+                style: GoogleFonts.outfit(
                   color: Colors.grey[600],
-                  fontSize: 11,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ),

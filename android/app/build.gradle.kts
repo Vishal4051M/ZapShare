@@ -38,8 +38,8 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             
             // Optimize for release builds
-            isMinifyEnabled = false
-            isShrinkResources = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             
             // Add proguard rules for network performance
             proguardFiles(

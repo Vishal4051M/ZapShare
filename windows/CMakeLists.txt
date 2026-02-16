@@ -106,3 +106,24 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# ═══ Bundle MPV executable and libraries ═══
+set(MPV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mpv")
+if(EXISTS "${MPV_DIR}/mpv.exe")
+  message(STATUS "Found MPV at: ${MPV_DIR}")
+  
+  # Install MPV directory
+  install(DIRECTORY "${MPV_DIR}/"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}/mpv"
+    COMPONENT Runtime
+    FILES_MATCHING
+    PATTERN "*.exe"
+    PATTERN "*.dll"
+    PATTERN "*.conf"
+  )
+  
+  message(STATUS "MPV will be bundled at: ${INSTALL_BUNDLE_LIB_DIR}/mpv")
+else()
+  message(WARNING "MPV not found at ${MPV_DIR}. Run 'windows/download_mpv.ps1' to download it.")
+endif()
+

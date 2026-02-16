@@ -11,15 +11,22 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'dart:convert';
 import 'dart:math';
-import '../../services/device_discovery_service.dart';
+import 'package:zap_share/services/device_discovery_service.dart';
 import '../../services/range_request_handler.dart';
 
 import 'package:http/http.dart' as http; // Add http package for handshake
 import '../../services/wifi_direct_service.dart';
 import '../../widgets/connection_request_dialog.dart';
 import 'AndroidReceiveScreen.dart';
+
+import '../../widgets/CustomAvatarWidget.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:screen_brightness/screen_brightness.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import '../../blocs/discovery/discovery_bloc.dart';
+import '../../blocs/discovery/discovery_event.dart';
+import '../../blocs/discovery/discovery_state.dart';
 
 const Color kAndroidAccentYellow = Colors.yellow; // lighter yellow for Android
 
@@ -64,11 +71,13 @@ class _AndroidHttpFileShareScreenState
     extends State<AndroidHttpFileShareScreen> {
   final _pageController = PageController();
   final _safUtil = SafUtil();
+
   List<String> _fileUris = [];
   List<String> _fileNames = [];
 
   String? _localIp;
   HttpServer? _server;
+  ServerSocket? _tcpServer; // TCP Server for app-to-app transfer
   bool _isSharing = false;
   bool _useHttps = false;
   final safStream = SafStream();
@@ -85,58 +94,258 @@ class _AndroidHttpFileShareScreenState
   List<bool> _completedFiles = []; // Added for tracking completion
 
   // Track total bytes sent across all parallel range requests per file
-  Map<int, int> _totalBytesSentPerFile = {}; // fileIndex -> totalBytesSent
-  Map<int, Set<String>> _activeRangeRequests =
+  final Map<int, int> _totalBytesSentPerFile =
+      {}; // fileIndex -> totalBytesSent
+  final Map<int, Set<String>> _activeRangeRequests =
       {}; // fileIndex -> Set of range strings
-  Map<int, Map<String, int>> _rangeBytesSentPerRequest =
+  final Map<int, Map<String, int>> _rangeBytesSentPerRequest =
       {}; // fileIndex -> (rangeKey -> bytesSent)
 
   // Track downloads per client for multiple simultaneous downloads
-  Map<String, Map<int, DownloadStatus>> _clientDownloads =
+  final Map<String, Map<int, DownloadStatus>> _clientDownloads =
       {}; // clientIP -> {fileIndex -> DownloadStatus}
-  List<String> _connectedClients = []; // List of connected client IPs
-  Map<String, String> _clientDeviceNames = {}; // clientIP -> deviceName mapping
+  final List<String> _connectedClients = []; // List of connected client IPs
+  final Map<String, String> _clientDeviceNames =
+      {}; // clientIP -> deviceName mapping
 
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
   // Device Discovery
+  // Device Discovery
   final DeviceDiscoveryService _discoveryService = DeviceDiscoveryService();
-  List<DiscoveredDevice> _nearbyDevices = [];
-  StreamSubscription? _devicesSubscription;
+  // List<DiscoveredDevice> _nearbyDevices = []; // Removed: Managed by DiscoveryBloc
+  // StreamSubscription? _devicesSubscription; // Removed: Managed by DiscoveryBloc
   StreamSubscription? _connectionRequestSubscription;
   StreamSubscription? _connectionResponseSubscription;
-  bool _showNearbyDevices = true;
   String? _pendingRequestDeviceIp;
   Timer? _requestTimeoutTimer;
+  Timer? _wifiDirectDiscoveryTimer;
   DiscoveredDevice? _pendingDevice;
-  Set<String> _processedRequests =
+  final Set<String> _processedRequests =
       {}; // Track processed request IPs to prevent duplicates
-  Map<String, DateTime> _lastRequestTime = {}; // Track last request time per IP
+  final Map<String, DateTime> _lastRequestTime =
+      {}; // Track last request time per IP
   bool _isShowingConnectionDialog = false; // Prevent multiple dialogs
 
-  // WiFi Direct Mode
-
+  // Wi-Fi Direct Service
   final WiFiDirectService _wifiDirectService = WiFiDirectService();
-  bool _isWifiDirectMode = false;
-  List<WiFiDirectPeer> _wifiDirectPeers = [];
-  StreamSubscription? _wifiDirectModeSubscription;
-  StreamSubscription? _wifiDirectPeersSubscription;
-  StreamSubscription? _wifiDirectConnectionSubscription;
-  StreamSubscription? _wifiDirectDirectPeersSubscription;
-  StreamSubscription? _wifiDirectDirectConnectionSubscription;
-  WiFiDirectConnectionInfo? _wifiDirectConnectionInfo;
-  bool _isConnectingWifiDirect = false;
-  String? _connectingPeerAddress;
-  bool _waitingForWifiDirectPeer =
-      false; // Flag to track if we are waiting to auto-connect
+  StreamSubscription? _groupInfoSubscription;
+  StreamSubscription?
+  _peersSubscription; // Listen for discovered Wi-Fi Direct peers
+  List<WiFiDirectPeer> _wifiDirectPeers =
+      []; // Store discovered Wi-Fi Direct peers
 
-  String _ipToCode(String ip) {
+  // Status capsule state (replaces loading dialogs)
+  String? _statusMessage;
+  String? _statusSubtitle;
+  IconData _statusIcon = Icons.sync_rounded;
+  bool _statusIsSuccess = false;
+  bool _statusIsError = false;
+  Timer? _statusDismissTimer;
+
+  // Loading dialog state tracking - now using status capsule instead
+  // final bool _isLoadingDialogShowing = false; // Unused
+  // final GlobalKey<_SmoothLoadingDialogState> _loadingDialogKey = GlobalKey(); // Unused
+  // NavigatorState? _dialogNavigator; // Unused - status capsule doesn't need navigator
+
+  // Bloc
+  late DiscoveryBloc _discoveryBloc;
+
+  // Port configuration
+  int _port = 8080; // Default port for HTTP File Share
+  String? _displayCode; // Share code for display (generated in _startListening)
+
+  // File size cache to persist sizes across server restarts
+  final Map<String, int> _fileSizeCache = {}; // uri -> size
+
+  // Modern toast notification
+  void _showModernToast({
+    required String message,
+    IconData icon = Icons.check_circle_rounded,
+    Color backgroundColor = const Color(0xFF1C1C1E),
+    Color iconColor = const Color(0xFFFFD600),
+    Duration duration = const Duration(seconds: 2),
+  }) {
+    if (!mounted) return;
+
+    final overlay = Overlay.of(context);
+    late OverlayEntry overlayEntry;
+
+    overlayEntry = OverlayEntry(
+      builder:
+          (context) => _ModernToast(
+            message: message,
+            icon: icon,
+            backgroundColor: backgroundColor,
+            iconColor: iconColor,
+            onDismiss: () => overlayEntry.remove(),
+            duration: duration,
+          ),
+    );
+
+    overlay.insert(overlayEntry);
+  }
+
+  // Status capsule methods (replaces loading dialogs)
+  void _showStatus({
+    required String message,
+    String? subtitle,
+    IconData icon = Icons.sync_rounded,
+    bool isSuccess = false,
+    bool isError = false,
+    Duration? autoDismiss,
+  }) {
+    _statusDismissTimer?.cancel();
+    setState(() {
+      _statusMessage = message;
+      _statusSubtitle = subtitle;
+      _statusIcon = icon;
+      _statusIsSuccess = isSuccess;
+      _statusIsError = isError;
+    });
+
+    if (autoDismiss != null) {
+      _statusDismissTimer = Timer(autoDismiss, _hideStatus);
+    }
+  }
+
+  void _hideStatus() {
+    _statusDismissTimer?.cancel();
+    setState(() {
+      _statusMessage = null;
+      _statusSubtitle = null;
+      _statusIsSuccess = false;
+      _statusIsError = false;
+    });
+  }
+
+  // Build the status capsule widget
+  Widget _buildStatusCapsule() {
+    if (_statusMessage == null) return const SizedBox.shrink();
+
+    Color bgColor = Colors.black.withOpacity(0.85);
+    Color iconColor = Colors.white70;
+
+    if (_statusIsSuccess) {
+      bgColor = const Color(0xFF1B5E20).withOpacity(0.95);
+      iconColor = Colors.greenAccent;
+    } else if (_statusIsError) {
+      bgColor = const Color(0xFFB71C1C).withOpacity(0.95);
+      iconColor = Colors.redAccent;
+    }
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!_statusIsSuccess && !_statusIsError)
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(iconColor),
+              ),
+            )
+          else
+            Icon(_statusIcon, color: iconColor, size: 18),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _statusMessage!,
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (_statusSubtitle != null)
+                  Text(
+                    _statusSubtitle!,
+                    style: GoogleFonts.outfit(
+                      color: Colors.white60,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: _hideStatus,
+            child: Icon(Icons.close_rounded, color: Colors.white38, size: 16),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Modern loading dialog for multi-step processes
+  void _showModernLoadingDialog({
+    required String title,
+    required String subtitle,
+    String? step,
+    IconData icon = Icons.sync_rounded,
+  }) {
+    // Use status capsule instead of dialog
+    _showStatus(message: title, subtitle: subtitle, icon: icon);
+  }
+
+  // Update loading dialog content smoothly
+  void _updateLoadingDialog({
+    required String title,
+    required String subtitle,
+    String? step,
+    IconData icon = Icons.sync_rounded,
+  }) {
+    // Use status capsule instead of dialog
+    _showStatus(message: title, subtitle: subtitle, icon: icon);
+  }
+
+  // Dismiss loading dialog with optional completion animation
+  Future<void> _dismissLoadingDialog({bool showSuccess = false}) async {
+    if (showSuccess) {
+      _showStatus(
+        message: 'Connected!',
+        icon: Icons.check_circle_rounded,
+        isSuccess: true,
+        autoDismiss: const Duration(seconds: 2),
+      );
+    } else {
+      _hideStatus();
+    }
+  }
+
+  String _ipToCode(String ip, {int? port}) {
     final parts = ip.split('.').map(int.parse).toList();
     if (parts.length != 4) return '';
-    int n = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
-    String code = n.toRadixString(36).toUpperCase();
-    return code.padLeft(8, '0');
+    // Encode IP address (32 bits)
+    int ipNum =
+        (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+    String ipCode = ipNum.toRadixString(36).toUpperCase().padLeft(8, '0');
+
+    // Encode port (16 bits) - use base 36 for consistency
+    int targetPort = port ?? _port;
+    String portCode = targetPort
+        .toRadixString(36)
+        .toUpperCase()
+        .padLeft(3, '0');
+
+    // Combine: 8 chars for IP + 3 chars for port = 11 chars total
+    return ipCode + portCode;
   }
 
   String _getFileExtension(String fileName) {
@@ -331,8 +540,6 @@ class _AndroidHttpFileShareScreenState
         return 'application/x-python-code';
       case 'js':
         return 'application/javascript';
-      case 'ts':
-        return 'application/typescript';
       case 'php':
         return 'application/x-httpd-php';
       case 'rb':
@@ -475,8 +682,6 @@ class _AndroidHttpFileShareScreenState
         return 'text/calendar';
       case 'vcf':
         return 'text/vcard';
-      case 'ics':
-        return 'text/calendar';
       case 'eml':
         return 'message/rfc822';
       case 'msg':
@@ -490,9 +695,19 @@ class _AndroidHttpFileShareScreenState
   String formatBytes(int bytes) {
     if (bytes < 1024) return "$bytes B";
     if (bytes < 1024 * 1024) return "${(bytes / 1024).toStringAsFixed(1)} KB";
-    if (bytes < 1024 * 1024 * 1024)
+    if (bytes < 1024 * 1024 * 1024) {
       return "${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB";
+    }
     return "${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB";
+  }
+
+  // Format client IP for display (show last octet for brevity)
+  String _formatClientIP(String ip) {
+    final parts = ip.split('.');
+    if (parts.length == 4) {
+      return 'Device .${parts[3]}';
+    }
+    return ip;
   }
 
   static const MethodChannel _platform = MethodChannel('zapshare.saf');
@@ -500,6 +715,10 @@ class _AndroidHttpFileShareScreenState
   @override
   void initState() {
     super.initState();
+
+    // Initialize Bloc manually to avoid context scope issues with Hero/Overlay
+    _discoveryBloc = DiscoveryBloc(discoveryService: _discoveryService)
+      ..add(StartDiscovery());
 
     // Handle initial shared files FIRST - set them synchronously before any async operations
     if (widget.initialSharedFiles != null &&
@@ -513,12 +732,13 @@ class _AndroidHttpFileShareScreenState
 
     _init();
     _initLocalNotifications();
+    _loadPort();
+
+    // Initialize Wi-Fi Direct service, then start peer discovery (must be sequential)
+    _initWiFiDirectService().then((_) => _initWiFiDirectPeerDiscovery());
 
     // Initialize device discovery
     _initDeviceDiscovery();
-
-    // Initialize WiFi Direct service for peer discovery
-    _initWifiDirect();
 
     // Set up listener for future shared files (after initial processing)
     _listenForSharedFiles();
@@ -529,223 +749,57 @@ class _AndroidHttpFileShareScreenState
         _cleanupDisconnectedClients();
       }
     });
+
+    // Note: Per-client progress is handled by _ClientProgressSection widget
+    // which has its own isolated timer to avoid rebuilding parent widget tree
   }
 
-  void _initWifiDirect() async {
-    // Initialize WiFi Direct service
-    print('🔧 Initializing WiFi Direct service...');
-    final initialized = await _wifiDirectService.initialize();
-
-    if (!initialized) {
-      print('⚠️ WiFi Direct service initialization failed');
-      return;
-    }
-
-    // Start peer discovery
-    print('🔍 Starting WiFi Direct peer discovery...');
-    await _wifiDirectService.startPeerDiscovery();
-
-    // Listen to discovered peers from WiFi Direct service
-    _wifiDirectDirectPeersSubscription = _wifiDirectService.peersStream.listen((
-      peers,
-    ) {
-      if (mounted) {
-        setState(() {
-          _wifiDirectPeers = peers;
-        });
-        print('📱 WiFi Direct peers updated: ${peers.length} peers');
-      }
-    });
-
-    // Listen to WiFi Direct connection info
-    _wifiDirectDirectConnectionSubscription = _wifiDirectService
-        .connectionInfoStream
-        .listen((info) {
-          if (mounted) {
-            setState(() {
-              _wifiDirectConnectionInfo = info;
-              _isConnectingWifiDirect = false;
-            });
-
-            if (info.groupFormed) {
-              print('✅ WiFi Direct group formed via direct service!');
-              _handleWifiDirectConnected(info);
-            }
-          }
-        });
-
-    print('✅ WiFi Direct service initialized and discovering');
+  Future<void> _initWiFiDirectService() async {
+    print('🚀 Initializing Wi-Fi Direct Service...');
+    await _wifiDirectService.initialize();
+    print('✅ Wi-Fi Direct Service initialized');
   }
 
-  Future<void> _handleWifiDirectConnected(WiFiDirectConnectionInfo info) async {
-    print(
-      '🔗 WiFi Direct Connected! Group Owner: ${info.isGroupOwner}, Owner Address: ${info.groupOwnerAddress}',
-    );
-    print('   ⚠️  NOTE: Wi-Fi Direct role does NOT determine sender/receiver!');
-    print('   Both devices will start HTTP server and use UDP discovery.');
+  Future<void> _initWiFiDirectPeerDiscovery() async {
+    print('🔍 Initializing Wi-Fi Direct Peer Discovery...');
 
-    // Wait for IP assignment loop (max 10 seconds)
-    // We need to make sure we have the 192.168.49.x IP before we start the server or discovery
-    print('⏳ Waiting for Wi-Fi Direct IP assignment (192.168.49.x)...');
-    int ipAttempts = 0;
-    while (ipAttempts < 10) {
-      await Future.delayed(Duration(seconds: 1));
-      await _fetchLocalIp();
-      if (_localIp != null && _localIp!.startsWith('192.168.49.')) {
-        print('✅ Wi-Fi Direct IP assigned: $_localIp');
-        break;
-      }
-      ipAttempts++;
-      if (ipAttempts % 2 == 0)
-        print(
-          '   ... still waiting for IP (Attempt $ipAttempts/10) - Current: $_localIp',
-        );
-    }
+    // Start peer discovery to find nearby devices
+    final discoveryStarted = await _wifiDirectService.startPeerDiscovery();
 
-    if (_localIp == null || !_localIp!.startsWith('192.168.49.')) {
-      print(
-        '⚠️ Warning: Could not get 192.168.49.x IP. Proceeding with Best Effort: $_localIp',
-      );
-    }
+    if (discoveryStarted) {
+      print('✅ Wi-Fi Direct Peer Discovery started successfully');
 
-    // Refresh local IP one last time to be sure
-    // await _fetchLocalIp(); // Already done in loop
-
-    // BOTH devices start HTTP server (regardless of role)
-    print('🚀 Starting HTTP server on WiFi Direct network...');
-    print('   My IP: $_localIp');
-    print('   Role: ${info.isGroupOwner ? "Group Owner" : "Client"}');
-    await _startServer();
-
-    // Restart UDP Discovery on the new interface
-    // Crucial: The discovery service needs to bind to the new interface
-    print('🔄 Restarting Device Discovery Service on new interface...');
-    try {
-      await _discoveryService.stop();
-      // Give it a moment to release ports
-      await Future.delayed(Duration(milliseconds: 500));
-      await _discoveryService.start();
-    } catch (e) {
-      print('Error restarting discovery service: $e');
-    }
-
-    // BOTH devices continue UDP discovery to find peer's IP
-    print('📡 UDP discovery active - waiting to discover peer device...');
-    print('   Peer will be discovered automatically via UDP broadcast');
-
-    // If we have files to share, wait for peer discovery then send request
-    if (_fileUris.isNotEmpty) {
-      print(
-        '📤 Files selected - will send connection request once peer is discovered',
-      );
-      print('   Files: ${_fileNames.length} files');
-
-      // Calculate total size
-      final totalSize = _fileSizeList.fold<int>(0, (sum, size) => sum + size);
-
-      DiscoveredDevice? peerDevice;
-      int attempts = 0;
-      const maxAttempts = 30; // Wait up to 30 seconds
-
-      print('⏳ Starting peer IP discovery loop ($maxAttempts attempts)...');
-
-      // Set flag so stream listener can also catch it immediately
-      _waitingForWifiDirectPeer = true;
-
-      while (attempts < maxAttempts && _waitingForWifiDirectPeer) {
-        final discoveredDevices = _discoveryService.discoveredDevices;
-
-        // Look for devices on Wi-Fi Direct subnet (192.168.49.x)
-        final wifiDirectPeers =
-            discoveredDevices.where((device) {
-              // Check for standard Wi-Fi Direct subnet OR if we are on the same subnet
-              return (device.ipAddress.startsWith('192.168.49.') ||
-                      (_localIp != null &&
-                          device.ipAddress.split('.').take(3).join('.') ==
-                              _localIp!.split('.').take(3).join('.'))) &&
-                  device.ipAddress != _localIp &&
-                  device.ipAddress != '0.0.0.0';
-            }).toList();
-
-        if (wifiDirectPeers.isNotEmpty) {
-          peerDevice = wifiDirectPeers.first;
-          print(
-            '✅ Found Wi-Fi Direct peer via UDP discovery: ${peerDevice.deviceName} (${peerDevice.ipAddress})',
-          );
-          _waitingForWifiDirectPeer = false; // Stop waiting
-          break;
-        }
-
-        attempts++;
-        await Future.delayed(Duration(seconds: 1));
-        if (attempts % 5 == 0)
-          print('   ... searching for peer (attempt $attempts/$maxAttempts)');
-      }
-
-      // If loop finished and we found a device (or stream found it and set flag false, but here 'peerDevice' might be null if stream handled it)
-      // wait, if stream handled it, _waitingForWifiDirectPeer is false. peerDevice is null.
-      // We should check if stream handled it.
-      if (!_waitingForWifiDirectPeer && peerDevice == null) {
-        print('✨ Wi-Fi Direct peer handled by stream listener.');
-        return;
-      }
-
-      if (peerDevice != null) {
-        // Peer found! Send HTTP Handshake
-        await _sendHttpConnectionRequest(
-          peerDevice.ipAddress,
-          _fileNames,
-          totalSize,
-        );
-      } else {
-        // Fallback: Try common Wi-Fi Direct IPs blindly
-        print(
-          '⚠️  No peer discovered via UDP after timeout, trying common Wi-Fi Direct IPs...',
-        );
-        final targetIps =
-            info.isGroupOwner
-                ? [
-                  '192.168.49.2',
-                  '192.168.49.3',
-                  '192.168.49.4',
-                ] // Try multiple client IPs
-                : [
-                  info.groupOwnerAddress.isNotEmpty
-                      ? info.groupOwnerAddress
-                      : '192.168.49.1',
-                ];
-
-        bool sent = false;
-        for (final targetIp in targetIps) {
-          if (targetIp == _localIp) continue;
-
-          print('📡 Attempting HTTP handshake to: $targetIp');
-          if (await _sendHttpConnectionRequest(
-            targetIp,
-            _fileNames,
-            totalSize,
-          )) {
-            sent = true;
-            break;
+      // Listen for discovered peers
+      _peersSubscription = _wifiDirectService.peersStream.listen((peers) {
+        if (mounted) {
+          setState(() {
+            _wifiDirectPeers = peers;
+          });
+          print('📡 Discovered ${peers.length} Wi-Fi Direct peer(s)');
+          for (var peer in peers) {
+            print('   - ${peer.deviceName} (${peer.deviceAddress})');
           }
         }
+      });
 
-        if (!sent && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Could not find peer. Make sure app is open on other device.',
-              ),
-              backgroundColor: Colors.red,
-            ),
-          );
+      // WiFi Direct discovery expires after ~30-120 seconds on most Android devices.
+      // Periodically restart it so peers remain visible.
+      _wifiDirectDiscoveryTimer?.cancel();
+      _wifiDirectDiscoveryTimer = Timer.periodic(const Duration(seconds: 30), (
+        _,
+      ) {
+        if (mounted) {
+          _wifiDirectService.startPeerDiscovery();
         }
-      }
+      });
+
+      _showStatus(
+        message: 'Scanning for Wi-Fi Direct devices...',
+        icon: Icons.wifi_find_rounded,
+        autoDismiss: const Duration(seconds: 2),
+      );
     } else {
-      print('📱 No files selected - ready to receive');
-      print('   Role: ${info.isGroupOwner ? "Group Owner" : "Client"}');
-      print('   HTTP server running at: http://$_localIp:8080');
-      print('   Waiting for peer to send connection request...');
+      print('❌ Failed to start Wi-Fi Direct Peer Discovery');
     }
   }
 
@@ -756,13 +810,14 @@ class _AndroidHttpFileShareScreenState
     int totalSize,
   ) async {
     try {
-      final url = Uri.parse('http://$targetIp:8080/connection-request');
+      final url = Uri.parse('http://$targetIp:$_port/connection-request');
       print('📤 Sending HTTP Connection Request to $url');
 
       final body = jsonEncode({
         'deviceId': _discoveryService.myDeviceId ?? 'unknown',
         'deviceName': _discoveryService.myDeviceName ?? 'Unknown Device',
         'platform': 'android', // Assuming android screen
+        'port': _port,
         'fileCount': fileNames.length,
         'fileNames': fileNames,
         'totalSize': totalSize,
@@ -782,11 +837,10 @@ class _AndroidHttpFileShareScreenState
         } else {
           print('❌ Connection Declined by Peer (HTTP response)');
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Connection declined by peer'),
-                backgroundColor: Colors.red,
-              ),
+            _showModernToast(
+              message: 'Connection declined by peer',
+              icon: Icons.block_rounded,
+              iconColor: Colors.red[400]!,
             );
           }
           return true; // Communication worked, but declined
@@ -814,7 +868,8 @@ class _AndroidHttpFileShareScreenState
       print('📁 [_processInitialFiles] Adding file: $name (URI: $uri)');
       uris.add(uri);
       names.add(name);
-      sizes.add(0); // Will get actual size asynchronously later
+      // Check cache first, otherwise use 0
+      sizes.add(_fileSizeCache[uri] ?? 0);
     }
 
     // Set state SYNCHRONOUSLY in initState (before first build)
@@ -829,18 +884,27 @@ class _AndroidHttpFileShareScreenState
 
     print('✅ [_processInitialFiles] Files set synchronously: $_fileNames');
 
-    // Get file sizes asynchronously after initialization
+    // Get file sizes asynchronously after initialization (only for uncached files)
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       print('📁 [_processInitialFiles] Getting file sizes asynchronously...');
       for (int i = 0; i < uris.length; i++) {
+        // Skip if already cached
+        if (_fileSizeCache.containsKey(uris[i])) {
+          print(
+            '📁 [_processInitialFiles] File ${names[i]} size from cache: ${_fileSizeCache[uris[i]]} bytes',
+          );
+          continue;
+        }
+
         try {
           final size = await getFileSizeFromUri(uris[i]);
           if (mounted) {
             setState(() {
               _fileSizeList[i] = size;
+              _fileSizeCache[uris[i]] = size; // Cache the size
             });
             print(
-              '📁 [_processInitialFiles] File ${names[i]} size: $size bytes',
+              '📁 [_processInitialFiles] File ${names[i]} size: $size bytes (cached)',
             );
           }
         } catch (e) {
@@ -907,13 +971,21 @@ class _AndroidHttpFileShareScreenState
       final uri = file['uri'] as String;
       final name = file['name'] as String? ?? uri.split('/').last;
       print('📁 [_handleSharedFiles] Processing file: $name (URI: $uri)');
-      int size = 0;
-      try {
-        size = await getFileSizeFromUri(uri);
-        print('📁 [_handleSharedFiles] File size: $size bytes');
-      } catch (e) {
-        print('⚠️ [_handleSharedFiles] Could not get file size: $e');
+
+      // Check cache first
+      int size = _fileSizeCache[uri] ?? 0;
+      if (size == 0) {
+        try {
+          size = await getFileSizeFromUri(uri);
+          _fileSizeCache[uri] = size; // Cache the size
+          print('📁 [_handleSharedFiles] File size: $size bytes (cached)');
+        } catch (e) {
+          print('⚠️ [_handleSharedFiles] Could not get file size: $e');
+        }
+      } else {
+        print('📁 [_handleSharedFiles] File size from cache: $size bytes');
       }
+
       uris.add(uri);
       names.add(name);
       sizes.add(size);
@@ -937,16 +1009,139 @@ class _AndroidHttpFileShareScreenState
     print('📁 [_handleSharedFiles] _fileUris: $_fileUris');
   }
 
+  Future<void> _loadPort() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      setState(() {
+        _port = prefs.getInt('http_file_share_port') ?? 8080;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _showPortDialog() async {
+    final controller = TextEditingController(text: _port.toString());
+    final result = await showDialog<int>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            backgroundColor: const Color(0xFF1C1C1E),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            title: Text(
+              'Change Port',
+              style: GoogleFonts.outfit(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Enter a port number (1024-65535)',
+                  style: GoogleFonts.outfit(
+                    color: Colors.grey[400],
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: controller,
+                  keyboardType: TextInputType.number,
+                  style: GoogleFonts.outfit(color: Colors.white),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: Colors.white.withOpacity(0.05),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                    hintText: '8080',
+                    hintStyle: GoogleFonts.outfit(color: Colors.grey[600]),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(
+                  'Cancel',
+                  style: GoogleFonts.outfit(
+                    color: Colors.grey,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  final port = int.tryParse(controller.text);
+                  if (port != null && port >= 1024 && port <= 65535) {
+                    Navigator.pop(context, port);
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Invalid port number',
+                          style: GoogleFonts.outfit(color: Colors.white),
+                        ),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFFFD600),
+                  foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: Text(
+                  'Save',
+                  style: GoogleFonts.outfit(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+    );
+
+    if (result != null && result != _port) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('http_file_share_port', result);
+      setState(() {
+        _port = result;
+      });
+
+      if (_isSharing) {
+        await _stopServer();
+        await _startSharingSession();
+      }
+
+      HapticFeedback.mediumImpact();
+      _showModernToast(
+        message: 'Port updated to $_port',
+        icon: Icons.settings_rounded,
+        iconColor: const Color(0xFFFFD600),
+      );
+    }
+  }
+
   Future<void> _init() async {
     await _clearCache();
     await _fetchLocalIp();
+    await _loadPort();
+    // Start listening on HTTP/TCP immediately so we can receive connection requests instantly
+    _startListening();
 
     _showConnectionTip();
   }
 
   Future<void> _initLocalNotifications() async {
     const AndroidInitializationSettings initializationSettingsAndroid =
-        AndroidInitializationSettings('@mipmap/launcher_icon');
+        AndroidInitializationSettings('ic_stat_notify');
     final InitializationSettings initializationSettings =
         InitializationSettings(android: initializationSettingsAndroid);
     await flutterLocalNotificationsPlugin.initialize(
@@ -1000,7 +1195,7 @@ class _AndroidHttpFileShareScreenState
       }
     }
 
-    final status = paused ? 'Paused' : 'Sending';
+    // Notification status text (unused variable but kept for potential future use)
     final speedText =
         speedMbps > 0 ? '${speedMbps.toStringAsFixed(2)} Mbps' : '--';
 
@@ -1016,6 +1211,7 @@ class _AndroidHttpFileShareScreenState
       onlyAlertOnce: true,
       ongoing: !paused,
       autoCancel: false,
+      icon: 'ic_stat_notify',
     );
 
     final platformChannelSpecifics = NotificationDetails(
@@ -1230,7 +1426,7 @@ class _AndroidHttpFileShareScreenState
             if (bytesSent % (1024 * 1024) == 0) {
               // Log every MB
               print(
-                'File $fileIndex: Sent ${bytesSent}/${fileSize} bytes (${(progress * 100).toStringAsFixed(1)}%)',
+                'File $fileIndex: Sent $bytesSent/$fileSize bytes (${(progress * 100).toStringAsFixed(1)}%)',
               );
             }
 
@@ -1257,10 +1453,12 @@ class _AndroidHttpFileShareScreenState
               }
             }
 
-            // Throttle updates: only update if 100ms passed or progress increased by 100%
+            // Throttle updates: only update if 100ms passed or progress increased by 1%
             if (now.difference(lastUpdate).inMilliseconds > 100 ||
                 (progress - lastProgress) > 0.01) {
               _progressList[fileIndex].value = progress;
+              // Note: UI updates are handled by _uiUpdateTimer for smooth performance
+
               await showProgressNotification(
                 fileIndex,
                 progress,
@@ -1322,10 +1520,11 @@ class _AndroidHttpFileShareScreenState
         _completedFiles[fileIndex] = true;
       }
 
-      // Reset progress
+      // Reset progress for next transfer (but keep file size intact for re-sending)
       _progressList[fileIndex].value = 0.0;
       _bytesSentList[fileIndex] = 0;
-      _fileSizeList[fileIndex] = 0;
+      // NOTE: Do NOT reset _fileSizeList[fileIndex] = 0 here!
+      // The file size must be preserved so the file can be sent to other recipients
       await cancelProgressNotification(fileIndex);
 
       // Record transfer history
@@ -1373,11 +1572,10 @@ class _AndroidHttpFileShareScreenState
       print("Failed to get WiFi IP: $e");
     }
 
-    // Comprehensive Interface Check
-    // If NetworkInfo failed or returned a non-direct IP while we expect one,
-    // lets manually iterate interfaces to find the true Wi-Fi Direct IP.
-    if (_wifiDirectConnectionInfo?.groupFormed == true &&
-        (ip == null || !ip.startsWith('192.168.49.'))) {
+    // Interface scanning disabled - NetworkInfo is reliable for WiFi Direct
+    // Uncomment below if you need manual interface scanning for debugging
+    /*
+    if (ip == null || !ip.startsWith('192.168.49.')) {
       print(
         '⚠️ Wi-Fi Direct active but NetworkInfo returned $ip. Scanning interfaces...',
       );
@@ -1403,6 +1601,7 @@ class _AndroidHttpFileShareScreenState
         print('Error listing interfaces: $e');
       }
     }
+    */
 
     String finalIp;
     if (ip != null && ip.isNotEmpty && ip != "0.0.0.0") {
@@ -1435,65 +1634,8 @@ class _AndroidHttpFileShareScreenState
   }
 
   Future<void> _showConnectionTip() async {
-    final prefs = await SharedPreferences.getInstance();
-    final showTip = prefs.getBool('showConnectionTip') ?? true;
-    if (!showTip) return;
-
-    bool dontShowAgain = false;
-    await Future.delayed(Duration(milliseconds: 500));
-    showDialog(
-      context: context,
-      builder:
-          (_) => StatefulBuilder(
-            builder:
-                (context, setState) => AlertDialog(
-                  backgroundColor: Colors.yellow.shade50,
-                  title: Text(
-                    "Connection Tip",
-                    style: TextStyle(color: Colors.black),
-                  ),
-                  content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        "Ensure devices are on the same network or hotspot.",
-                        style: TextStyle(color: Colors.black),
-                      ),
-                      Row(
-                        children: [
-                          Checkbox(
-                            value: dontShowAgain,
-                            activeColor: Colors.white,
-                            checkColor: Colors.black,
-                            onChanged:
-                                (val) => setState(
-                                  () => dontShowAgain = val ?? false,
-                                ),
-                          ),
-                          Text(
-                            "Don't show again",
-                            style: TextStyle(color: Colors.black),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () {
-                        if (dontShowAgain)
-                          prefs.setBool('showConnectionTip', false);
-                        Navigator.of(context).pop();
-                      },
-                      child: Text(
-                        "Got it!",
-                        style: TextStyle(color: Colors.black),
-                      ),
-                    ),
-                  ],
-                ),
-          ),
-    );
+    // Dialog removed as per user request for cleaner TV experience
+    return;
   }
 
   Future<int> getFileSizeFromUri(String uri) async {
@@ -1521,12 +1663,18 @@ class _AndroidHttpFileShareScreenState
       for (final docFile in result) {
         uris.add(docFile.uri);
         names.add(docFile.name);
-        try {
-          final size = await getFileSizeFromUri(docFile.uri);
-          sizes.add(size);
-        } catch (_) {
-          sizes.add(0);
+
+        // Check cache first
+        int size = _fileSizeCache[docFile.uri] ?? 0;
+        if (size == 0) {
+          try {
+            size = await getFileSizeFromUri(docFile.uri);
+            _fileSizeCache[docFile.uri] = size; // Cache the size
+          } catch (_) {
+            size = 0;
+          }
         }
+        sizes.add(size);
       }
       setState(() {
         // Append to existing lists instead of replacing
@@ -1550,16 +1698,28 @@ class _AndroidHttpFileShareScreenState
     }
   }
 
-  String? _displayCode;
-
-  Future<void> _startServer() async {
+  Future<void> _startSharingSession() async {
     if (_fileUris.isEmpty) return;
     HapticFeedback.mediumImpact();
+
+    // Ensure server is listening
+    await _startListening();
+
     await FlutterForegroundTask.startService(
       notificationTitle: "ZapShare Transfer",
       notificationText: "Sharing file(s)...",
+      notificationIcon: const NotificationIcon(
+        metaDataName: 'com.pravera.flutter_foreground_task.notification_icon',
+      ),
     );
+    setState(() => _isSharing = true);
+  }
+
+  Future<void> _startListening() async {
+    // Start file server (HTTP + TCP)
     await _server?.close(force: true);
+    await _tcpServer?.close();
+    _tcpServer = null;
     // Attempt TLS bind using cert/key if available
     SecurityContext? sc;
     try {
@@ -1580,194 +1740,587 @@ class _AndroidHttpFileShareScreenState
       sc = null;
     }
 
-    if (sc != null) {
-      _server = await HttpServer.bindSecure(InternetAddress.anyIPv4, 8080, sc);
-      _useHttps = true;
-    } else {
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, 8080);
-      _useHttps = false;
-    }
-    // Generate 8-char code for sharing (just IP)
-    final codeForUser = _ipToCode(_localIp ?? '');
-    setState(() {
-      _displayCode = codeForUser;
-    });
-    _server!.listen((HttpRequest request) async {
-      final path = request.uri.path;
-
-      // Add CORS headers for all requests
-      request.response.headers.add('Access-Control-Allow-Origin', '*');
-      request.response.headers.add(
-        'Access-Control-Allow-Methods',
-        'GET, POST, OPTIONS',
-      );
-      request.response.headers.add('Access-Control-Allow-Headers', '*');
-
-      // Handle preflight OPTIONS request
-      if (request.method == 'OPTIONS') {
-        request.response.statusCode = HttpStatus.ok;
-        await request.response.close();
-        return;
-      }
-
-      // Serve web interface at root
-      if (path == '/' || path == '/index.html') {
-        await _serveWebInterface(request);
-        return;
-      }
-
-      if (path == '/list') {
-        // Serve file list as JSON
-        final list = List.generate(
-          _fileNames.length,
-          (i) => {
-            'index': i,
-            'name': _fileNames[i],
-            'size': _fileSizeList.length > i ? _fileSizeList[i] : 0,
-          },
+    try {
+      if (sc != null) {
+        _server = await HttpServer.bindSecure(
+          InternetAddress.anyIPv4,
+          _port,
+          sc,
         );
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode(list));
-        await request.response.close();
-        return;
+        _useHttps = true;
+      } else {
+        _server = await HttpServer.bind(InternetAddress.anyIPv4, _port);
+        _useHttps = false;
       }
+    } catch (e) {
+      print('❌ Failed to bind HTTP server: $e');
+      return;
+    }
 
-      // Handle connection request (HTTP Handshake)
-      if (path == '/connection-request' && request.method == 'POST') {
-        try {
-          final content = await utf8.decoder.bind(request).join();
-          final data = jsonDecode(content);
+    // Start TCP Server for App-to-App transfer
+    try {
+      _tcpServer = await ServerSocket.bind(InternetAddress.anyIPv4, _port + 1);
+      _tcpServer!.listen(_handleTcpClient);
+      print('🚀 UDP/TCP: Starting TCP server on port ${_port + 1}');
+    } catch (e) {
+      print('❌ Failed to start TCP server: $e');
+    }
 
-          print(
-            '📩 Received HTTP Connection Request from ${data['deviceName']}',
-          );
+    // Generate 11-char code for sharing (IP + port)
 
-          final connectionRequest = ConnectionRequest(
-            deviceId: data['deviceId'],
-            deviceName: data['deviceName'],
-            platform: data['platform'] ?? 'unknown',
-            ipAddress:
-                request
-                    .connectionInfo!
-                    .remoteAddress
-                    .address, // Correct IP from connection
-            fileCount: data['fileCount'],
-            fileNames: List<String>.from(data['fileNames']),
-            totalSize: data['totalSize'],
-            timestamp: DateTime.now(),
-          );
+    final codeForUser = _ipToCode(_localIp ?? '', port: _port);
+    if (mounted) {
+      setState(() {
+        _displayCode = codeForUser;
+      });
+    }
 
-          // Use a Completer to bridge the UI dialog callback to this HTTP response
-          final completer = Completer<bool>();
+    if (_server != null) {
+      _server!.listen((HttpRequest request) async {
+        final path = request.uri.path;
 
-          if (mounted) {
-            if (_isShowingConnectionDialog) {
-              request.response.statusCode = HttpStatus.conflict;
-              request.response.write(
-                jsonEncode({'error': 'Busy conversation'}),
-              );
-              await request.response.close();
-              return;
-            }
+        // Add CORS headers for all requests
+        request.response.headers.add('Access-Control-Allow-Origin', '*');
+        request.response.headers.add(
+          'Access-Control-Allow-Methods',
+          'GET, POST, OPTIONS',
+        );
+        request.response.headers.add('Access-Control-Allow-Headers', '*');
 
-            _isShowingConnectionDialog = true;
-
-            await showDialog(
-              context: context,
-              barrierDismissible: false,
-              builder: (dialogContext) {
-                return ConnectionRequestDialog(
-                  request: connectionRequest,
-                  onAccept: () {
-                    Navigator.of(dialogContext).pop();
-                    _isShowingConnectionDialog = false;
-                    completer.complete(true);
-
-                    if (mounted) {
-                      final code = _ipToCode(connectionRequest.ipAddress);
-
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder:
-                              (context) =>
-                                  AndroidReceiveScreen(autoConnectCode: code),
-                        ),
-                      );
-                    }
-                  },
-                  onDecline: () {
-                    Navigator.of(dialogContext).pop();
-                    _isShowingConnectionDialog = false;
-                    completer.complete(false);
-                  },
-                );
-              },
-            );
-          } else {
-            completer.complete(false);
-          }
-
-          final accepted = await completer.future;
-
-          request.response.headers.contentType = ContentType.json;
+        // Handle preflight OPTIONS request
+        if (request.method == 'OPTIONS') {
           request.response.statusCode = HttpStatus.ok;
-          request.response.write(jsonEncode({'accepted': accepted}));
-          await request.response.close();
-        } catch (e) {
-          print('Error handling connection request: $e');
-          request.response.statusCode = HttpStatus.badRequest;
-          await request.response.close();
-        }
-        return;
-      }
-
-      final segments = request.uri.pathSegments;
-      if (segments.length == 2 && segments[0] == 'file') {
-        final index = int.tryParse(segments[1]);
-        if (index == null || index >= _fileUris.length) {
-          request.response.statusCode = HttpStatus.notFound;
           await request.response.close();
           return;
         }
-        final uri = _fileUris[index];
-        final name = _fileNames[index];
-        final fileSize =
-            _fileSizeList.length > index ? _fileSizeList[index] : 0;
-        final ext = _getFileExtension(name).toLowerCase();
-        final mimeType = _getMimeTypeFromExtension(ext);
-        try {
-          request.response.headers.contentType = ContentType.parse(mimeType);
-          request.response.headers.set(
-            'Content-Disposition',
-            'attachment; filename="$name"',
-          );
-          await serveSafFile(
-            request,
-            fileIndex: index,
-            uri: uri,
-            fileName: name,
-            fileSize: fileSize,
-          );
-        } catch (e) {
-          print('Error streaming file: $e');
-          request.response.statusCode = HttpStatus.internalServerError;
-          await request.response.close();
+
+        // Serve web interface at root
+        if (path == '/' || path == '/index.html') {
+          await _serveWebInterface(request);
+          return;
         }
-        return;
+
+        if (path == '/list') {
+          // Serve file list as JSON
+          final list = List.generate(
+            _fileNames.length,
+            (i) => {
+              'index': i,
+              'name': _fileNames[i],
+              'size': _fileSizeList.length > i ? _fileSizeList[i] : 0,
+            },
+          );
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode(list));
+          await request.response.close();
+          return;
+        }
+
+        // Handle connection request (HTTP Handshake)
+        if (path == '/connection-request' && request.method == 'POST') {
+          try {
+            final content = await utf8.decoder.bind(request).join();
+            final data = jsonDecode(content);
+
+            print(
+              '📩 Received HTTP Connection Request from ${data['deviceName']}',
+            );
+
+            final connectionRequest = ConnectionRequest(
+              deviceId: data['deviceId'],
+              deviceName: data['deviceName'],
+              platform: data['platform'] ?? 'unknown',
+              port: (data['port'] as int?) ?? 8080,
+              ipAddress:
+                  request
+                      .connectionInfo!
+                      .remoteAddress
+                      .address, // Correct IP from connection
+              fileCount: data['fileCount'],
+              fileNames: List<String>.from(data['fileNames']),
+              totalSize: data['totalSize'],
+              timestamp: DateTime.now(),
+            );
+
+            // Use a Completer to bridge the UI dialog callback to this HTTP response
+            final completer = Completer<bool>();
+
+            if (mounted) {
+              if (_isShowingConnectionDialog) {
+                request.response.statusCode = HttpStatus.conflict;
+                request.response.write(
+                  jsonEncode({'error': 'Busy conversation'}),
+                );
+                await request.response.close();
+                return;
+              }
+
+              _isShowingConnectionDialog = true;
+
+              await showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (dialogContext) {
+                  return ConnectionRequestDialog(
+                    request: connectionRequest,
+                    onAccept: () {
+                      Navigator.of(dialogContext).pop();
+                      _isShowingConnectionDialog = false;
+                      completer.complete(true);
+
+                      if (mounted) {
+                        final code = _ipToCode(
+                          connectionRequest.ipAddress,
+                          port: connectionRequest.port,
+                        );
+
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder:
+                                (context) => AndroidReceiveScreen(
+                                  autoConnectCode: code,
+                                  useTcp:
+                                      true, // Use TCP for app-to-app transfers
+                                ),
+                          ),
+                        );
+                      }
+                    },
+                    onDecline: () {
+                      Navigator.of(dialogContext).pop();
+                      _isShowingConnectionDialog = false;
+                      completer.complete(false);
+                    },
+                  );
+                },
+              );
+            } else {
+              completer.complete(false);
+            }
+
+            final accepted = await completer.future;
+
+            request.response.headers.contentType = ContentType.json;
+            request.response.statusCode = HttpStatus.ok;
+            request.response.write(jsonEncode({'accepted': accepted}));
+            await request.response.close();
+          } catch (e) {
+            print('Error handling connection request: $e');
+            request.response.statusCode = HttpStatus.badRequest;
+            await request.response.close();
+          }
+          return;
+        }
+
+        final segments = request.uri.pathSegments;
+        if (segments.length == 2 && segments[0] == 'file') {
+          final index = int.tryParse(segments[1]);
+          if (index == null || index >= _fileUris.length) {
+            request.response.statusCode = HttpStatus.notFound;
+            await request.response.close();
+            return;
+          }
+          final uri = _fileUris[index];
+          final name = _fileNames[index];
+          final fileSize =
+              _fileSizeList.length > index ? _fileSizeList[index] : 0;
+          final ext = _getFileExtension(name).toLowerCase();
+          final mimeType = _getMimeTypeFromExtension(ext);
+          try {
+            request.response.headers.contentType = ContentType.parse(mimeType);
+            request.response.headers.set(
+              'Content-Disposition',
+              'attachment; filename="$name"',
+            );
+            await serveSafFile(
+              request,
+              fileIndex: index,
+              uri: uri,
+              fileName: name,
+              fileSize: fileSize,
+            );
+          } catch (e) {
+            print('Error streaming file: $e');
+            request.response.statusCode = HttpStatus.internalServerError;
+            await request.response.close();
+          }
+          return;
+        }
+
+        // 404 for other paths
+        request.response.statusCode = HttpStatus.notFound;
+        await request.response.close();
+      });
+    }
+    // Server is now listening
+    // setState(() => _isSharing = true); // Handled in _startSharingSession
+  }
+
+  /// Handle incoming TCP client connections for app-to-app file transfer
+  /// Supports two protocols:
+  /// 1. Text: "LIST\n" → JSON array of files
+  /// 2. Binary: [4 bytes file index] → metadata + file data
+  Future<void> _handleTcpClient(Socket client) async {
+    final clientAddress = client.remoteAddress.address;
+    print('📱 TCP: Client connected from $clientAddress');
+
+    // Define requestProcessed before try block to ensure it's accessible in finally
+    bool requestProcessed = false;
+
+    try {
+      // Use a subscription to handle potentially fragmented packets
+      final buffer = <int>[];
+
+      await for (final chunk in client) {
+        if (requestProcessed)
+          break; // Should not happen with current protocol logic
+        buffer.addAll(chunk);
+
+        // Try to process buffer
+        if (buffer.isEmpty) continue;
+
+        // Check if it's a text command (starts with 'L' for LIST)
+        if (buffer[0] == 76) {
+          // 'L'
+          // Wait for newline to ensure full command
+          if (buffer.contains(10)) {
+            // 10 is '\n'
+            final commandBytes = buffer.takeWhile((b) => b != 10).toList();
+            final command = utf8.decode(commandBytes).trim();
+            print('📥 TCP: Received command: $command');
+
+            if (command == 'LIST') {
+              // Send file list as JSON
+              final fileList = List.generate(
+                _fileNames.length,
+                (i) => {
+                  'index': i,
+                  'name': _fileNames[i],
+                  'size': _fileSizeList.length > i ? _fileSizeList[i] : 0,
+                },
+              );
+              final response = jsonEncode(fileList);
+              client.writeln(response);
+              await client.flush();
+              print('✅ TCP: Sent file list (${fileList.length} files)');
+            } else {
+              print('❌ TCP: Unknown command: $command');
+            }
+            requestProcessed = true;
+            await client.close(); // Close after response (One-Shot Request)
+            return;
+          }
+          // Buffer doesn't have newline yet, wait for more chunks
+          continue;
+        }
+
+        // Binary protocol for file download (4 bytes index)
+        if (buffer.length >= 4) {
+          // Parse file index (big-endian int32)
+          final fileIndex =
+              (buffer[0] << 24) |
+              (buffer[1] << 16) |
+              (buffer[2] << 8) |
+              buffer[3];
+
+          print('📥 TCP: Client requested file index: $fileIndex');
+
+          if (fileIndex < 0 || fileIndex >= _fileUris.length) {
+            print('❌ TCP: Invalid file index: $fileIndex');
+            await client.close();
+            return;
+          }
+          requestProcessed =
+              true; // Mark as processed so we can proceed to send file
+
+          // Break the loop to proceed with file sending OUTSIDE the subscription scope?
+          // No, easiest is to call a helper or handle it right here.
+          // Since we are inside 'await for', let's handle file sending here and then return.
+
+          await _sendFileOverTcp(client, fileIndex);
+          return;
+        }
+      }
+    } catch (e) {
+      print('❌ TCP: Error handling client: $e');
+    } finally {
+      // If requestProcessed is false here, it means the client disconnected
+      // without sending a valid request or the request was malformed.
+      // In such cases, the client might not have been closed yet.
+      if (!requestProcessed) {
+        await client.close();
+        print('🔌 TCP: Client disconnected (no valid request): $clientAddress');
+      }
+    }
+  }
+
+  Future<void> _sendFileOverTcp(Socket client, int fileIndex) async {
+    final fileName = _fileNames[fileIndex];
+    final fileSize = _fileSizeList[fileIndex];
+    final fileUri = _fileUris[fileIndex];
+    final clientAddress = client.remoteAddress.address;
+
+    print('📤 TCP: Sending file: $fileName ($fileSize bytes)');
+
+    try {
+      // Send metadata header (JSON)
+      final metadata = jsonEncode({
+        'fileName': fileName,
+        'fileSize': fileSize,
+        'fileIndex': fileIndex,
+      });
+      final metadataBytes = utf8.encode(metadata);
+      final metadataLength = metadataBytes.length;
+
+      // Send metadata length (4 bytes) + metadata
+      client.add([
+        (metadataLength >> 24) & 0xFF,
+        (metadataLength >> 16) & 0xFF,
+        (metadataLength >> 8) & 0xFF,
+        metadataLength & 0xFF,
+      ]);
+      client.add(metadataBytes);
+      await client.flush();
+
+      // Reset progress for this file
+      if (mounted) {
+        _progressList[fileIndex].value = 0.0;
+        _bytesSentList[fileIndex] = 0;
       }
 
-      // 404 for other paths
-      request.response.statusCode = HttpStatus.notFound;
-      await request.response.close();
-    });
-    setState(() => _isSharing = true);
+      // Stream file data
+      int bytesSent = 0;
+      const chunkSize = 65536; // 64KB chunks
+
+      // Speed calculation variables
+      DateTime lastUpdate = DateTime.now();
+      double lastProgress = 0.0;
+      int lastBytes = 0;
+      DateTime lastSpeedTime = DateTime.now();
+      double speedMbps = 0.0;
+
+      if (fileUri.startsWith('content://')) {
+        // SAF URI - use method channel
+        dynamic streamId;
+        try {
+          streamId = await _channel.invokeMethod('openReadStream', {
+            'uri': fileUri,
+          });
+          if (streamId == null) {
+            print('❌ TCP: Failed to open SAF stream');
+            // Ensure client is closed if an error occurs here
+            await client.close();
+            return;
+          }
+
+          bool done = false;
+          while (!done) {
+            // Check pause state
+            while (_isPausedList.length > fileIndex &&
+                _isPausedList[fileIndex].value) {
+              await Future.delayed(Duration(milliseconds: 200));
+            }
+
+            final chunk = await _channel.invokeMethod<Uint8List>('readChunk', {
+              'uri': fileUri,
+              'streamId': streamId,
+              'size': chunkSize,
+            });
+
+            if (chunk == null || chunk.isEmpty) {
+              done = true;
+            } else {
+              client.add(chunk);
+              bytesSent += chunk.length;
+
+              // Flush regularly to manage backpressure and ensure smooth progress
+              // Flush every 512KB
+              if (bytesSent % (512 * 1024) == 0) {
+                await client.flush();
+              }
+
+              // Update progress logic
+              final now = DateTime.now();
+              final elapsed = now.difference(lastSpeedTime).inMilliseconds;
+
+              if (elapsed > 0) {
+                final bytesDelta = bytesSent - lastBytes;
+                speedMbps = (bytesDelta * 8) / (elapsed * 1000); // Mbps
+                lastBytes = bytesSent;
+                lastSpeedTime = now;
+              }
+
+              final progress = (bytesSent / fileSize).clamp(0.0, 1.0);
+
+              // Throttle UI updates (every 200ms)
+              if (now.difference(lastUpdate).inMilliseconds > 200 ||
+                  (progress - lastProgress) > 0.01) {
+                if (mounted) {
+                  _progressList[fileIndex].value = progress;
+                  _bytesSentList[fileIndex] = bytesSent;
+                }
+
+                showProgressNotification(
+                  fileIndex,
+                  progress,
+                  fileName,
+                  speedMbps: speedMbps,
+                  paused: _isPausedList[fileIndex].value,
+                );
+
+                lastUpdate = now;
+                lastProgress = progress;
+
+                // Log occasionally
+                if (bytesSent % (5 * 1024 * 1024) == 0) {
+                  print(
+                    '📤 TCP: Sent ${(bytesSent / 1024 / 1024).toStringAsFixed(1)} MB ($speedMbps Mbps)',
+                  );
+                }
+              }
+            }
+          }
+
+          // Closing stream
+          await _channel.invokeMethod('closeReadStream', {
+            'uri': fileUri,
+            'streamId': streamId,
+          });
+        } catch (e) {
+          print('❌ TCP: Error streaming file: $e');
+          // Ensure client is closed if an error occurs during streaming
+          await client.close();
+          return;
+        }
+      } else {
+        // Regular file path (fallback)
+        try {
+          final file = File(fileUri);
+          if (await file.exists()) {
+            final stream = file.openRead();
+            await for (final chunk in stream) {
+              // Check pause state
+              while (_isPausedList.length > fileIndex &&
+                  _isPausedList[fileIndex].value) {
+                await Future.delayed(Duration(milliseconds: 200));
+              }
+
+              client.add(chunk);
+              bytesSent += chunk.length;
+
+              // Flush regularly
+              if (bytesSent % (512 * 1024) == 0) {
+                await client.flush();
+              }
+
+              // Update progress logic
+              final now = DateTime.now();
+              final elapsed = now.difference(lastSpeedTime).inMilliseconds;
+
+              if (elapsed > 0) {
+                final bytesDelta = bytesSent - lastBytes;
+                speedMbps = (bytesDelta * 8) / (elapsed * 1000); // Mbps
+                lastBytes = bytesSent;
+                lastSpeedTime = now;
+              }
+
+              final progress = (bytesSent / fileSize).clamp(0.0, 1.0);
+
+              // Throttle UI updates
+              if (now.difference(lastUpdate).inMilliseconds > 200 ||
+                  (progress - lastProgress) > 0.01) {
+                if (mounted) {
+                  _progressList[fileIndex].value = progress;
+                  _bytesSentList[fileIndex] = bytesSent;
+                }
+
+                showProgressNotification(
+                  fileIndex,
+                  progress,
+                  fileName,
+                  speedMbps: speedMbps,
+                  paused: false,
+                );
+
+                lastUpdate = now;
+                lastProgress = progress;
+              }
+            }
+          }
+        } catch (e) {
+          print('❌ TCP: Error streaming file from path: $e');
+          await client.close();
+          return;
+        }
+      }
+
+      await client.flush();
+
+      // Completion updates
+      if (mounted) {
+        _progressList[fileIndex].value = 1.0;
+        if (_completedFiles.length > fileIndex) {
+          _completedFiles[fileIndex] = true;
+        }
+      }
+
+      // Clean up notification
+      await cancelProgressNotification(fileIndex);
+
+      print('✅ TCP: File sent successfully: $fileName ($bytesSent bytes)');
+
+      // Record transfer history
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final history = prefs.getStringList('transfer_history') ?? [];
+        final entry = {
+          'fileName': fileName,
+          'fileSize': fileSize,
+          'direction': 'Sent',
+          'peer': clientAddress,
+          'protocol': 'TCP',
+          'dateTime': DateTime.now().toIso8601String(),
+        };
+        history.insert(0, jsonEncode(entry));
+        if (history.length > 100) history.removeLast();
+        await prefs.setStringList('transfer_history', history);
+      } catch (_) {}
+    } catch (e) {
+      print('❌ TCP: Error handling client: $e');
+    } finally {
+      try {
+        // Give TCP stack time to drain send buffer before closing
+        await Future.delayed(const Duration(milliseconds: 300));
+        await client.flush();
+        await client.close();
+      } catch (_) {
+        try {
+          client.destroy();
+        } catch (_) {}
+      }
+      print('🔌 TCP: Client disconnected: $clientAddress');
+    }
   }
 
   Future<void> _stopServer() async {
     HapticFeedback.mediumImpact();
     setState(() => _loading = true);
+
+    // Close both HTTP and TCP servers so stale file lists don't persist
     await _server?.close(force: true);
+    _server = null;
+    await _tcpServer?.close();
+    _tcpServer = null;
+
+    // Stop Wi-Fi Direct group
+    try {
+      await _wifiDirectService.removeGroup();
+      print('✅ Wi-Fi Direct group removed');
+    } catch (e) {
+      print('Error stopping Wi-Fi Direct group: $e');
+    }
+
     await FlutterForegroundTask.stopService();
     setState(() {
       _isSharing = false;
@@ -1896,11 +2449,13 @@ class _AndroidHttpFileShareScreenState
 
     try {
       await _server?.close(force: true);
+      await _tcpServer?.close();
+      _tcpServer = null;
       await FlutterForegroundTask.stopService();
 
       setState(() {
         _loading = false;
-        _displayCode = null; // Clear the share code
+        // _displayCode = null; // Removed as it is undefined
       });
 
       // SnackBar removed as requested
@@ -1939,8 +2494,7 @@ class _AndroidHttpFileShareScreenState
     List<String> names,
     String zipName,
   ) async {
-    const channel = MethodChannel('zapshare.saf');
-    return await channel.invokeMethod<String>('zipFilesToCache', {
+    return await _channel.invokeMethod<String>('zipFilesToCache', {
       'uris': uris,
       'names': names,
       'zipName': zipName,
@@ -2509,7 +3063,7 @@ class _AndroidHttpFileShareScreenState
                 const isSelected = selectedFiles.has(file.index);
                 const isImage = isImageFile(file.name);
                 
-                return \`
+                return `
                     <div class="file-item \${isSelected ? 'selected' : ''}" data-index="\${file.index}">
                         <input type="checkbox" class="file-checkbox" 
                                \${isSelected ? 'checked' : ''} 
@@ -2523,13 +3077,13 @@ class _AndroidHttpFileShareScreenState
                             </div>
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center;">
-                            \${isImage ? \`<button class="preview-btn" onclick="previewImage(\${file.index})">Preview</button>\` : ''}
+                            \${isImage ? `<button class="preview-btn" onclick="previewImage(\${file.index})">Preview</button>` : ''}
                             <a href="/file/\${file.index}" class="download-btn" download onclick="startDownload(this, \${file.index})">
                                 Download
                             </a>
                         </div>
                     </div>
-                \`;
+                `;
             }).join('');
             
             fileList.innerHTML = filesHtml;
@@ -2543,7 +3097,7 @@ class _AndroidHttpFileShareScreenState
                 selectedFiles.delete(fileIndex);
             }
             
-            const fileItem = document.querySelector(\`[data-index="\${fileIndex}"]\`);
+            const fileItem = document.querySelector(`[data-index="\${fileIndex}"]`);
             if (fileItem) {
                 fileItem.classList.toggle('selected', isSelected);
             }
@@ -2556,7 +3110,7 @@ class _AndroidHttpFileShareScreenState
             if (selectedFiles.size > 0) {
                 bulkActions.style.display = 'flex';
                 const downloadBtn = bulkActions.querySelector('.bulk-btn:not(.secondary)');
-                downloadBtn.textContent = \`Download Selected (\${selectedFiles.size})\`;
+                downloadBtn.textContent = `Download Selected (\${selectedFiles.size})`;
             } else {
                 bulkActions.style.display = 'none';
             }
@@ -2606,7 +3160,7 @@ class _AndroidHttpFileShareScreenState
             
             if (totalPages > 1) {
                 pagination.style.display = 'flex';
-                paginationInfo.textContent = \`Page \${currentPage + 1} of \${totalPages} (\${startIndex}-\${endIndex} of \${allFiles.length} files)\`;
+                paginationInfo.textContent = `Page \${currentPage + 1} of \${totalPages} (\${startIndex}-\${endIndex} of \${allFiles.length} files)`;
                 prevBtn.disabled = currentPage === 0;
                 nextBtn.disabled = currentPage === totalPages - 1;
             } else {
@@ -2618,7 +3172,7 @@ class _AndroidHttpFileShareScreenState
             const modal = document.getElementById('imageModal');
             const modalImg = document.getElementById('modalImage');
             
-            modalImg.src = \`/file/\${fileIndex}\`;
+            modalImg.src = `/file/\${fileIndex}`;
             modal.style.display = 'block';
         }
         
@@ -2639,7 +3193,7 @@ class _AndroidHttpFileShareScreenState
             // Download files one by one
             selectedFiles.forEach(fileIndex => {
                 const link = document.createElement('a');
-                link.href = \`/file/\${fileIndex}\`;
+                link.href = `/file/\${fileIndex}`;
                 link.download = '';
                 link.style.display = 'none';
                 document.body.appendChild(link);
@@ -2723,53 +3277,12 @@ class _AndroidHttpFileShareScreenState
   }
 
   void _initDeviceDiscovery() async {
-    print('🔍 Initializing device discovery...');
+    print('🔍 Initializing device discovery listeners...');
 
-    // Initialize device info first
-    await _discoveryService.initialize();
-
-    // Start discovery
-    await _discoveryService.start();
-
-    print('✅ Device discovery started');
-
-    // Listen for nearby devices
-    _devicesSubscription = _discoveryService.devicesStream.listen((devices) {
-      if (mounted) {
-        print('📱 Nearby devices updated: ${devices.length} devices');
-        setState(() {
-          _nearbyDevices = devices.where((d) => d.isOnline).toList();
-          // Update device name mapping
-          for (var device in devices) {
-            _clientDeviceNames[device.ipAddress] = device.deviceName;
-          }
-
-          // Auto-connect to Wi-Fi Direct peer if waiting
-          if (_waitingForWifiDirectPeer) {
-            final wifiDirectPeers =
-                devices.where((device) {
-                  // STRICTLY check for Wi-Fi Direct subnet.
-                  // Do NOT allow "same subnet" fallback here, as it might pick up the old network interface
-                  // before the device has fully switched, causing connection issues.
-                  return device.ipAddress.startsWith('192.168.49.') &&
-                      device.ipAddress != _localIp &&
-                      device.ipAddress != '0.0.0.0';
-                }).toList();
-
-            if (wifiDirectPeers.isNotEmpty) {
-              final peer = wifiDirectPeers.first;
-              print(
-                '🚀 Auto-connecting to confirmed Wi-Fi Direct peer: ${peer.deviceName} (${peer.ipAddress})',
-              );
-              _waitingForWifiDirectPeer = false;
-              _sendConnectionRequest(peer);
-            }
-          }
-        });
-      }
-    });
+    // Note: Device Discovery Service start/stop is now handled by DiscoveryBloc
 
     // Listen for incoming connection requests
+    // We still listen to this here because it triggers UI dialogs
     _connectionRequestSubscription = _discoveryService.connectionRequestStream.listen(
       (request) {
         if (mounted) {
@@ -2813,7 +3326,7 @@ class _AndroidHttpFileShareScreenState
 
     // Listen for connection responses
     _connectionResponseSubscription = _discoveryService.connectionResponseStream
-        .listen((response) {
+        .listen((response) async {
           print(
             '📨 Connection response received: accepted=${response.accepted}, ip=${response.ipAddress}',
           );
@@ -2822,19 +3335,29 @@ class _AndroidHttpFileShareScreenState
             _requestTimeoutTimer?.cancel();
             _requestTimeoutTimer = null;
 
+            // Dismiss any loading dialog that might be showing
+            if (response.accepted) {
+              await _dismissLoadingDialog(showSuccess: true);
+            } else {
+              _dismissLoadingDialog();
+            }
+
             if (response.accepted) {
               // Connection accepted! Start sharing
               print('✅ Connection accepted! Starting server...');
+              _showModernToast(
+                message: 'Connection accepted! Ready to share.',
+                icon: Icons.check_circle_rounded,
+                iconColor: Colors.green[400]!,
+              );
               _startSharingToDevice(_pendingRequestDeviceIp!);
             } else {
               // Connection declined
               print('❌ Connection declined');
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Connection request was declined'),
-                  backgroundColor: Colors.red,
-                  duration: Duration(seconds: 3),
-                ),
+              _showModernToast(
+                message: 'Connection request was declined',
+                icon: Icons.close_rounded,
+                iconColor: Colors.red[400]!,
               );
             }
             _pendingRequestDeviceIp = null;
@@ -2850,7 +3373,7 @@ class _AndroidHttpFileShareScreenState
     print('   Device: ${request.deviceName}');
     print('   IP: ${request.ipAddress}');
     print('   Files: ${request.fileNames.length}');
-    print('   Context valid: ${context != null}');
+    print('   Context mounted: $mounted');
 
     // Set flag to prevent multiple dialogs
     _isShowingConnectionDialog = true;
@@ -2879,43 +3402,24 @@ class _AndroidHttpFileShareScreenState
               true,
             );
 
-            // Navigate to receive screen to download files
+            // For WiFi Direct connections, establish P2P connection first, then use that IP
+            // For regular WiFi/HTTP connections, use the UDP broadcast IP directly
+
+            // Navigate to receive screen with TCP mode for app-to-app transfer
             if (mounted) {
-              final code = request.ipAddress
-                  .split('.')
-                  .map((p) => int.parse(p).toRadixString(36).toUpperCase())
-                  .join('');
+              final code = _ipToCode(request.ipAddress, port: request.port);
 
               Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder:
-                      (context) => AndroidReceiveScreen(autoConnectCode: code),
+                      (context) => AndroidReceiveScreen(
+                        autoConnectCode: code,
+                        useTcp:
+                            true, // Always use TCP for app-to-app transfers when accepting dialog
+                      ),
                 ),
               );
-
-              // Show snackbar with instructions
-              Future.delayed(Duration(milliseconds: 500), () {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Enter code: ${_ipToCode(request.ipAddress)}',
-                      ),
-                      backgroundColor: Colors.green,
-                      duration: Duration(seconds: 5),
-                      action: SnackBarAction(
-                        label: 'Copy',
-                        textColor: Colors.yellow[300],
-                        onPressed: () {
-                          final code = _ipToCode(request.ipAddress);
-                          Clipboard.setData(ClipboardData(text: code));
-                        },
-                      ),
-                    ),
-                  );
-                }
-              });
             }
 
             // Clear the processed request after 60 seconds to allow future requests
@@ -2955,142 +3459,267 @@ class _AndroidHttpFileShareScreenState
   }
 
   Future<void> _sendConnectionRequest(DiscoveredDevice device) async {
-    // ALWAYS require files to be selected first (consistent with HTTP flow)
-    if (_fileUris.isEmpty) {
-      print('⚠️ No files selected');
+    print('📱 Device tapped: ${device.deviceName}');
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              Icon(Icons.info_outline, color: Colors.black),
-              SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Please select files first before sending',
-                  style: TextStyle(fontSize: 14, color: Colors.black),
-                ),
-              ),
-            ],
-          ),
-          backgroundColor: Colors.yellow[300],
-          duration: Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-        ),
-      );
-      return;
-    }
-
-    // Wi-Fi Direct Handling
+    // ─── Wi-Fi Direct Device Handling ──────────────────────
     if (device.discoveryMethod == DiscoveryMethod.wifiDirect &&
         device.wifiDirectAddress != null) {
-      print('🔗 Initiating Wi-Fi Direct connection to: ${device.deviceName}');
-      print('   Device Address: ${device.wifiDirectAddress}');
+      print('🔗 Wi-Fi Direct device detected - establishing connection...');
 
-      // Set state to show connecting UI
-      setState(() {
-        _isConnectingWifiDirect = true;
-        _connectingPeerAddress = device.wifiDirectAddress;
+      _showStatus(
+        message: 'Connecting to ${device.deviceName}...',
+        subtitle: 'Establishing Wi-Fi Direct connection',
+        icon: Icons.wifi_tethering_rounded,
+      );
+
+      // Connect to the Wi-Fi Direct peer - let Android negotiate group owner
+      final connected = await _wifiDirectService.connectToPeer(
+        device.wifiDirectAddress!,
+        isGroupOwner:
+            false, // Auto-negotiate group owner based on device capabilities
+      );
+
+      if (!connected) {
+        print('❌ Failed to initiate Wi-Fi Direct connection');
+        _showStatus(
+          message: 'Connection Failed',
+          subtitle: 'Could not connect to ${device.deviceName}',
+          icon: Icons.error_outline,
+          isError: true,
+          autoDismiss: const Duration(seconds: 3),
+        );
+        // Restart peer discovery after failed connection
+        _wifiDirectService.startPeerDiscovery();
+        return;
+      }
+
+      print('⏳ Waiting for Wi-Fi Direct group formation...');
+
+      // Wait for group formation and get connection info
+      bool groupFormed = false;
+      String? peerIp;
+      bool? isGroupOwner;
+
+      // Listen for connection info with timeout
+      final connectionSubscription = _wifiDirectService.connectionInfoStream.listen((
+        info,
+      ) {
+        if (info.groupFormed) {
+          groupFormed = true;
+          isGroupOwner = info.isGroupOwner;
+
+          // CRITICAL: groupOwnerAddress is the GO's IP, not necessarily the peer's IP
+          // If this device is GO, peer is at a client IP (need to get from group info)
+          // If peer is GO, peer is at groupOwnerAddress
+          if (info.isGroupOwner) {
+            // This device is group owner at 192.168.49.1
+            // Peer will be a client with IP like 192.168.49.x
+            // We need to wait for the peer to connect and get their IP from HTTP request
+            print(
+              '📡 This device is Group Owner. Waiting for peer to connect...',
+            );
+            peerIp =
+                null; // Will be determined when peer connects to our server
+          } else {
+            // Peer is group owner, use their address
+            peerIp = info.groupOwnerAddress;
+            print('📡 Peer is Group Owner at: $peerIp');
+          }
+
+          print('✅ Wi-Fi Direct group formed!');
+          print(
+            '   Group Owner: ${info.isGroupOwner ? "This device" : "Peer device"} ',
+          );
+          print('   Group Owner IP: ${info.groupOwnerAddress}');
+          print('ℹ️ Group owner role negotiated automatically by WiFi Direct');
+        }
       });
 
-      // Show connecting feedback with yellow theme dialog
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) {
-          return Dialog(
-            backgroundColor: Colors.yellow[100],
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.yellow[300],
-                    ),
-                    child: CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.black),
-                    ),
-                  ),
-                  SizedBox(height: 24),
-                  Text(
-                    'Connecting to device...',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black,
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Establishing secure Wi-Fi Direct connection to ${device.deviceName}',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14, color: Colors.grey[800]),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      );
+      // Wait up to 30 seconds for group formation (increased timeout for reliability)
+      int attempts = 0;
+      while (!groupFormed && attempts < 60) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        attempts++;
 
-      // Connect to Wi-Fi Direct peer using WiFiDirectService
-      print('📡 Calling WiFiDirectService.connectToPeer()...');
-      final success = await _wifiDirectService.connectToPeer(
-        device.wifiDirectAddress!,
-        isGroupOwner: true, // Sender is group owner
-      );
+        if (attempts % 4 == 0) {
+          print('⏳ Still waiting for group formation... (${attempts ~/ 2}s)');
 
-      // Dismiss the dialog
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
-
-      if (!success) {
-        print('❌ Wi-Fi Direct connection initiation failed');
-        setState(() {
-          _isConnectingWifiDirect = false;
-          _connectingPeerAddress = null;
-        });
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(
-                children: [
-                  Icon(Icons.error_outline, color: Colors.white),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'Failed to connect to ${device.deviceName}',
-                      style: TextStyle(fontSize: 14, color: Colors.white),
-                    ),
-                  ),
-                ],
-              ),
-              backgroundColor: Colors.red,
-              duration: Duration(seconds: 2),
-            ),
-          );
+          // Update status every 5 seconds
+          if (attempts % 10 == 0) {
+            _showStatus(
+              message: 'Connecting...',
+              subtitle: 'Establishing WiFi Direct link (${attempts ~/ 2}s)',
+              icon: Icons.wifi_tethering_rounded,
+            );
+          }
         }
-      } else {
-        print('✅ Wi-Fi Direct connection initiated successfully');
-        print('   Waiting for connection to form...');
-        // Connection will complete via _handleWifiDirectConnected callback
       }
+
+      await connectionSubscription.cancel();
+
+      if (!groupFormed) {
+        print('❌ Wi-Fi Direct group formation timed out');
+
+        // Show retry dialog
+        final retry = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder:
+              (context) => AlertDialog(
+                backgroundColor: const Color(0xFF1C1C1E),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                title: Row(
+                  children: [
+                    Icon(Icons.wifi_off, color: Colors.red[400], size: 28),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Connection Failed',
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Could not establish WiFi Direct connection with ${device.deviceName}.',
+                      style: GoogleFonts.outfit(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Tips:',
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _buildTipRow('Make sure WiFi is enabled on both devices'),
+                    _buildTipRow('Try moving devices closer together'),
+                    _buildTipRow('Ensure location permission is granted'),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: Text(
+                      'Cancel',
+                      style: GoogleFonts.outfit(color: Colors.white54),
+                    ),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.yellow[300],
+                      foregroundColor: Colors.black,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      'Retry',
+                      style: GoogleFonts.outfit(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+        );
+
+        // Restart peer discovery after failed/timed-out connection
+        _wifiDirectService.startPeerDiscovery();
+
+        if (retry == true) {
+          // Retry connection
+          print('🔄 Retrying WiFi Direct connection...');
+          return await _sendConnectionRequest(device);
+        } else {
+          _hideStatus();
+          return;
+        }
+      }
+
+      print('🎉 Wi-Fi Direct connection established!');
+
+      // If this device is the group owner (rare with groupOwnerIntent=0), handle it
+      if (isGroupOwner == true) {
+        print('📡 This device is Group Owner (unexpected with intent=0)');
+        _localIp = '192.168.49.1'; // Standard WiFi Direct GO IP
+        print('   Local IP updated to: $_localIp');
+
+        // Restart HTTP/TCP servers so they're reachable on the WiFi Direct interface
+        await _stopServer();
+        await _startListening();
+
+        // As GO, the peer (client) gets IP via DHCP starting at 192.168.49.2
+        // Try to reach the peer's HTTP server at the default client IP
+        peerIp = '192.168.49.2';
+        print('📡 Trying default client IP: $peerIp');
+      }
+
+      _showStatus(
+        message: 'Connected via Wi-Fi Direct!',
+        subtitle: 'Ready to share files',
+        icon: Icons.check_circle_rounded,
+        isSuccess: true,
+        autoDismiss: const Duration(seconds: 2),
+      );
+
+      // Update device with peer's IP for connection
+      if (peerIp != null && peerIp!.isNotEmpty) {
+        device = DiscoveredDevice(
+          deviceId: device.deviceId,
+          deviceName: device.deviceName,
+          ipAddress: peerIp!,
+          port: device.port,
+          platform: device.platform,
+          lastSeen: DateTime.now(),
+          discoveryMethod: DiscoveryMethod.wifiDirect,
+          wifiDirectAddress: device.wifiDirectAddress,
+          avatarUrl: device.avatarUrl,
+          userName: device.userName,
+        );
+
+        print(
+          '📡 Updated device IP to WiFi Direct address: ${device.ipAddress}',
+        );
+      } else {
+        print('⚠️ Peer IP not available');
+        _showStatus(
+          message: 'Connection Error',
+          subtitle: 'Could not determine peer IP address',
+          icon: Icons.error_outline,
+          isError: true,
+          autoDismiss: const Duration(seconds: 3),
+        );
+        return;
+      }
+    }
+
+    // ─── File Selection Check ──────────────────────────────
+    // ALWAYS require files to be selected first (consistent with HTTP flow)
+
+    if (_fileUris.isEmpty) {
+      print('⚠️ No files selected');
+      _showModernToast(
+        message: 'Please select files first before sending',
+        icon: Icons.folder_open_rounded,
+        iconColor: const Color(0xFFFFD600),
+      );
       return;
     }
 
-    // HTTP/UDP Device Handling (existing flow)
+    // ─── HTTP/UDP Device Handling (existing flow) ──────────
     setState(() {
       _pendingRequestDeviceIp = device.ipAddress;
       _pendingDevice = device;
@@ -3098,58 +3727,14 @@ class _AndroidHttpFileShareScreenState
 
     // Start HTTP server immediately (needed for both HTTP and UDP flows)
     print('🚀 Starting HTTP server...');
-    await _startServer();
+    await _startSharingSession();
 
-    // Show connecting feedback dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return Dialog(
-          backgroundColor: Colors.yellow[100],
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.yellow[300],
-                  ),
-                  child: CircularProgressIndicator(
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.black),
-                  ),
-                ),
-                SizedBox(height: 24),
-                Text(
-                  'Sending Request...',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black,
-                    fontFamily: "Outfit",
-                  ),
-                ),
-                SizedBox(height: 8),
-                Text(
-                  'Asking ${device.deviceName} to accept connection...',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey[800],
-                    fontFamily: "Outfit",
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+    // Show modern loading dialog for connection request
+    _showModernLoadingDialog(
+      title: 'Sending Request',
+      subtitle: 'Asking ${device.deviceName} to accept connection...',
+      step: 'REQUESTING',
+      icon: Icons.send_rounded,
     );
 
     // Calculate total size
@@ -3165,15 +3750,27 @@ class _AndroidHttpFileShareScreenState
 
     if (success) {
       // Handshake successful, server is running.
-      // Dismiss dialog
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
+      // Dismiss loading dialog with success animation
+      await _dismissLoadingDialog(showSuccess: true);
+
+      _showModernToast(
+        message: 'Connection established! Ready to share.',
+        icon: Icons.check_circle_rounded,
+        iconColor: Colors.green[400]!,
+      );
       return;
     }
 
     // Fallback to UDP if HTTP fails (legacy support or firewall issue)
     print('⚠️ HTTP Handshake failed, falling back to UDP request...');
+
+    // Update loading dialog for UDP fallback
+    _updateLoadingDialog(
+      title: 'Sending via UDP',
+      subtitle: 'Trying alternative connection method...',
+      step: 'FALLBACK',
+      icon: Icons.sync_alt_rounded,
+    );
 
     // Send connection request (UDP)
     print(
@@ -3183,32 +3780,66 @@ class _AndroidHttpFileShareScreenState
       device.ipAddress,
       _fileNames,
       totalSize,
+      _port,
     );
-
-    // Dismiss dialog regardless after sending UDP (user waits for response dialog or timeout)
-    // Actually, for UDP we should probably keep it open?
-    // Existing logic has a 10s timeout timer.
-    // Let's keep the dialog open until timeout or response?
-    // But _requestTimeoutTimer calls _showRetryDialog in 10s.
-    // If we leave this dialog open, _showRetryDialog will stack on top.
-    // Better to close this "Sending..." dialog now, and let the 10s timer handle the "Wait" or "Retry".
-    // Alternatively, we can let the user cancel.
-    // For consistency with Wi-Fi Direct flow, lets close it now.
-    if (mounted && Navigator.canPop(context)) {
-      Navigator.pop(context);
-    }
 
     print('✅ Connection request sent successfully (UDP)');
 
-    // Start 10-second timeout timer
+    // Update dialog to show waiting state
+    _updateLoadingDialog(
+      title: 'Waiting for Response',
+      subtitle: 'Waiting for ${device.deviceName} to accept...',
+      step: 'WAITING',
+      icon: Icons.hourglass_top_rounded,
+    );
+
+    // Start 10-second timeout timer - will show retry dialog
     _requestTimeoutTimer?.cancel();
     _requestTimeoutTimer = Timer(Duration(seconds: 10), () {
       if (mounted && _pendingRequestDeviceIp != null) {
         print('⏰ Connection request timeout - no response after 10 seconds');
+        // Dismiss loading dialog first
+        _dismissLoadingDialog();
+        // Then show retry dialog
         _showRetryDialog();
       }
     });
   }
+
+  // ────────────────────────────────────────────────
+  //  Helper methods
+  // ────────────────────────────────────────────────
+
+  Widget _buildTipRow(String tip) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            margin: const EdgeInsets.only(top: 6),
+            width: 4,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.yellow[300],
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              tip,
+              style: GoogleFonts.outfit(color: Colors.white60, fontSize: 13),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ────────────────────────────────────────────────
+  //  BLE / EasyShare send flow
+  // ────────────────────────────────────────────────
 
   void _showRetryDialog() {
     if (!mounted) return;
@@ -3417,8 +4048,8 @@ class _AndroidHttpFileShareScreenState
   }
 
   Future<void> _startSharingToDevice(String deviceIp) async {
-    // Start the HTTP server
-    await _startServer();
+    // Start the HTTP server session
+    await _startSharingSession();
 
     print('✅ Server started successfully');
   }
@@ -3427,13 +4058,11 @@ class _AndroidHttpFileShareScreenState
     if (_localIp == null) return;
 
     final scheme = _useHttps ? 'https' : 'http';
-    final url = '$scheme://${_localIp}:8080';
+    final url = '$scheme://$_localIp:$_port';
 
     try {
       // Set high brightness
-      double originalBrightness = 0.5;
       try {
-        originalBrightness = await ScreenBrightness().current;
         await ScreenBrightness().setScreenBrightness(1.0);
       } catch (e) {
         print('Error setting brightness: $e');
@@ -3443,70 +4072,137 @@ class _AndroidHttpFileShareScreenState
 
       await showDialog(
         context: context,
+        barrierColor: Colors.black.withOpacity(0.9),
         builder:
             (context) => Dialog(
-              backgroundColor: Colors.grey[900],
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-                side: BorderSide(color: Colors.yellow[300]!, width: 2),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Scan to Connect',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    Container(
-                      padding: EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.yellow[300],
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: QrImageView(
-                        data: url,
-                        version: QrVersions.auto,
-                        size: 240.0,
-                        backgroundColor: Colors.transparent,
-                        eyeStyle: QrEyeStyle(
-                          eyeShape: QrEyeShape.square,
-                          color: Colors.black,
-                        ),
-                        dataModuleStyle: QrDataModuleStyle(
-                          dataModuleShape: QrDataModuleShape.square,
-                          color: Colors.black,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      url,
-                      style: TextStyle(
-                        color: Colors.grey[400],
-                        fontSize: 14,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: Text(
-                        'Close',
-                        style: TextStyle(
-                          color: Colors.yellow[300],
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+              backgroundColor: Colors.transparent,
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 380),
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: const Color(0xFFFFD600).withOpacity(0.3),
+                    width: 1,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFFFD600).withOpacity(0.2),
+                      blurRadius: 30,
+                      offset: const Offset(0, 15),
                     ),
                   ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Title
+                      Text(
+                        'Scan to Connect',
+                        style: GoogleFonts.outfit(
+                          color: const Color(0xFFFFD600),
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Point your camera at this code',
+                        style: GoogleFonts.outfit(
+                          color: Colors.grey[600],
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 28),
+
+                      // QR Code - Yellow background with black code
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFD600),
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFFFD600).withOpacity(0.3),
+                              blurRadius: 25,
+                              offset: const Offset(0, 10),
+                            ),
+                          ],
+                        ),
+                        child: QrImageView(
+                          data: url,
+                          version: QrVersions.auto,
+                          size: 200.0,
+                          backgroundColor: const Color(0xFFFFD600),
+                          eyeStyle: const QrEyeStyle(
+                            eyeShape: QrEyeShape.square,
+                            color: Colors.black,
+                          ),
+                          dataModuleStyle: const QrDataModuleStyle(
+                            dataModuleShape: QrDataModuleShape.square,
+                            color: Colors.black,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+
+                      // URL
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: const Color(0xFFFFD600).withOpacity(0.2),
+                          ),
+                        ),
+                        child: Text(
+                          url,
+                          style: GoogleFonts.jetBrainsMono(
+                            color: const Color(0xFFFFD600),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // Close button
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            HapticFeedback.lightImpact();
+                            Navigator.pop(context);
+                          },
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            backgroundColor: const Color(0xFFFFD600),
+                            foregroundColor: Colors.black,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: Text(
+                            'Close',
+                            style: GoogleFonts.outfit(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -3514,7 +4210,7 @@ class _AndroidHttpFileShareScreenState
 
       // Restore brightness
       try {
-        await ScreenBrightness().setScreenBrightness(originalBrightness);
+        await ScreenBrightness().resetScreenBrightness();
       } catch (e) {
         print('Error restoring brightness: $e');
       }
@@ -3523,599 +4219,1117 @@ class _AndroidHttpFileShareScreenState
     }
   }
 
+  // Duplicate initState removed from here.
+
+  // ... (existing code) ...
+
   @override
   void dispose() {
     _server?.close(force: true);
+    // Clean up Wi-Fi Direct group
+    _wifiDirectService.removeGroup();
     _pageController.dispose();
-    _devicesSubscription?.cancel();
+    _discoveryBloc.close(); // Close the bloc
+    // _devicesSubscription?.cancel(); // Removed
     _connectionRequestSubscription?.cancel();
     _connectionResponseSubscription?.cancel();
+    _peersSubscription?.cancel();
+    _groupInfoSubscription?.cancel();
     _requestTimeoutTimer?.cancel();
-    // Cancel WiFi Direct subscriptions
-    _wifiDirectModeSubscription?.cancel();
-    _wifiDirectPeersSubscription?.cancel();
-    _wifiDirectConnectionSubscription?.cancel();
-    _wifiDirectDirectPeersSubscription?.cancel();
-    _wifiDirectDirectConnectionSubscription?.cancel();
-    // Stop WiFi Direct peer discovery
-    _wifiDirectService.stopPeerDiscovery();
-    print('🛑 WiFi Direct service stopped');
+    _wifiDirectDiscoveryTimer?.cancel();
+    _statusDismissTimer?.cancel(); // Cancel status timer
+
     // Don't stop the singleton discovery service - it runs globally
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isCompact = screenWidth < 600;
+    // Get screen dimensions to force layout consistency during Hero transition
+    final size = MediaQuery.of(context).size;
+    final isCompact = size.width < 600;
+    final isLandscape = size.width > size.height;
 
-    // Check for auto-stop when building UI
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_isSharing) {
-        _checkAndAutoStopSharing();
-      }
-    });
-
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Header
-            Container(
-              padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  // Centered Title
-                  Text(
-                    'Share Files',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 28,
-                      fontWeight: FontWeight.w300,
-                      letterSpacing: -0.5,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  // Left and Right Buttons
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      IconButton(
-                        icon: Icon(
-                          Icons.arrow_back_ios_rounded,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
+    if (isLandscape) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFF5C400),
+        body: Hero(
+          tag: 'send_card_container',
+          child: Material(
+            type: MaterialType.transparency,
+            child: Container(
+              width: size.width,
+              height: size.height,
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFFFFD84D), Color(0xFFF5C400)],
+                ),
+              ),
+              child: SafeArea(
+                child: Row(
+                  children: [
+                    // Left side: Pulse and Header
+                    Expanded(
+                      flex: 5,
+                      child: Stack(
                         children: [
-                          IconButton(
-                            icon: Icon(
-                              Icons.refresh_rounded,
-                              color: Colors.grey[400],
-                              size: 20,
-                            ),
-                            onPressed: _refreshIp,
-                          ),
-                          IconButton(
-                            icon: Icon(
-                              Icons.qr_code_rounded,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                            onPressed: _showQrDialog,
+                          _buildDiscoveryBackground(),
+                          Positioned(
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            child: _buildHeader(),
                           ),
                         ],
                       ),
-                    ],
+                    ),
+                    // Right side: Static Panel (replaces Bottom Sheet)
+                    Expanded(
+                      flex: 4,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black,
+                          border: Border(
+                            left: BorderSide(
+                              color: Colors.white.withOpacity(0.1),
+                            ),
+                          ),
+                        ),
+                        child: _buildSidePanel(isCompact),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Portrait Mode (Existing Layout)
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5C400),
+      resizeToAvoidBottomInset: false,
+      body: Hero(
+        tag: 'send_card_container',
+        createRectTween: (begin, end) {
+          return MaterialRectCenterArcTween(begin: begin, end: end);
+        },
+        child: Material(
+          type: MaterialType.transparency,
+          child: Container(
+            width: size.width,
+            height: size.height,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFFFFD84D), Color(0xFFF5C400)],
+              ),
+            ),
+            child: OverflowBox(
+              minWidth: size.width,
+              maxWidth: size.width,
+              minHeight: size.height,
+              maxHeight: size.height,
+              alignment: Alignment.center,
+              child: Stack(
+                children: [
+                  // Pulse Background
+                  KeyedSubtree(
+                    key: ValueKey('discovery_pulse'),
+                    child: _buildDiscoveryBackground(),
                   ),
+
+                  // Header
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: SafeArea(child: _buildHeader()),
+                  ),
+
+                  // Bottom Sheet
+                  _buildBottomSheet(isCompact),
                 ],
               ),
             ),
-
-            // Main content
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Column(
-                  children: [
-                    // Connection status - compact
-                    if (_localIp != null) ...[
-                      _buildCompactConnectionStatus(),
-                      const SizedBox(height: 24),
-                    ],
-
-                    // Share code section - always visible for consistent design
-                    _buildCompactShareCode(),
-                    const SizedBox(height: 24),
-
-                    // Nearby devices section
-                    _buildNearbyDevicesSection(),
-
-                    // File list section - prominent
-                    if (_fileNames.isNotEmpty) ...[
-                      _buildFileListHeader(),
-                      const SizedBox(height: 16),
-                      _buildFileList(isCompact),
-                    ],
-
-                    // Empty state
-                    if (_fileNames.isEmpty && !_loading) ...[
-                      Expanded(child: _buildEmptyState()),
-                    ],
-
-                    // Loading state
-                    if (_loading) ...[Expanded(child: _buildLoadingState())],
-                  ],
-                ),
-              ),
-            ),
-
-            // Action buttons - reorganized for better UX
-            if (_fileNames.isNotEmpty) ...[
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 36,
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _buildRectangularButton(
-                      icon: Icons.attach_file_rounded,
-                      onTap: _selectFiles,
-                      color: Colors.grey[900]!,
-                      textColor: Colors.white,
-                      label: 'Add Files',
-                    ),
-                    _buildRectangularButton(
-                      icon: Icons.folder_rounded,
-                      onTap: _pickFolder,
-                      color: Colors.grey[900]!,
-                      textColor: Colors.white,
-                      label: 'Folder',
-                    ),
-                    _buildRectangularButton(
-                      icon:
-                          _isSharing
-                              ? Icons.stop_circle_rounded
-                              : Icons.send_rounded,
-                      onTap:
-                          (_fileUris.isEmpty || _loading)
-                              ? null
-                              : _isSharing
-                              ? _stopServer
-                              : _startServer,
-                      color:
-                          _fileUris.isEmpty
-                              ? Colors.grey[700]!
-                              : _isSharing
-                              ? Colors.red[600]!
-                              : Colors.yellow[300]!,
-                      textColor:
-                          _fileUris.isEmpty
-                              ? Colors.grey[400]!
-                              : _isSharing
-                              ? Colors.white
-                              : Colors.black,
-                      label: _isSharing ? 'Stop' : 'Send',
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildCompactConnectionStatus() {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[800]!, width: 1),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 6,
-                height: 6,
-                decoration: BoxDecoration(
-                  color: Colors.green,
-                  shape: BoxShape.circle,
-                ),
+  Widget _buildSidePanel(bool isCompact) {
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'Files',
+              style: GoogleFonts.outfit(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.w700,
               ),
-              SizedBox(width: 12),
-              Text(
-                'Connected • $_localIp',
-                style: TextStyle(
-                  color: Colors.grey[300],
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ],
+            ),
           ),
-          if (_connectedClients.isNotEmpty) ...[
-            SizedBox(height: 8),
-            Row(
+        ),
+        // Action Buttons Row
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                Icon(Icons.people_rounded, color: Colors.yellow[300], size: 16),
-                SizedBox(width: 8),
-                Text(
-                  '${_connectedClients.length} client${_connectedClients.length == 1 ? '' : 's'} connected',
-                  style: TextStyle(
-                    color: Colors.yellow[300],
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
+                _buildRectangularButton(
+                  icon: Icons.attach_file_rounded,
+                  onTap: _selectFiles,
+                  color: Colors.grey[900]!,
+                  textColor: Colors.white,
+                  label: 'Add Files',
+                ),
+                _buildRectangularButton(
+                  icon: Icons.folder_rounded,
+                  onTap: _pickFolder,
+                  color: Colors.grey[900]!,
+                  textColor: Colors.white,
+                  label: 'Folder',
+                ),
+                _buildRectangularButton(
+                  icon:
+                      _isSharing
+                          ? Icons.stop_circle_rounded
+                          : Icons.send_rounded,
+                  onTap:
+                      (_fileUris.isEmpty || _loading)
+                          ? null
+                          : (_isSharing ? _stopServer : _startSharingSession),
+                  color:
+                      _fileUris.isEmpty
+                          ? Colors.grey[900]!
+                          : (_isSharing
+                              ? Colors.red[600]!
+                              : const Color(0xFFFFD600)),
+                  textColor:
+                      _fileUris.isEmpty
+                          ? Colors.grey[600]!
+                          : (_isSharing ? Colors.white : Colors.black),
+                  label: _isSharing ? 'Stop' : 'Send',
+                  isPrimary: !_isSharing && _fileUris.isNotEmpty,
                 ),
               ],
             ),
-          ],
-        ],
-      ),
+          ),
+        ),
+
+        SliverToBoxAdapter(child: SizedBox(height: 24)),
+
+        SliverToBoxAdapter(
+          child: Divider(color: Colors.white.withOpacity(0.05)),
+        ),
+
+        // Files List Header
+        if (_fileNames.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              child: _buildFileListHeader(),
+            ),
+          ),
+
+        // Scrollable Files List Section
+        if (_fileNames.isNotEmpty)
+          SliverToBoxAdapter(child: _buildFileList(isCompact))
+        else
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Text(
+                  'No files selected\nSwipe up or tap buttons to add',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.outfit(
+                    color: Colors.grey[500],
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                    height: 1.5,
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+        SliverToBoxAdapter(child: SizedBox(height: 20)),
+      ],
     );
   }
 
-  Widget _buildNearbyDevicesSection() {
-    // Show WiFi Direct peers when WiFi Direct mode is enabled
-    if (_isWifiDirectMode) {
-      return _buildWifiDirectDevicesSection();
+  Widget _buildDiscoveryBackground() {
+    return BlocBuilder<DiscoveryBloc, DiscoveryState>(
+      bloc: _discoveryBloc, // Explicitly pass the bloc instance
+      builder: (context, state) {
+        List<DiscoveredDevice> nearbyDevices = [];
+        if (state is DiscoveryLoaded) {
+          nearbyDevices = state.devices;
+
+          // Update device name mapping (side effect in builder is not ideal, but acceptable here for local cache)
+          // Better to do this in BlocListener but this is a quick refactor
+          for (var device in nearbyDevices) {
+            _clientDeviceNames[device.ipAddress] = device.deviceName;
+          }
+
+          // Auto-connect logic removed - no longer using WiFi Direct
+        }
+
+        // Combine all devices into a positioned list
+        final List<Widget> deviceNodes = [];
+        // Center offset not needed for centered stack approach
+
+        // Convert Wi-Fi Direct peers to DiscoveredDevice format
+        List<DiscoveredDevice> wifiDirectDevices =
+            _wifiDirectPeers.map((peer) {
+              return DiscoveredDevice(
+                deviceId: peer.deviceAddress, // Use MAC address as device ID
+                deviceName: peer.deviceName,
+                ipAddress: '', // Will be filled after connection
+                port: _port,
+                platform: 'android', // Assume Android for Wi-Fi Direct
+                lastSeen:
+                    DateTime.now(), // Wi-Fi Direct devices are currently being discovered
+                discoveryMethod:
+                    DiscoveryMethod.wifiDirect, // Mark as Wi-Fi Direct device
+                wifiDirectAddress: peer.deviceAddress, // Store MAC address
+                avatarUrl: null,
+                userName: null,
+              );
+            }).toList();
+
+        // Merge UDP-discovered devices with Wi-Fi Direct peers
+        // Remove duplicates based on device name to avoid showing same device twice
+        final allDevices = <DiscoveredDevice>[
+          ...nearbyDevices,
+          ...wifiDirectDevices.where((wdDevice) {
+            // Only add if not already in nearbyDevices
+            return !nearbyDevices.any(
+              (udpDevice) => udpDevice.deviceName == wdDevice.deviceName,
+            );
+          }),
+        ];
+
+        // Responsive sizing based on screen dimensions
+        final screenWidth = MediaQuery.of(context).size.width;
+        final screenHeight = MediaQuery.of(context).size.height;
+        final safeAreaTop = MediaQuery.of(context).padding.top;
+
+        // Scale pulse size based on screen width (works on all devices)
+        final double pulseSize = (screenWidth * 0.95).clamp(320.0, 520.0);
+
+        // Calculate header area (code display + header)
+        final headerHeight =
+            safeAreaTop + 210; // Header + code display + 10px buffer
+        final initialBottomSheetHeight = screenHeight * 0.35; // Fixed at 35%
+        final availableHeight =
+            screenHeight - headerHeight - initialBottomSheetHeight;
+        final pulseTop = headerHeight + (availableHeight - pulseSize) / 2;
+
+        // Circular Layout Calculation - Position devices inside pulse
+        final int totalCount = allDevices.length;
+
+        // Limit visible devices to prevent overlap (max 8 in single ring)
+        final int maxVisibleDevices = 8;
+        final int visibleCount = totalCount.clamp(0, maxVisibleDevices);
+        final int overflowCount = totalCount - visibleCount;
+
+        // Scale device size based on count (smaller when more devices)
+        final double deviceScale =
+            totalCount <= 4 ? 1.0 : (totalCount <= 6 ? 0.9 : 0.8);
+
+        // Device node size (base is 56px for demo, 60px for real - use 60 as max)
+        final double deviceNodeSize = 60.0 * deviceScale;
+
+        // Calculate orbit radius so devices stay FULLY inside pulse
+        // Orbit radius = pulse radius - half device size - generous padding
+        final double pulseRadius = pulseSize / 2;
+        final double orbitPadding = 24.0; // Generous padding from pulse edge
+        final double orbitRadius =
+            pulseRadius - (deviceNodeSize / 2) - orbitPadding;
+        final double startAngle = -3.14159 / 2; // Start from top
+
+        for (int i = 0; i < visibleCount; i++) {
+          final double angle = startAngle + (2 * 3.14159 * i / visibleCount);
+          final double offsetX = orbitRadius * cos(angle);
+          final double offsetY = orbitRadius * sin(angle);
+
+          // All devices use the same node builder (test or real)
+          deviceNodes.add(
+            Transform.translate(
+              offset: Offset(offsetX, offsetY),
+              child: Transform.scale(
+                scale: deviceScale,
+                child: _buildDeviceNode(allDevices[i]),
+              ),
+            ),
+          );
+        }
+
+        // Add overflow indicator if there are more devices - positioned at center
+        if (overflowCount > 0) {
+          deviceNodes.add(
+            GestureDetector(
+              onTap: () => _showAllDevicesSheet(allDevices, isDemoMode: false),
+              child: Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.85),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white38, width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.3),
+                      blurRadius: 8,
+                      spreadRadius: 1,
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: Text(
+                    '+$overflowCount',
+                    style: GoogleFonts.outfit(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            // Pulse Effect - Responsive size
+            Positioned(
+              top: pulseTop,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: SizedBox(
+                  width: pulseSize,
+                  height: pulseSize,
+                  child: _PulseEffect(
+                    key: const ValueKey('pulse_effect_stable'),
+                    size: pulseSize,
+                    color: Colors.black.withOpacity(0.12),
+                  ),
+                ),
+              ),
+            ),
+
+            // Centered Devices "Orbit" - same size as pulse
+            Positioned(
+              top: pulseTop,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: SizedBox(
+                  width: pulseSize,
+                  height: pulseSize,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: deviceNodes,
+                  ),
+                ),
+              ),
+            ),
+
+            // Status label below pulse
+            Positioned(
+              top: pulseTop + pulseSize + 12,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: _buildDiscoveryStatusLabel(state, allDevices.length),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Small status label below pulse
+  Widget _buildDiscoveryStatusLabel(DiscoveryState state, int deviceCount) {
+    String text;
+    IconData icon;
+    bool isLoading = false;
+    bool isSuccess = false;
+    bool isError = false;
+
+    // Priority: Connection status > Discovery status
+    if (_statusMessage != null) {
+      text = _statusMessage!;
+      icon = _statusIcon;
+      isLoading = !_statusIsSuccess && !_statusIsError;
+      isSuccess = _statusIsSuccess;
+      isError = _statusIsError;
+    } else if (state is DiscoveryInitial) {
+      text = 'Scanning...';
+      icon = Icons.radar_rounded;
+      isLoading = true;
+    } else if (deviceCount > 0) {
+      text = '$deviceCount device${deviceCount > 1 ? 's' : ''} nearby';
+      icon = Icons.check_circle_outline_rounded;
+    } else {
+      text = 'No devices nearby';
+      icon = Icons.device_unknown_rounded;
     }
 
-    // Regular nearby devices section (multicast/UDP discovery)
-    return GestureDetector(
-      onTap: () {
-        setState(() => _showNearbyDevices = !_showNearbyDevices);
-        HapticFeedback.lightImpact();
-      },
-      child: AnimatedContainer(
-        duration: Duration(milliseconds: 300),
-        margin: EdgeInsets.only(bottom: 12),
-        padding: EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: _showNearbyDevices ? 14 : 10,
-        ),
-        decoration: BoxDecoration(
-          color:
-              _showNearbyDevices
-                  ? Colors.grey[900]
-                  : Colors.grey[900]!.withOpacity(0.5),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color:
-                _nearbyDevices.isNotEmpty
-                    ? Colors.yellow[300]!.withOpacity(0.4)
-                    : Colors.grey[700]!.withOpacity(0.3),
-            width: 1,
-          ),
-        ),
-        child: Column(
-          children: [
-            // Compact header
-            Row(
-              children: [
-                SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: _AnimatedRadar(isActive: true),
-                ),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _nearbyDevices.isEmpty
-                        ? 'Discovering...'
-                        : '${_nearbyDevices.length} device${_nearbyDevices.length == 1 ? '' : 's'} nearby',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                Icon(
-                  _showNearbyDevices
-                      ? Icons.keyboard_arrow_up_rounded
-                      : Icons.keyboard_arrow_down_rounded,
-                  color: Colors.grey[500],
-                  size: 20,
-                ),
-              ],
-            ),
+    Color bgColor = Colors.black.withOpacity(0.6);
+    Color contentColor = Colors.white70;
 
-            // Expandable content
-            if (_showNearbyDevices && _nearbyDevices.isNotEmpty) ...[
-              SizedBox(height: 12),
-              _buildCompactDeviceList(),
-            ],
-          ],
-        ),
+    if (isSuccess) {
+      bgColor = const Color(0xFF1B5E20).withOpacity(0.9);
+      contentColor = Colors.white;
+    } else if (isError) {
+      bgColor = const Color(0xFFB71C1C).withOpacity(0.9);
+      contentColor = Colors.white;
+    }
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(14),
       ),
-    );
-  }
-
-  Widget _buildWifiDirectDevicesSection() {
-    return GestureDetector(
-      onTap: () {
-        setState(() => _showNearbyDevices = !_showNearbyDevices);
-        HapticFeedback.lightImpact();
-      },
-      child: AnimatedContainer(
-        duration: Duration(milliseconds: 300),
-        margin: EdgeInsets.only(bottom: 12),
-        padding: EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: _showNearbyDevices ? 14 : 10,
-        ),
-        decoration: BoxDecoration(
-          color:
-              _showNearbyDevices
-                  ? Colors.blue[900]!.withOpacity(0.3)
-                  : Colors.blue[900]!.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color:
-                _wifiDirectPeers.isNotEmpty
-                    ? Colors.blue[400]!.withOpacity(0.6)
-                    : Colors.blue[400]!.withOpacity(0.3),
-            width: _wifiDirectPeers.isNotEmpty ? 2 : 1,
-          ),
-        ),
-        child: Column(
-          children: [
-            // Header with WiFi Direct indicator
-            Row(
-              children: [
-                Container(
-                  width: 20,
-                  height: 20,
-                  decoration: BoxDecoration(
-                    color: Colors.blue[400],
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    Icons.wifi_tethering_rounded,
-                    color: Colors.white,
-                    size: 12,
-                  ),
-                ),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'WiFi Direct Mode',
-                        style: TextStyle(
-                          color: Colors.blue[300],
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      Text(
-                        _wifiDirectPeers.isEmpty
-                            ? 'Scanning for peers...'
-                            : '${_wifiDirectPeers.length} peer${_wifiDirectPeers.length == 1 ? '' : 's'} found',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (_wifiDirectConnectionInfo?.groupFormed == true)
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.green[700],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.check_circle, color: Colors.white, size: 12),
-                        SizedBox(width: 4),
-                        Text(
-                          'Connected',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                SizedBox(width: 8),
-                Icon(
-                  _showNearbyDevices
-                      ? Icons.keyboard_arrow_up_rounded
-                      : Icons.keyboard_arrow_down_rounded,
-                  color: Colors.blue[300],
-                  size: 20,
-                ),
-              ],
-            ),
-
-            // Expandable content
-            if (_showNearbyDevices) ...[
-              SizedBox(height: 12),
-              if (_wifiDirectPeers.isEmpty)
-                _buildWifiDirectEmptyState()
-              else
-                _buildWifiDirectPeerList(),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildWifiDirectEmptyState() {
-    return Container(
-      padding: EdgeInsets.symmetric(vertical: 16),
-      child: Column(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          SizedBox(
-            width: 40,
-            height: 40,
-            child: CircularProgressIndicator(
-              color: Colors.blue[400],
-              strokeWidth: 3,
-            ),
-          ),
-          SizedBox(height: 12),
+          if (isLoading)
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                valueColor: AlwaysStoppedAnimation<Color>(contentColor),
+              ),
+            )
+          else
+            Icon(icon, color: contentColor, size: 14),
+          const SizedBox(width: 6),
           Text(
-            'Scanning for WiFi Direct peers...',
-            style: TextStyle(
-              color: Colors.blue[200],
-              fontSize: 13,
+            text,
+            style: GoogleFonts.outfit(
+              color: contentColor,
+              fontSize: 12,
               fontWeight: FontWeight.w500,
             ),
           ),
-          SizedBox(height: 4),
-          Text(
-            'Make sure nearby devices have WiFi Direct enabled',
-            style: TextStyle(color: Colors.grey[500], fontSize: 11),
-            textAlign: TextAlign.center,
+        ],
+      ),
+    );
+  }
+
+  IconData _getDeviceIcon(String name, {String? platform}) {
+    // Use platform field if available
+    if (platform != null) {
+      final p = platform.toLowerCase();
+      if (p.contains('ios') || p.contains('iphone') || p.contains('ipad')) {
+        return Icons.phone_iphone_rounded;
+      } else if (p.contains('mac')) {
+        return Icons.laptop_mac_rounded;
+      } else if (p.contains('android')) {
+        return Icons.phone_android_rounded;
+      } else if (p.contains('windows') || p.contains('pc')) {
+        return Icons.desktop_windows_rounded;
+      }
+    }
+
+    // Fall back to name-based detection
+    name = name.toLowerCase();
+    if (name.contains('iphone') ||
+        name.contains('ipad') ||
+        name.contains('ios')) {
+      return Icons.phone_iphone_rounded;
+    } else if (name.contains('mac') || name.contains('apple')) {
+      return Icons.laptop_mac_rounded;
+    } else if (name.contains('windows') ||
+        name.contains('pc') ||
+        name.contains('desktop')) {
+      return Icons.desktop_windows_rounded;
+    } else if (name.contains('android') ||
+        name.contains('phone') ||
+        name.contains('pixel') ||
+        name.contains('samsung')) {
+      return Icons.phone_android_rounded;
+    }
+    return Icons.devices_other_rounded;
+  }
+
+  // Show all devices in a searchable bottom sheet
+  void _showAllDevicesSheet(
+    List<DiscoveredDevice> devices, {
+    bool isDemoMode = false,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder:
+          (context) => _AllDevicesSheet(
+            devices: devices,
+            isDemoMode: isDemoMode,
+            getDeviceIcon: _getDeviceIcon,
+            onDeviceTap: (device) {
+              Navigator.pop(context);
+              if (!isDemoMode) {
+                _sendConnectionRequest(device);
+              }
+            },
+          ),
+    );
+  }
+
+  Widget _buildDeviceNode(DiscoveredDevice device) {
+    // All devices are DiscoveredDevice type now (no more WiFiDirectPeer)
+    String name = device.deviceName;
+    String? platform = device.platform;
+    String? avatarUrl = device.avatarUrl;
+    String? userName = device.userName;
+
+    // Use user name if available, otherwise device name
+    String displayName = userName ?? name;
+
+    // Check if connecting/pending
+    bool isPending = _pendingRequestDeviceIp == device.ipAddress;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          _sendConnectionRequest(device);
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1C1C1E),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.15),
+                      blurRadius: 8,
+                      offset: Offset(0, 4),
+                    ),
+                    if (isPending)
+                      BoxShadow(
+                        color: Colors.white.withOpacity(0.5),
+                        blurRadius: 12,
+                        spreadRadius: 1,
+                      ),
+                  ],
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.15),
+                    width: 1.5,
+                  ),
+                ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    if (avatarUrl != null)
+                      Builder(
+                        builder: (context) {
+                          bool isUrl =
+                              avatarUrl.startsWith('http') ||
+                              avatarUrl.startsWith('https');
+                          // Check if it's a predefined avatar ID
+                          bool isCustomAvatar = CustomAvatarWidget.avatars.any(
+                            (a) => a['id'] == avatarUrl,
+                          );
+
+                          if (isUrl) {
+                            return ClipOval(
+                              child: Image.network(
+                                avatarUrl,
+                                width: 60,
+                                height: 60,
+                                fit: BoxFit.cover,
+                                errorBuilder:
+                                    (c, e, s) => Icon(
+                                      _getDeviceIcon(name, platform: platform),
+                                      color: Colors.white,
+                                      size: 28,
+                                    ),
+                              ),
+                            );
+                          } else if (isCustomAvatar) {
+                            return CustomAvatarWidget(
+                              avatarId: avatarUrl,
+                              size: 60,
+                              useBackground: true,
+                            );
+                          } else {
+                            // Fallback for raw emojis or text
+                            return Center(
+                              child: Text(
+                                avatarUrl,
+                                style: const TextStyle(
+                                  fontSize: 28,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                      )
+                    else
+                      Icon(
+                        _getDeviceIcon(name, platform: platform),
+                        color: Colors.white,
+                        size: 28,
+                      ),
+                    if (isPending)
+                      CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 1.5,
+                      ),
+                  ],
+                ),
+              ),
+              SizedBox(height: 6),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.6),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  displayName.length > 12
+                      ? '${displayName.substring(0, 10)}...'
+                      : displayName,
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Helper method to get platform icon
+  IconData _getPlatformIcon(String platform) {
+    switch (platform.toLowerCase()) {
+      case 'android':
+        return Icons.phone_android;
+      case 'windows':
+        return Icons.desktop_windows;
+      case 'ios':
+        return Icons.phone_iphone;
+      case 'macos':
+        return Icons.laptop_mac;
+      case 'linux':
+        return Icons.computer;
+      default:
+        return Icons.devices;
+    }
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: Icon(
+                  Icons.arrow_back_ios_rounded,
+                  color: Colors.black,
+                  size: 22,
+                ),
+                onPressed: () => Navigator.pop(context),
+              ),
+              Expanded(
+                child: Text(
+                  'Share Files',
+                  style: GoogleFonts.outfit(
+                    color: Colors.black,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.5,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              // Only refresh button on the right
+              IconButton(
+                icon: Icon(
+                  Icons.refresh_rounded,
+                  color: Colors.black,
+                  size: 24,
+                ),
+                onPressed: _refreshIp,
+              ),
+            ],
+          ),
+          AnimatedSize(
+            duration: Duration(milliseconds: 400),
+            curve: Curves.easeOut,
+            child: AnimatedSwitcher(
+              duration: Duration(milliseconds: 400),
+              switchInCurve: Curves.easeOut,
+              switchOutCurve: Curves.easeIn,
+              transitionBuilder:
+                  (child, animation) => SlideTransition(
+                    position: Tween<Offset>(
+                      begin: Offset(0, -0.1),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+              child:
+                  _localIp == null
+                      ? Padding(
+                        key: ValueKey('loading'),
+                        padding: const EdgeInsets.only(top: 16.0),
+                        child: SizedBox(
+                          height: 48,
+                          child: Center(
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.black.withOpacity(0.3),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+                      : Padding(
+                        key: ValueKey('code'),
+                        padding: const EdgeInsets.only(top: 16.0),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Code display with QR button beside it
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                GestureDetector(
+                                  onTap: () {
+                                    Clipboard.setData(
+                                      ClipboardData(
+                                        text: _ipToCode(_localIp!, port: _port),
+                                      ),
+                                    );
+                                    HapticFeedback.lightImpact();
+                                    _showModernToast(
+                                      message: 'Code copied to clipboard',
+                                      icon: Icons.copy_rounded,
+                                      iconColor: const Color(0xFFFFD600),
+                                    );
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 10,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black,
+                                      borderRadius: BorderRadius.circular(30),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.2),
+                                          blurRadius: 10,
+                                          offset: Offset(0, 4),
+                                        ),
+                                      ],
+                                      border: Border.all(
+                                        color: Colors.white.withOpacity(0.1),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          'Code: ${_ipToCode(_localIp!, port: _port)}',
+                                          style: GoogleFonts.outfit(
+                                            color: Colors.white,
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w700,
+                                            letterSpacing: 1.0,
+                                          ),
+                                        ),
+                                        SizedBox(width: 8),
+                                        Icon(
+                                          Icons.copy_rounded,
+                                          color: Colors.white.withOpacity(0.7),
+                                          size: 16,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(width: 12),
+                                // QR Code button in circle
+                                Container(
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.black,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.2),
+                                        blurRadius: 10,
+                                        offset: Offset(0, 4),
+                                      ),
+                                    ],
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.1),
+                                    ),
+                                  ),
+                                  child: IconButton(
+                                    icon: Icon(
+                                      Icons.qr_code_rounded,
+                                      color: Colors.white,
+                                      size: 24,
+                                    ),
+                                    onPressed: _showQrDialog,
+                                    padding: EdgeInsets.all(12),
+                                    constraints: BoxConstraints(),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            // Port information with settings button
+                            Padding(
+                              padding: const EdgeInsets.only(top: 12.0),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'Port: $_port',
+                                    style: GoogleFonts.outfit(
+                                      color: Colors.black.withOpacity(0.5),
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  if (!_isSharing) ...[
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withOpacity(0.05),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: Colors.black.withOpacity(0.1),
+                                        ),
+                                      ),
+                                      child: InkWell(
+                                        onTap: _showPortDialog,
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.settings_rounded,
+                                              size: 14,
+                                              color: Colors.black.withOpacity(
+                                                0.5,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              'Change',
+                                              style: GoogleFonts.outfit(
+                                                color: Colors.black.withOpacity(
+                                                  0.5,
+                                                ),
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildWifiDirectPeerList() {
-    return Container(
-      height: 85,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        itemCount: _wifiDirectPeers.length,
-        itemBuilder: (context, index) {
-          return _buildWifiDirectPeerItem(_wifiDirectPeers[index]);
-        },
-      ),
-    );
-  }
-
-  Widget _buildWifiDirectPeerItem(WiFiDirectPeer peer) {
-    final isConnecting =
-        _isConnectingWifiDirect && _connectingPeerAddress == peer.deviceAddress;
-    final isConnected = _wifiDirectConnectionInfo?.groupFormed == true;
-
-    return GestureDetector(
-      onTap:
-          isConnecting || isConnected
-              ? null
-              : () {
-                // Convert WiFiDirectPeer to DiscoveredDevice and use unified flow
-                final device = DiscoveredDevice(
-                  deviceId: 'wd_${peer.deviceAddress.replaceAll(':', '')}',
-                  deviceName: peer.deviceName,
-                  ipAddress: '0.0.0.0',
-                  port: 0,
-                  platform: 'android',
-                  lastSeen: DateTime.now(),
-                  discoveryMethod: DiscoveryMethod.wifiDirect,
-                  wifiDirectAddress: peer.deviceAddress,
-                );
-                _sendConnectionRequest(device);
-              },
-      child: Container(
-        width: 70,
-        margin: EdgeInsets.only(right: 10),
-        child: Column(
-          children: [
-            // Circular device icon
-            AnimatedContainer(
-              duration: Duration(milliseconds: 200),
-              width: 55,
-              height: 55,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient:
-                    isConnecting
-                        ? LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [Colors.blue[300]!, Colors.blue[400]!],
-                        )
-                        : LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [Colors.grey[800]!, Colors.grey[850]!],
-                        ),
-                border: Border.all(
-                  color: isConnecting ? Colors.blue[300]! : Colors.blue[700]!,
-                  width: 2,
-                ),
-                boxShadow: [
-                  if (isConnecting)
-                    BoxShadow(
-                      color: Colors.blue[300]!.withOpacity(0.3),
-                      blurRadius: 8,
-                      offset: Offset(0, 3),
-                    ),
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 6,
-                    offset: Offset(0, 3),
-                  ),
-                ],
+  Widget _buildBottomSheet(bool isCompact) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.25,
+      minChildSize: 0.25,
+      maxChildSize: 0.85,
+      snap: true,
+      snapSizes: [0.25, 0.35, 0.85],
+      builder: (context, scrollController) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.black,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.5),
+                blurRadius: 20,
+                offset: Offset(0, -5),
               ),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  Icon(
-                    Icons.android,
-                    color: isConnecting ? Colors.white : Colors.blue[200],
-                    size: 24,
+            ],
+          ),
+          child: CustomScrollView(
+            controller: scrollController,
+            slivers: [
+              // Handle
+              SliverToBoxAdapter(
+                child: Center(
+                  child: Container(
+                    margin: EdgeInsets.only(top: 12, bottom: 20),
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[600],
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
-                  if (isConnecting)
-                    Positioned.fill(
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Colors.white.withOpacity(0.5),
+                ),
+              ),
+
+              // Action Buttons Row (Fixed - not scrollable)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 24),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _buildRectangularButton(
+                        icon: Icons.attach_file_rounded,
+                        onTap: _selectFiles,
+                        color: Colors.grey[900]!,
+                        textColor: Colors.white,
+                        label: 'Add Files',
+                      ),
+                      _buildRectangularButton(
+                        icon: Icons.folder_rounded,
+                        onTap: _pickFolder,
+                        color: Colors.grey[900]!,
+                        textColor: Colors.white,
+                        label: 'Folder',
+                      ),
+                      _buildRectangularButton(
+                        icon:
+                            _isSharing
+                                ? Icons.stop_circle_rounded
+                                : Icons.send_rounded,
+                        onTap:
+                            (_fileUris.isEmpty || _loading)
+                                ? null
+                                : (_isSharing
+                                    ? _stopServer
+                                    : _startSharingSession),
+                        color:
+                            _fileUris.isEmpty
+                                ? Colors.grey[900]!
+                                : (_isSharing
+                                    ? Colors.red[600]!
+                                    : const Color(0xFFFFD600)),
+                        textColor:
+                            _fileUris.isEmpty
+                                ? Colors.grey[600]!
+                                : (_isSharing ? Colors.white : Colors.black),
+                        label: _isSharing ? 'Stop' : 'Send',
+                        isPrimary: !_isSharing && _fileUris.isNotEmpty,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              SliverToBoxAdapter(child: SizedBox(height: 24)),
+
+              SliverToBoxAdapter(
+                child: Divider(color: Colors.white.withOpacity(0.05)),
+              ),
+
+              // Files List Header (Fixed - not scrollable)
+              if (_fileNames.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                    child: _buildFileListHeader(),
+                  ),
+                ),
+
+              // Scrollable Files List Section
+              if (_fileNames.isNotEmpty)
+                SliverToBoxAdapter(child: _buildFileList(isCompact))
+              else
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Text(
+                        'No files selected\nSwipe up or tap buttons to add',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.outfit(
+                          color: Colors.grey[500],
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          height: 1.5,
                         ),
                       ),
                     ),
-                ],
-              ),
-            ),
-            SizedBox(height: 6),
-            // Device name
-            Text(
-              peer.deviceName.length > 10
-                  ? '${peer.deviceName.substring(0, 10)}...'
-                  : peer.deviceName,
-              style: TextStyle(
-                color: isConnecting ? Colors.blue[300] : Colors.white,
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
+                  ),
+                ),
+
+              SliverToBoxAdapter(child: SizedBox(height: 20)),
+            ],
+          ),
+        );
+      },
     );
   }
+
+  // WiFi Direct peer list methods removed - no longer using WiFi Direct
 
   Widget _buildEmptyDevicesState() {
     return Container(
@@ -4145,15 +5359,22 @@ class _AndroidHttpFileShareScreenState
   }
 
   Widget _buildCompactDeviceList() {
-    return Container(
-      height: 85,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        itemCount: _nearbyDevices.length,
-        itemBuilder: (context, index) {
-          return _buildCircularDeviceItem(_nearbyDevices[index]);
-        },
-      ),
+    return BlocBuilder<DiscoveryBloc, DiscoveryState>(
+      builder: (context, state) {
+        final devices =
+            state is DiscoveryLoaded ? state.devices : <DiscoveredDevice>[];
+
+        return SizedBox(
+          height: 85,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            itemCount: devices.length,
+            itemBuilder: (context, index) {
+              return _buildCircularDeviceItem(devices[index]);
+            },
+          ),
+        );
+      },
     );
   }
 
@@ -4210,12 +5431,47 @@ class _AndroidHttpFileShareScreenState
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  // Platform icon
-                  Icon(
-                    _getPlatformIcon(device.platform),
-                    color: isPending ? Colors.black87 : Colors.white70,
-                    size: 24,
+                  // Debug: Log avatar info
+                  Builder(
+                    builder: (context) {
+                      print(
+                        '🎨 Device ${device.deviceName}: avatarUrl=${device.avatarUrl}',
+                      );
+                      return SizedBox.shrink();
+                    },
                   ),
+                  // Platform icon
+                  // Platform icon
+                  if (device.avatarUrl != null)
+                    device.avatarUrl!.startsWith('http')
+                        ? ClipOval(
+                          child: Image.network(
+                            device.avatarUrl!,
+                            width: 30,
+                            height: 30,
+                            fit: BoxFit.cover,
+                            errorBuilder:
+                                (_, __, ___) => Icon(
+                                  _getPlatformIcon(device.platform),
+                                  color:
+                                      isPending
+                                          ? Colors.black87
+                                          : Colors.white70,
+                                  size: 24,
+                                ),
+                          ),
+                        )
+                        : CustomAvatarWidget(
+                          avatarId: device.avatarUrl!,
+                          size: 30,
+                          useBackground: false,
+                        )
+                  else
+                    Icon(
+                      _getPlatformIcon(device.platform),
+                      color: isPending ? Colors.black87 : Colors.white70,
+                      size: 24,
+                    ),
                   // Pending spinner
                   if (isPending)
                     Positioned.fill(
@@ -4237,7 +5493,7 @@ class _AndroidHttpFileShareScreenState
                   : device.deviceName,
               style: TextStyle(
                 color: isPending ? Colors.yellow[300] : Colors.white,
-                fontSize: 10,
+                fontSize: 13,
                 fontWeight: FontWeight.w600,
               ),
               maxLines: 1,
@@ -4294,11 +5550,37 @@ class _AndroidHttpFileShareScreenState
                         ),
                       ],
                     ),
-                    child: Icon(
-                      _getPlatformIcon(device.platform),
-                      color: Colors.black87,
-                      size: 40,
-                    ),
+                    child: () {
+                      print(
+                        '🎨 [Dialog] Device ${device.deviceName}: avatarUrl=${device.avatarUrl}',
+                      );
+                      return device.avatarUrl != null
+                          ? (device.avatarUrl!.startsWith('http')
+                              ? ClipOval(
+                                child: Image.network(
+                                  device.avatarUrl!,
+                                  width: 80,
+                                  height: 80,
+                                  fit: BoxFit.cover,
+                                  errorBuilder:
+                                      (_, __, ___) => Icon(
+                                        _getPlatformIcon(device.platform),
+                                        color: Colors.black87,
+                                        size: 40,
+                                      ),
+                                ),
+                              )
+                              : CustomAvatarWidget(
+                                avatarId: device.avatarUrl!,
+                                size: 50,
+                                useBackground: false,
+                              ))
+                          : Icon(
+                            _getPlatformIcon(device.platform),
+                            color: Colors.black87,
+                            size: 40,
+                          );
+                    }(),
                   ),
                   SizedBox(height: 16),
 
@@ -4431,384 +5713,144 @@ class _AndroidHttpFileShareScreenState
         _pendingRequestDeviceIp == device.ipAddress ||
         _pendingRequestDeviceIp == device.deviceId;
 
-    return GestureDetector(
-      onTap: isPending ? null : () => _sendConnectionRequest(device),
-      child: AnimatedContainer(
-        duration: Duration(milliseconds: 300),
-        width: 160,
-        padding: EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors:
-                isPending
-                    ? [
-                      Colors.yellow[300]!.withOpacity(0.2),
-                      Colors.yellow[400]!.withOpacity(0.1),
-                    ]
-                    : [Colors.grey[850]!, Colors.grey[900]!],
-          ),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isPending ? Colors.yellow[300]! : Colors.grey[700]!,
-            width: isPending ? 2 : 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color:
-                  isPending
-                      ? Colors.yellow[300]!.withOpacity(0.2)
-                      : Colors.black.withOpacity(0.2),
-              blurRadius: isPending ? 12 : 8,
-              offset: Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Platform icon with background
-            Container(
-              width: 56,
-              height: 56,
-              decoration: BoxDecoration(
-                color:
-                    isPending
-                        ? Colors.yellow[300]!.withOpacity(0.2)
-                        : Colors.grey[800],
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: isPending ? Colors.yellow[300]! : Colors.transparent,
-                  width: 1,
-                ),
-              ),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  Icon(
-                    _getPlatformIcon(device.platform),
-                    color: isPending ? Colors.yellow[300] : Colors.white,
-                    size: 30,
-                  ),
-                  if (isPending)
-                    Positioned.fill(
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation(Colors.yellow[300]),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            SizedBox(height: 12),
-            // Device name
-            Text(
-              device.deviceName,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-            ),
-            SizedBox(height: 4),
-            // Platform name
-            Text(
-              device.platform,
-              style: TextStyle(
-                color: Colors.grey[500],
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            if (isPending) ...[
-              SizedBox(height: 8),
-              Text(
-                'Connecting...',
-                style: TextStyle(
-                  color: Colors.yellow[300],
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCompactDeviceChip(DiscoveredDevice device) {
-    final isPending =
-        _pendingRequestDeviceIp == device.ipAddress ||
-        _pendingRequestDeviceIp == device.deviceId;
-
-    return Tooltip(
-      message: '${device.deviceName}\n${device.platform}\n${device.ipAddress}',
-      preferBelow: false,
-      verticalOffset: 10,
-      decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.yellow[300]!, width: 1),
-      ),
-      textStyle: TextStyle(color: Colors.white, fontSize: 12),
-      child: GestureDetector(
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
         onTap: isPending ? null : () => _sendConnectionRequest(device),
+        borderRadius: BorderRadius.circular(16),
         child: AnimatedContainer(
-          duration: Duration(milliseconds: 200),
-          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          duration: Duration(milliseconds: 300),
+          width: 160,
+          padding: EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color:
-                isPending
-                    ? Colors.yellow[300]!.withOpacity(0.2)
-                    : Colors.grey[800],
-            borderRadius: BorderRadius.circular(20),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors:
+                  isPending
+                      ? [
+                        Colors.yellow[300]!.withOpacity(0.2),
+                        Colors.yellow[400]!.withOpacity(0.1),
+                      ]
+                      : [Colors.grey[850]!, Colors.grey[900]!],
+            ),
+            borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: isPending ? Colors.yellow[300]! : Colors.grey[700]!,
               width: isPending ? 2 : 1,
             ),
+            boxShadow: [
+              BoxShadow(
+                color:
+                    isPending
+                        ? Colors.yellow[300]!.withOpacity(0.2)
+                        : Colors.black.withOpacity(0.2),
+                blurRadius: isPending ? 12 : 8,
+                offset: Offset(0, 4),
+              ),
+            ],
           ),
-          child: Row(
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                _getPlatformIcon(device.platform),
-                color: isPending ? Colors.yellow[300] : Colors.white70,
-                size: 16,
-              ),
-              SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  device.deviceName,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
+              // Platform icon with background
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color:
+                      isPending
+                          ? Colors.yellow[300]!.withOpacity(0.2)
+                          : Colors.grey[800],
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: isPending ? Colors.yellow[300]! : Colors.transparent,
+                    width: 1,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    if (device.avatarUrl != null)
+                      device.avatarUrl!.startsWith('http')
+                          ? ClipRRect(
+                            borderRadius: BorderRadius.circular(14),
+                            child: Image.network(
+                              device.avatarUrl!,
+                              width: 56,
+                              height: 56,
+                              fit: BoxFit.cover,
+                              errorBuilder:
+                                  (_, __, ___) => Icon(
+                                    _getPlatformIcon(device.platform),
+                                    color:
+                                        isPending
+                                            ? Colors.yellow[300]
+                                            : Colors.white,
+                                    size: 30,
+                                  ),
+                            ),
+                          )
+                          : CustomAvatarWidget(
+                            avatarId: device.avatarUrl!,
+                            size: 40,
+                            useBackground: false,
+                          )
+                    else
+                      Icon(
+                        _getPlatformIcon(device.platform),
+                        color: isPending ? Colors.yellow[300] : Colors.white,
+                        size: 30,
+                      ),
+                    if (isPending)
+                      Positioned.fill(
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation(
+                            Colors.yellow[300],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              SizedBox(height: 12),
+              // Device name
+              Text(
+                device.deviceName,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 4),
+              // Platform name
+              Text(
+                device.platform,
+                style: TextStyle(
+                  color: Colors.grey[500],
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
               if (isPending) ...[
-                SizedBox(width: 6),
-                SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation(Colors.yellow[300]),
+                SizedBox(height: 8),
+                Text(
+                  'Connecting...',
+                  style: TextStyle(
+                    color: Colors.yellow[300],
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  IconData _getPlatformIcon(String platform) {
-    switch (platform.toLowerCase()) {
-      case 'android':
-        return Icons.android;
-      case 'ios':
-        return Icons.phone_iphone;
-      case 'windows':
-        return Icons.desktop_windows;
-      case 'macos':
-        return Icons.laptop_mac;
-      case 'linux':
-        return Icons.computer;
-      default:
-        return Icons.devices;
-    }
-  }
-
-  Widget _buildCompactShareCode() {
-    final shareUrl = 'http://$_localIp:8080';
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.yellow[300]!, width: 1),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child:
-                    _displayCode != null
-                        ? StatefulBuilder(
-                          builder: (context, setState) {
-                            bool isPressed = false;
-
-                            return GestureDetector(
-                              onTap: () {
-                                HapticFeedback.lightImpact();
-                                Clipboard.setData(
-                                  ClipboardData(text: _displayCode!),
-                                );
-                              },
-                              onTapDown:
-                                  (_) => setState(() => isPressed = true),
-                              onTapUp: (_) => setState(() => isPressed = false),
-                              onTapCancel:
-                                  () => setState(() => isPressed = false),
-                              child: AnimatedContainer(
-                                duration: Duration(milliseconds: 150),
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 8,
-                                ),
-                                transform:
-                                    Matrix4.identity()
-                                      ..scale(isPressed ? 0.98 : 1.0),
-                                decoration: BoxDecoration(
-                                  color: Colors.yellow[300]!.withOpacity(
-                                    isPressed ? 0.15 : 0.1,
-                                  ),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: Colors.yellow[300]!.withOpacity(
-                                      isPressed ? 0.5 : 0.3,
-                                    ),
-                                    width: isPressed ? 1.5 : 1,
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      _displayCode!,
-                                      style: TextStyle(
-                                        fontSize: 18,
-                                        color: Colors.yellow[300],
-                                        fontWeight: FontWeight.w600,
-                                        letterSpacing: 1,
-                                        fontFamily: 'monospace',
-                                      ),
-                                    ),
-                                    SizedBox(width: 8),
-                                    Icon(
-                                      Icons.copy_rounded,
-                                      color: Colors.yellow[300]!.withOpacity(
-                                        0.7,
-                                      ),
-                                      size: 16,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        )
-                        : Container(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[800]!.withOpacity(0.3),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: Colors.grey[600]!.withOpacity(0.3),
-                              width: 1,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.info_outline_rounded,
-                                color: Colors.grey[500],
-                                size: 16,
-                              ),
-                              SizedBox(width: 8),
-                              Text(
-                                'Start sharing to see code',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.grey[500],
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-              ),
-            ],
-          ),
-          SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: StatefulBuilder(
-                  builder: (context, setState) {
-                    bool isPressed = false;
-
-                    return GestureDetector(
-                      onTap: () {
-                        HapticFeedback.lightImpact();
-                        Clipboard.setData(ClipboardData(text: shareUrl));
-                      },
-                      onTapDown: (_) => setState(() => isPressed = true),
-                      onTapUp: (_) => setState(() => isPressed = false),
-                      onTapCancel: () => setState(() => isPressed = false),
-                      child: AnimatedContainer(
-                        duration: Duration(milliseconds: 150),
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        transform:
-                            Matrix4.identity()..scale(isPressed ? 0.98 : 1.0),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[400]!.withOpacity(
-                            isPressed ? 0.15 : 0.1,
-                          ),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: Colors.grey[400]!.withOpacity(
-                              isPressed ? 0.5 : 0.3,
-                            ),
-                            width: isPressed ? 0.5 : 1,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              shareUrl,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[400],
-                                fontWeight: FontWeight.w500,
-                                fontFamily: 'monospace',
-                              ),
-                            ),
-                            SizedBox(width: 8),
-                            Icon(
-                              Icons.link_rounded,
-                              color: Colors.grey[400]!.withOpacity(0.7),
-                              size: 16,
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ],
       ),
     );
   }
@@ -4840,12 +5882,52 @@ class _AndroidHttpFileShareScreenState
   }
 
   Widget _buildFileList(bool isCompact) {
-    return SizedBox(
-      height: 160, // Fixed height for horizontal list (increased for padding)
+    // Create a sorted list of indices
+    final sortedIndices = List<int>.generate(_fileNames.length, (i) => i);
+
+    // Sort: sharing files first (progress > 0 && !completed), then pending, then completed
+    sortedIndices.sort((a, b) {
+      final aProgress = _progressList.length > a ? _progressList[a].value : 0.0;
+      final bProgress = _progressList.length > b ? _progressList[b].value : 0.0;
+
+      // Check if any client has completed
+      bool aHasClientCompleted = false;
+      bool bHasClientCompleted = false;
+
+      for (final clientIP in _connectedClients) {
+        if (_clientDownloads.containsKey(clientIP)) {
+          if (_clientDownloads[clientIP]!.containsKey(a) &&
+              _clientDownloads[clientIP]![a]!.isCompleted) {
+            aHasClientCompleted = true;
+          }
+          if (_clientDownloads[clientIP]!.containsKey(b) &&
+              _clientDownloads[clientIP]![b]!.isCompleted) {
+            bHasClientCompleted = true;
+          }
+        }
+      }
+
+      // Priority: sharing (progress > 0) > pending > completed
+      final aIsSharing = _isSharing && aProgress > 0 && !aHasClientCompleted;
+      final bIsSharing = _isSharing && bProgress > 0 && !bHasClientCompleted;
+
+      if (aIsSharing && !bIsSharing) return -1;
+      if (!aIsSharing && bIsSharing) return 1;
+
+      if (aHasClientCompleted && !bHasClientCompleted) return 1;
+      if (!aHasClientCompleted && bHasClientCompleted) return -1;
+
+      return 0; // Keep original order for same priority
+    });
+
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 24),
       child: ListView.builder(
-        scrollDirection: Axis.horizontal, // Changed to horizontal
+        shrinkWrap: true,
+        physics: NeverScrollableScrollPhysics(),
         itemCount: _fileNames.length,
-        itemBuilder: (context, index) {
+        itemBuilder: (context, i) {
+          final index = sortedIndices[i];
           final fileName = _fileNames[index];
           final fileSize =
               _fileSizeList.length > index ? _fileSizeList[index] : 0;
@@ -4858,13 +5940,10 @@ class _AndroidHttpFileShareScreenState
                   ? _isPausedList[index]
                   : ValueNotifier(false);
           final isCompleted =
-              _completedFiles.length > index
-                  ? _completedFiles[index]
-                  : false; // Check completion
+              _completedFiles.length > index ? _completedFiles[index] : false;
 
           // Get client download statuses for this file
-          final clientStatuses =
-              <String, DownloadStatus>{}; // clientIP -> DownloadStatus
+          final clientStatuses = <String, DownloadStatus>{};
           for (final clientIP in _connectedClients) {
             if (_clientDownloads.containsKey(clientIP) &&
                 _clientDownloads[clientIP]!.containsKey(index)) {
@@ -4872,7 +5951,6 @@ class _AndroidHttpFileShareScreenState
             }
           }
 
-          // Check if any client has completed this file
           final hasAnyClientCompleted = clientStatuses.values.any(
             (status) => status.isCompleted,
           );
@@ -4881,7 +5959,7 @@ class _AndroidHttpFileShareScreenState
                   .where((status) => status.isCompleted)
                   .toList();
 
-          return _buildHorizontalFileCard(
+          return _buildVerticalFileCard(
             index: index,
             fileName: fileName,
             fileSize: fileSize,
@@ -4894,216 +5972,6 @@ class _AndroidHttpFileShareScreenState
             isCompact: isCompact,
           );
         },
-      ),
-    );
-  }
-
-  // New horizontal file card with long press functionality
-  Widget _buildHorizontalFileCard({
-    required int index,
-    required String fileName,
-    required int fileSize,
-    required ValueNotifier<double> progress,
-    required ValueNotifier<bool> isPaused,
-    required bool isCompleted,
-    required bool hasAnyClientCompleted,
-    required List<DownloadStatus> completedClients,
-    required Map<String, DownloadStatus> clientStatuses,
-    required bool isCompact,
-  }) {
-    return GestureDetector(
-      onLongPress:
-          () => _showFileDetailsDialog(
-            index: index,
-            fileName: fileName,
-            fileSize: fileSize,
-            progress: progress,
-            isPaused: isPaused,
-            isCompleted: isCompleted,
-            hasAnyClientCompleted: hasAnyClientCompleted,
-            completedClients: completedClients,
-            clientStatuses: clientStatuses,
-          ),
-      child: SizedBox(
-        width: 160,
-        height: 160,
-        child: Container(
-          margin: EdgeInsets.only(right: 12),
-          decoration: BoxDecoration(
-            color: Colors.grey[900],
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey[800]!, width: 1),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.3),
-                blurRadius: 6,
-                offset: Offset(0, 3),
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Padding(
-              padding: EdgeInsets.all(12),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // File Icon with circular progress
-                  if (_isSharing && !hasAnyClientCompleted)
-                    // Show circular progress when sharing
-                    ValueListenableBuilder<double>(
-                      valueListenable: progress,
-                      builder:
-                          (context, value, _) => ValueListenableBuilder<bool>(
-                            valueListenable: isPaused,
-                            builder:
-                                (context, paused, _) => Stack(
-                                  clipBehavior: Clip.none,
-                                  children: [
-                                    // Circular progress and pause button in center
-                                    Stack(
-                                      alignment: Alignment.center,
-                                      children: [
-                                        SizedBox(
-                                          width: 70,
-                                          height: 70,
-                                          child: CircularProgressIndicator(
-                                            value: value,
-                                            backgroundColor: Colors.grey[800]!
-                                                .withOpacity(0.3),
-                                            color: Colors.yellow[300],
-                                            strokeWidth: 5,
-                                            strokeCap: StrokeCap.round,
-                                          ),
-                                        ),
-                                        // Pause/Resume button in center of circle
-                                        GestureDetector(
-                                          onTap: () {
-                                            _togglePause(index);
-                                          },
-                                          child: Container(
-                                            width: 32,
-                                            height: 32,
-                                            decoration: BoxDecoration(
-                                              color:
-                                                  paused
-                                                      ? Colors.orange[400]
-                                                      : Colors.yellow[300],
-                                              shape: BoxShape.circle,
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: Colors.black
-                                                      .withOpacity(0.3),
-                                                  blurRadius: 4,
-                                                  offset: Offset(0, 2),
-                                                ),
-                                              ],
-                                            ),
-                                            child: Icon(
-                                              paused
-                                                  ? Icons.play_arrow
-                                                  : Icons.pause,
-                                              color: Colors.black,
-                                              size: 20,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    // Percentage badge at top-right
-                                    Positioned(
-                                      top: -8,
-                                      right: -8,
-                                      child: Container(
-                                        padding: EdgeInsets.symmetric(
-                                          horizontal: 6,
-                                          vertical: 3,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.yellow[300],
-                                          borderRadius: BorderRadius.circular(
-                                            10,
-                                          ),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: Colors.black.withOpacity(
-                                                0.3,
-                                              ),
-                                              blurRadius: 4,
-                                              offset: Offset(0, 2),
-                                            ),
-                                          ],
-                                        ),
-                                        child: Text(
-                                          '${(value * 100).toStringAsFixed(0)}%',
-                                          style: TextStyle(
-                                            color: Colors.black,
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.bold,
-                                            height: 1.0,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                          ),
-                    )
-                  else
-                    // Show file icon when not sharing or completed
-                    Container(
-                      width: 60,
-                      height: 60,
-                      decoration: BoxDecoration(
-                        color:
-                            hasAnyClientCompleted
-                                ? Colors.green[400]
-                                : Colors.yellow[300],
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(
-                        hasAnyClientCompleted
-                            ? Icons.check_rounded
-                            : _getFileIcon(fileName),
-                        color: Colors.black,
-                        size: 30,
-                      ),
-                    ),
-                  SizedBox(height: 10),
-                  // File Name - constrained to prevent overflow
-                  Flexible(
-                    child: Text(
-                      fileName,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        height: 1.2,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                  SizedBox(height: 6),
-                  // File size (progress is now shown inside circle)
-                  Text(
-                    isCompleted ? 'Sent' : formatBytes(fileSize),
-                    style: TextStyle(
-                      color: isCompleted ? Colors.green[400] : Colors.grey[400],
-                      fontSize: 10,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -5275,6 +6143,204 @@ class _AndroidHttpFileShareScreenState
     );
   }
 
+  // New vertical file card widget
+  Widget _buildVerticalFileCard({
+    required int index,
+    required String fileName,
+    required int fileSize,
+    required ValueNotifier<double> progress,
+    required ValueNotifier<bool> isPaused,
+    required bool isCompleted,
+    required bool hasAnyClientCompleted,
+    required List<DownloadStatus> completedClients,
+    required Map<String, DownloadStatus> clientStatuses,
+    required bool isCompact,
+  }) {
+    return GestureDetector(
+      onLongPress:
+          () => _showFileDetailsDialog(
+            index: index,
+            fileName: fileName,
+            fileSize: fileSize,
+            progress: progress,
+            isPaused: isPaused,
+            isCompleted: isCompleted,
+            hasAnyClientCompleted: hasAnyClientCompleted,
+            completedClients: completedClients,
+            clientStatuses: clientStatuses,
+          ),
+      child: Container(
+        margin: EdgeInsets.only(bottom: 12),
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.grey[900],
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color:
+                _isSharing && progress.value > 0 && !hasAnyClientCompleted
+                    ? Colors.yellow[300]!.withOpacity(0.3)
+                    : Colors.grey[800]!,
+            width: 1.5,
+          ),
+        ),
+        child: Row(
+          children: [
+            // File Icon with Fill Progress Effect
+            if (_isSharing && !hasAnyClientCompleted)
+              ValueListenableBuilder<double>(
+                valueListenable: progress,
+                builder: (context, value, _) {
+                  return SizedBox(
+                    width: 50,
+                    height: 50,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Stack(
+                        children: [
+                          // Background container
+                          Container(
+                            width: 50,
+                            height: 50,
+                            decoration: BoxDecoration(
+                              color: Colors.grey[800],
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          // Fill from bottom progress
+                          Align(
+                            alignment: Alignment.bottomCenter,
+                            child: Container(
+                              width: 50,
+                              height: 50 * value,
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.bottomCenter,
+                                  end: Alignment.topCenter,
+                                  colors: [
+                                    Colors.yellow[400]!,
+                                    Colors.yellow[300]!,
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          // File Icon on top
+                          Center(
+                            child: Icon(
+                              _getFileIcon(fileName),
+                              color: value > 0.5 ? Colors.black : Colors.white,
+                              size: 28,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              )
+            else
+              // Static File Icon (not sharing or completed)
+              Container(
+                width: 50,
+                height: 50,
+                decoration: BoxDecoration(
+                  color:
+                      hasAnyClientCompleted
+                          ? Colors.green[400]
+                          : Colors.yellow[300],
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  hasAnyClientCompleted
+                      ? Icons.check_rounded
+                      : _getFileIcon(fileName),
+                  color: Colors.black,
+                  size: 28,
+                ),
+              ),
+            SizedBox(width: 16),
+
+            // File Info
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    fileName,
+                    style: GoogleFonts.outfit(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    formatBytes(fileSize),
+                    style: GoogleFonts.outfit(
+                      color: Colors.grey[400],
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  // Use isolated widget for per-client progress (avoids parent rebuilds)
+                  if (_isSharing)
+                    RepaintBoundary(
+                      child: _ClientProgressSection(
+                        clientDownloads: _clientDownloads,
+                        fileIndex: index,
+                        clientDeviceNames: _clientDeviceNames,
+                        formatClientIP: _formatClientIP,
+                        hasAnyClientCompleted: hasAnyClientCompleted,
+                      ),
+                    ),
+                  if (hasAnyClientCompleted) ...[
+                    SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.check_circle_rounded,
+                          size: 14,
+                          color: Colors.green[400],
+                        ),
+                        SizedBox(width: 4),
+                        Text(
+                          'Sent to ${completedClients.length} client${completedClients.length == 1 ? '' : 's'}',
+                          style: GoogleFonts.outfit(
+                            color: Colors.green[400],
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+
+            // Action Button
+            if (_isSharing && !hasAnyClientCompleted)
+              ValueListenableBuilder<bool>(
+                valueListenable: isPaused,
+                builder: (context, paused, _) {
+                  return IconButton(
+                    icon: Icon(
+                      paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                      color: Colors.yellow[300],
+                      size: 28,
+                    ),
+                    onPressed: () => _togglePause(index),
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSwipeToDeleteFile({
     required int index,
     required String fileName,
@@ -5396,13 +6462,7 @@ class _AndroidHttpFileShareScreenState
                         decoration: BoxDecoration(
                           color: Colors.green[400],
                           shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.green[400]!.withOpacity(0.4),
-                              blurRadius: 6,
-                              offset: Offset(0, 2),
-                            ),
-                          ],
+                          boxShadow: null,
                         ),
                         child: Icon(
                           Icons.check_rounded,
@@ -5430,7 +6490,7 @@ class _AndroidHttpFileShareScreenState
                                   .join(', '),
                               style: TextStyle(
                                 color: Colors.grey[500],
-                                fontSize: 10,
+                                fontSize: 12,
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
@@ -5442,7 +6502,7 @@ class _AndroidHttpFileShareScreenState
                       ValueListenableBuilder<double>(
                         valueListenable: progress,
                         builder:
-                            (context, value, _) => Container(
+                            (context, value, _) => SizedBox(
                               width: 32,
                               height: 32,
                               child: Stack(
@@ -5554,351 +6614,7 @@ class _AndroidHttpFileShareScreenState
         false;
   }
 
-  Widget _buildEmptyState() {
-    return Column(
-      children: [
-        // Main content area - fills available space
-        Expanded(
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  'No Files Selected',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Select files to start sharing',
-                  style: TextStyle(
-                    color: Colors.grey[400],
-                    fontSize: 16,
-                    fontWeight: FontWeight.w400,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-        ),
-
-        // Action buttons - exactly same position as non-empty state
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _buildRectangularButton(
-                icon: Icons.attach_file_rounded,
-                onTap: _selectFiles,
-                color: Colors.grey[900]!,
-                textColor: Colors.white,
-                label: 'Add Files',
-              ),
-              _buildRectangularButton(
-                icon: Icons.folder_rounded,
-                onTap: _pickFolder,
-                color: Colors.grey[900]!,
-                textColor: Colors.white,
-                label: 'Folder',
-              ),
-              _buildRectangularButton(
-                icon: Icons.send_rounded,
-                onTap: null, // Disabled
-                color: Colors.grey[700]!,
-                textColor: Colors.grey[400]!,
-                label: 'Send',
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLoadingState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              // Outer rotating ring
-              SizedBox(
-                width: 90,
-                height: 90,
-                child: CircularProgressIndicator(
-                  color: Colors.yellow[300],
-                  strokeWidth: 3,
-                ),
-              ),
-              // Inner pulsing circle
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  color: Colors.grey[900],
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.grey[800]!, width: 2),
-                ),
-                child: Icon(
-                  Icons.hourglass_empty_rounded,
-                  color: Colors.yellow[300],
-                  size: 28,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'Loading...',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Please wait',
-            style: TextStyle(color: Colors.grey[500], fontSize: 14),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActionButton({
-    required IconData icon,
-    required VoidCallback? onTap,
-    required Color color,
-    required Color textColor,
-    required String label,
-  }) {
-    final isEnabled = onTap != null;
-    final isPrimary = color == Colors.yellow[300];
-
-    return StatefulBuilder(
-      builder: (context, setState) {
-        bool isPressed = false;
-
-        return GestureDetector(
-          onTapDown: (_) => setState(() => isPressed = true),
-          onTapUp: (_) => setState(() => isPressed = false),
-          onTapCancel: () => setState(() => isPressed = false),
-          child: AnimatedContainer(
-            duration: Duration(milliseconds: 150),
-            width: 88,
-            height: 88,
-            transform: Matrix4.identity()..scale(isPressed ? 0.95 : 1.0),
-            decoration: BoxDecoration(
-              color:
-                  isEnabled
-                      ? (isPrimary ? Colors.yellow[300] : color)
-                      : Colors.grey[700],
-              shape: BoxShape.circle,
-              boxShadow:
-                  isEnabled
-                      ? [
-                        BoxShadow(
-                          color: (isPrimary ? Colors.yellow[400]! : color)
-                              .withOpacity(isPressed ? 0.2 : 0.3),
-                          blurRadius: isPressed ? 12 : 16,
-                          offset: Offset(0, isPressed ? 4 : 8),
-                          spreadRadius: 0,
-                        ),
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 4,
-                          offset: Offset(0, 2),
-                          spreadRadius: 0,
-                        ),
-                      ]
-                      : [
-                        BoxShadow(
-                          color: Colors.grey[800]!.withOpacity(0.3),
-                          blurRadius: 8,
-                          offset: Offset(0, 4),
-                          spreadRadius: 0,
-                        ),
-                      ],
-              border:
-                  isEnabled && isPrimary
-                      ? Border.all(color: Colors.yellow[600]!, width: 2)
-                      : null,
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: isEnabled ? onTap : null,
-                borderRadius: BorderRadius.circular(44),
-                splashColor:
-                    isEnabled
-                        ? Colors.white.withOpacity(0.2)
-                        : Colors.transparent,
-                highlightColor:
-                    isEnabled
-                        ? Colors.white.withOpacity(0.1)
-                        : Colors.transparent,
-                child: Center(
-                  child: AnimatedScale(
-                    duration: Duration(milliseconds: 150),
-                    scale: isEnabled ? 1.0 : 0.8,
-                    child: Icon(
-                      icon,
-                      color: isEnabled ? textColor : Colors.grey[500],
-                      size: 28,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildRoundActionButton({
-    required IconData icon,
-    required VoidCallback? onTap,
-    required Color color,
-    required Color textColor,
-  }) {
-    final isPrimary = color == Colors.yellow[300];
-
-    return StatefulBuilder(
-      builder: (context, setState) {
-        bool isPressed = false;
-
-        return GestureDetector(
-          onTapDown: (_) => setState(() => isPressed = true),
-          onTapUp: (_) => setState(() => isPressed = false),
-          onTapCancel: () => setState(() => isPressed = false),
-          child: AnimatedContainer(
-            duration: Duration(milliseconds: 150),
-            width: 88,
-            height: 88,
-            transform: Matrix4.identity()..scale(isPressed ? 0.95 : 1.0),
-            decoration: BoxDecoration(
-              color: isPrimary ? Colors.yellow[300] : color,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: (isPrimary ? Colors.yellow[400]! : color).withOpacity(
-                    isPressed ? 0.2 : 0.3,
-                  ),
-                  blurRadius: isPressed ? 12 : 16,
-                  offset: Offset(0, isPressed ? 4 : 8),
-                  spreadRadius: 0,
-                ),
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  blurRadius: 4,
-                  offset: Offset(0, 2),
-                  spreadRadius: 0,
-                ),
-              ],
-              border:
-                  isPrimary
-                      ? Border.all(color: Colors.yellow[600]!, width: 2)
-                      : null,
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: onTap,
-                borderRadius: BorderRadius.circular(16),
-                splashColor: Colors.white.withOpacity(0.2),
-                highlightColor: Colors.white.withOpacity(0.1),
-                child: Center(child: Icon(icon, color: textColor, size: 26)),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   // Enhanced button for the share code copy functionality
-  Widget _buildCopyButton({
-    required String text,
-    required VoidCallback onTap,
-    required Color backgroundColor,
-    required Color textColor,
-    required IconData icon,
-    required String label,
-  }) {
-    return StatefulBuilder(
-      builder: (context, setState) {
-        bool isPressed = false;
-
-        return GestureDetector(
-          onTapDown: (_) => setState(() => isPressed = true),
-          onTapUp: (_) => setState(() => isPressed = false),
-          onTapCancel: () => setState(() => isPressed = false),
-          child: AnimatedContainer(
-            duration: Duration(milliseconds: 150),
-            transform: Matrix4.identity()..scale(isPressed ? 0.95 : 1.0),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: onTap,
-                borderRadius: BorderRadius.circular(16),
-                splashColor: Colors.white.withOpacity(0.2),
-                highlightColor: Colors.white.withOpacity(0.1),
-                child: Container(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: backgroundColor,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: backgroundColor.withOpacity(
-                          isPressed ? 0.2 : 0.3,
-                        ),
-                        blurRadius: isPressed ? 8 : 12,
-                        offset: Offset(0, isPressed ? 3 : 6),
-                        spreadRadius: 0,
-                      ),
-                    ],
-                    border: Border.all(
-                      color:
-                          backgroundColor == Colors.yellow[300]!
-                              ? Colors.yellow[600]!
-                              : Colors.transparent,
-                      width: 1.5,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(icon, color: textColor, size: 18),
-                      SizedBox(width: 8),
-                      Text(
-                        label,
-                        style: TextStyle(
-                          color: textColor,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
 
   // Enhanced pause/resume button with better visual feedback
   Widget _buildPauseResumeButton({
@@ -6111,15 +6827,18 @@ class _AndroidHttpFileShareScreenState
     );
   }
 
-  // Rounded square button for folder selection
-  Widget _buildRoundedSquareButton({
+  // Rectangular button with consistent corner radius
+  Widget _buildRectangularButton({
     required IconData icon,
     required VoidCallback? onTap,
     required Color color,
     required Color textColor,
     required String label,
+    bool isPrimary = false,
   }) {
     final isEnabled = onTap != null;
+    // Use the passed isPrimary or infer it if color matches the yellow
+    final bool primary = isPrimary || color == Colors.yellow[300];
 
     return StatefulBuilder(
       builder: (context, setState) {
@@ -6136,31 +6855,51 @@ class _AndroidHttpFileShareScreenState
               color: Colors.transparent,
               child: InkWell(
                 onTap: isEnabled ? onTap : null,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(24),
                 splashColor: Colors.white.withOpacity(0.2),
                 highlightColor: Colors.white.withOpacity(0.1),
                 child: Container(
-                  width: 100,
-                  height: 80,
+                  width: 90,
+                  height: 90, // Slightly taller
                   decoration: BoxDecoration(
-                    color: isEnabled ? color : Colors.grey[700],
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: color.withOpacity(isPressed ? 0.2 : 0.3),
-                        blurRadius: isPressed ? 8 : 12,
-                        offset: Offset(0, isPressed ? 3 : 6),
-                        spreadRadius: 0,
-                      ),
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 4,
-                        offset: Offset(0, 2),
-                        spreadRadius: 0,
-                      ),
-                    ],
+                    gradient:
+                        primary && isEnabled
+                            ? const LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                Color(0xFFFFD84D), // Yellow at top-left
+                                Color(
+                                  0xFFF5C400,
+                                ), // Dark yellow at bottom-right
+                              ],
+                            )
+                            : null,
+                    color:
+                        primary && isEnabled
+                            ? null // Use gradient instead
+                            : isEnabled
+                            ? color
+                            : Colors.grey[900],
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow:
+                        primary && isEnabled
+                            ? [
+                              BoxShadow(
+                                color: const Color(0xFFFFD600).withOpacity(0.4),
+                                blurRadius: isPressed ? 10 : 20,
+                                offset: Offset(0, isPressed ? 4 : 8),
+                              ),
+                            ]
+                            : [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.3),
+                                blurRadius: 4,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.2),
+                      color: Colors.white.withOpacity(0.05),
                       width: 1,
                     ),
                   ),
@@ -6169,104 +6908,21 @@ class _AndroidHttpFileShareScreenState
                     children: [
                       Icon(
                         icon,
-                        color: isEnabled ? textColor : Colors.grey[500],
-                        size: 24,
+                        color:
+                            isEnabled
+                                ? (primary ? Colors.black : textColor)
+                                : Colors.grey[600],
+                        size: 26,
                       ),
-                      SizedBox(height: 6),
+                      SizedBox(height: 8),
                       Text(
                         label,
-                        style: TextStyle(
-                          color: isEnabled ? textColor : Colors.grey[500],
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  // Rectangular button with consistent corner radius
-  Widget _buildRectangularButton({
-    required IconData icon,
-    required VoidCallback? onTap,
-    required Color color,
-    required Color textColor,
-    required String label,
-  }) {
-    final isEnabled = onTap != null;
-    final isPrimary = color == Colors.yellow[300];
-
-    return StatefulBuilder(
-      builder: (context, setState) {
-        bool isPressed = false;
-
-        return GestureDetector(
-          onTapDown: (_) => setState(() => isPressed = true),
-          onTapUp: (_) => setState(() => isPressed = false),
-          onTapCancel: () => setState(() => isPressed = false),
-          child: AnimatedContainer(
-            duration: Duration(milliseconds: 150),
-            transform: Matrix4.identity()..scale(isPressed ? 0.95 : 1.0),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: isEnabled ? onTap : null,
-                borderRadius: BorderRadius.circular(16),
-                splashColor: Colors.white.withOpacity(0.2),
-                highlightColor: Colors.white.withOpacity(0.1),
-                child: Container(
-                  width: 90,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    color:
-                        isEnabled
-                            ? (isPrimary ? Colors.yellow[300] : color)
-                            : Colors.grey[700],
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: (isPrimary ? Colors.yellow[400]! : color)
-                            .withOpacity(isPressed ? 0.2 : 0.3),
-                        blurRadius: isPressed ? 8 : 12,
-                        offset: Offset(0, isPressed ? 3 : 6),
-                        spreadRadius: 0,
-                      ),
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 4,
-                        offset: Offset(0, 2),
-                        spreadRadius: 0,
-                      ),
-                    ],
-                    border:
-                        isEnabled && isPrimary
-                            ? Border.all(color: Colors.yellow[600]!, width: 2)
-                            : Border.all(
-                              color: Colors.white.withOpacity(0.2),
-                              width: 1,
-                            ),
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        icon,
-                        color: isEnabled ? textColor : Colors.grey[500],
-                        size: 24,
-                      ),
-                      SizedBox(height: 6),
-                      Text(
-                        label,
-                        style: TextStyle(
-                          color: isEnabled ? textColor : Colors.grey[500],
-                          fontSize: 12,
+                        style: GoogleFonts.outfit(
+                          color:
+                              isEnabled
+                                  ? (primary ? Colors.black : textColor)
+                                  : Colors.grey[600],
+                          fontSize: 13,
                           fontWeight: FontWeight.w600,
                         ),
                         textAlign: TextAlign.center,
@@ -6282,76 +6938,9 @@ class _AndroidHttpFileShareScreenState
     );
   }
 
-  // Hexagon-shaped main action button
-  Widget _buildHexagonActionButton({
-    required IconData icon,
-    required VoidCallback? onTap,
-    required Color color,
-    required Color textColor,
-    required String label,
-  }) {
-    final isEnabled = onTap != null;
-    final isPrimary = color == Colors.yellow[300];
-
-    return StatefulBuilder(
-      builder: (context, setState) {
-        bool isPressed = false;
-
-        return GestureDetector(
-          onTapDown: (_) => setState(() => isPressed = true),
-          onTapUp: (_) => setState(() => isPressed = false),
-          onTapCancel: () => setState(() => isPressed = false),
-          child: AnimatedContainer(
-            duration: Duration(milliseconds: 150),
-            transform: Matrix4.identity()..scale(isPressed ? 0.95 : 1.0),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: isEnabled ? onTap : null,
-                borderRadius: BorderRadius.circular(0),
-                splashColor: Colors.white.withOpacity(0.2),
-                highlightColor: Colors.white.withOpacity(0.1),
-                child: CustomPaint(
-                  painter: HexagonPainter(
-                    color: isEnabled ? color : Colors.grey[700]!,
-                    isPressed: isPressed,
-                    isPrimary: isPrimary,
-                  ),
-                  child: Container(
-                    width: 120,
-                    height: 100,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          icon,
-                          color: isEnabled ? textColor : Colors.grey[500],
-                          size: 28,
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          label,
-                          style: TextStyle(
-                            color: isEnabled ? textColor : Colors.grey[500],
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   IconData _getFileIcon(String fileName) {
-    final ext = _getFileExtension(fileName).toLowerCase();
+    if (!fileName.contains('.')) return Icons.insert_drive_file_rounded;
+    final ext = fileName.split('.').last.toLowerCase();
     switch (ext) {
       case 'pdf':
       case 'doc':
@@ -6469,27 +7058,27 @@ class HexagonPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
-// Animated Radar Icon Widget
-class _AnimatedRadar extends StatefulWidget {
-  final bool isActive;
+// Physics-based Pulse Effect - clean, modern expanding rings
+class _PulseEffect extends StatefulWidget {
+  final double size;
+  final Color color;
 
-  const _AnimatedRadar({Key? key, required this.isActive}) : super(key: key);
+  const _PulseEffect({super.key, this.size = 300, this.color = Colors.black});
 
   @override
-  State<_AnimatedRadar> createState() => _AnimatedRadarState();
+  State<_PulseEffect> createState() => _PulseEffectState();
 }
 
-class _AnimatedRadarState extends State<_AnimatedRadar>
+class _PulseEffectState extends State<_PulseEffect>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
+  late final AnimationController _controller;
+  static const Duration _duration = Duration(milliseconds: 3000);
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: Duration(seconds: 2),
-    )..repeat();
+    _controller = AnimationController(vsync: this, duration: _duration)
+      ..repeat();
   }
 
   @override
@@ -6500,25 +7089,93 @@ class _AnimatedRadarState extends State<_AnimatedRadar>
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        return Transform.rotate(
-          angle: _controller.value * 2 * 3.14159,
-          child: Icon(
-            Icons.radar,
-            color: widget.isActive ? Colors.yellow[300] : Colors.grey[600],
-            size: 16,
-          ),
-        );
-      },
+    return RepaintBoundary(
+      child: SizedBox(
+        width: widget.size,
+        height: widget.size,
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder:
+              (_, __) => CustomPaint(
+                painter: _PulsePainter(
+                  progress: _controller.value,
+                  color: widget.color,
+                ),
+                isComplex: false,
+                willChange: true,
+              ),
+        ),
+      ),
     );
   }
 }
 
+// Minimal CustomPainter - all math inlined
+class _PulsePainter extends CustomPainter {
+  final double progress;
+  final Color color;
+
+  const _PulsePainter({required this.progress, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final maxRadius = size.width / 2;
+
+    // 3 rings with phase offset
+    for (int i = 0; i < 3; i++) {
+      final p = (progress + i / 3) % 1.0;
+
+      // EaseOutCubic inline
+      final eased = 1.0 - (1.0 - p) * (1.0 - p) * (1.0 - p);
+
+      // Radius: 20% to 100%
+      final radius = maxRadius * (0.2 + eased * 0.8);
+
+      // Opacity: inverse square + edge fade
+      final d = (radius / maxRadius).clamp(0.3, 1.0);
+      final opacity = ((0.3 / (d * d)) * (1.0 - p * p)).clamp(0.0, 0.35);
+
+      // Stroke: 2.5 → 0.5
+      final stroke = 2.5 - eased * 2.0;
+
+      if (opacity > 0.02) {
+        canvas.drawCircle(
+          center,
+          radius,
+          Paint()
+            ..color = color.withOpacity(opacity)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = stroke,
+        );
+      }
+    }
+
+    // Center dot - small, neat, darker
+    final breathe = (0.5 + 0.5 * sin(progress * 2 * 3.14159)).abs();
+    final dotR =
+        size.width * 0.02 * (0.95 + breathe * 0.2); // Smaller: 2% of size
+
+    // Subtle glow
+    canvas.drawCircle(
+      center,
+      dotR * 1.5,
+      Paint()
+        ..color = color.withOpacity(0.10)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+    );
+
+    // Solid dot - darker
+    canvas.drawCircle(center, dotR, Paint()..color = color.withOpacity(0.5));
+  }
+
+  @override
+  bool shouldRepaint(_PulsePainter old) => old.progress != progress;
+}
+
 // Pulsing Search Indicator Widget
 class _PulsingSearchIndicator extends StatefulWidget {
-  const _PulsingSearchIndicator({Key? key}) : super(key: key);
+  const _PulsingSearchIndicator();
 
   @override
   State<_PulsingSearchIndicator> createState() =>
@@ -6586,6 +7243,1112 @@ class _PulsingSearchIndicatorState extends State<_PulsingSearchIndicator>
           child: Icon(Icons.search, color: Colors.grey[600], size: 30),
         ),
       ],
+    );
+  }
+}
+
+// Modern Toast Widget
+class _ModernToast extends StatefulWidget {
+  final String message;
+  final IconData icon;
+  final Color backgroundColor;
+  final Color iconColor;
+  final VoidCallback onDismiss;
+  final Duration duration;
+
+  const _ModernToast({
+    required this.message,
+    required this.icon,
+    required this.backgroundColor,
+    required this.iconColor,
+    required this.onDismiss,
+    required this.duration,
+  });
+
+  @override
+  State<_ModernToast> createState() => _ModernToastState();
+}
+
+class _ModernToastState extends State<_ModernToast>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _fadeAnimation;
+  late Animation<Offset> _slideAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: 300),
+    );
+
+    _fadeAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
+
+    _slideAnimation = Tween<Offset>(
+      begin: Offset(0, -0.5),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
+
+    _controller.forward();
+
+    Future.delayed(widget.duration, () {
+      if (mounted) {
+        _controller.reverse().then((_) => widget.onDismiss());
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + 16,
+      left: 24,
+      right: 24,
+      child: SlideTransition(
+        position: _slideAnimation,
+        child: FadeTransition(
+          opacity: _fadeAnimation,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              decoration: BoxDecoration(
+                color: widget.backgroundColor,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: widget.iconColor.withOpacity(0.3),
+                  width: 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 20,
+                    offset: Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: widget.iconColor.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(widget.icon, color: widget.iconColor, size: 20),
+                  ),
+                  SizedBox(width: 14),
+                  Expanded(
+                    child: Text(
+                      widget.message,
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Modern Loading Dialog Widget
+class _ModernLoadingDialog extends StatefulWidget {
+  final String title;
+  final String subtitle;
+  final String? step;
+  final IconData icon;
+
+  const _ModernLoadingDialog({
+    required this.title,
+    required this.subtitle,
+    this.step,
+    required this.icon,
+  });
+
+  @override
+  State<_ModernLoadingDialog> createState() => _ModernLoadingDialogState();
+}
+
+class _ModernLoadingDialogState extends State<_ModernLoadingDialog>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _scaleAnimation;
+  late Animation<double> _rotationAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: 1500),
+    )..repeat();
+
+    _scaleAnimation = Tween<double>(
+      begin: 0.95,
+      end: 1.05,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+
+    _rotationAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.linear));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: Container(
+        padding: EdgeInsets.all(28),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1C1E),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: const Color(0xFFFFD600).withOpacity(0.3),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFFFFD600).withOpacity(0.1),
+              blurRadius: 30,
+              spreadRadius: 5,
+            ),
+            BoxShadow(
+              color: Colors.black.withOpacity(0.5),
+              blurRadius: 20,
+              offset: Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Animated icon container
+            AnimatedBuilder(
+              animation: _controller,
+              builder: (context, child) {
+                return Transform.scale(
+                  scale: _scaleAnimation.value,
+                  child: Container(
+                    width: 80,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          const Color(0xFFFFD600),
+                          const Color(0xFFFFA000),
+                        ],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFFFD600).withOpacity(0.4),
+                          blurRadius: 20,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        // Rotating ring
+                        RotationTransition(
+                          turns: _rotationAnimation,
+                          child: Container(
+                            width: 70,
+                            height: 70,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.black.withOpacity(0.2),
+                                width: 3,
+                              ),
+                            ),
+                            child: CustomPaint(
+                              painter: _ArcPainter(
+                                color: Colors.black,
+                                strokeWidth: 3,
+                              ),
+                            ),
+                          ),
+                        ),
+                        // Center icon
+                        Icon(widget.icon, color: Colors.black, size: 32),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+            SizedBox(height: 28),
+            // Step indicator
+            if (widget.step != null) ...[
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFD600).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: const Color(0xFFFFD600).withOpacity(0.3),
+                  ),
+                ),
+                child: Text(
+                  widget.step!,
+                  style: GoogleFonts.outfit(
+                    color: const Color(0xFFFFD600),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+              SizedBox(height: 16),
+            ],
+            // Title
+            Text(
+              widget.title,
+              style: GoogleFonts.outfit(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.5,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            SizedBox(height: 10),
+            // Subtitle
+            Text(
+              widget.subtitle,
+              style: GoogleFonts.outfit(
+                color: Colors.grey[400],
+                fontSize: 14,
+                fontWeight: FontWeight.w400,
+                height: 1.4,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            SizedBox(height: 24),
+            // Progress dots
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(3, (index) {
+                return AnimatedBuilder(
+                  animation: _controller,
+                  builder: (context, child) {
+                    final delay = index * 0.2;
+                    final value = ((_controller.value + delay) % 1.0);
+                    final opacity = (value < 0.5 ? value * 2 : 2 - value * 2);
+                    return Container(
+                      margin: EdgeInsets.symmetric(horizontal: 4),
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(
+                          0xFFFFD600,
+                        ).withOpacity(0.3 + opacity * 0.7),
+                      ),
+                    );
+                  },
+                );
+              }),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Arc painter for rotating progress indicator
+class _ArcPainter extends CustomPainter {
+  final Color color;
+  final double strokeWidth;
+
+  _ArcPainter({required this.color, required this.strokeWidth});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint =
+        Paint()
+          ..color = color
+          ..strokeWidth = strokeWidth
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round;
+
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+    canvas.drawArc(rect, -pi / 2, pi / 2, false, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// Isolated widget for per-client progress display
+// Uses its own timer to avoid rebuilding parent widget tree
+class _ClientProgressSection extends StatefulWidget {
+  final Map<String, Map<int, DownloadStatus>> clientDownloads;
+  final int fileIndex;
+  final Map<String, String> clientDeviceNames;
+  final String Function(String) formatClientIP;
+  final bool hasAnyClientCompleted;
+
+  const _ClientProgressSection({
+    required this.clientDownloads,
+    required this.fileIndex,
+    required this.clientDeviceNames,
+    required this.formatClientIP,
+    required this.hasAnyClientCompleted,
+  });
+
+  @override
+  State<_ClientProgressSection> createState() => _ClientProgressSectionState();
+}
+
+class _ClientProgressSectionState extends State<_ClientProgressSection> {
+  Timer? _updateTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Start a local timer that only rebuilds this widget
+    _updateTimer = Timer.periodic(Duration(milliseconds: 300), (_) {
+      if (mounted && _hasActiveDownloads()) {
+        setState(() {});
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _updateTimer?.cancel();
+    super.dispose();
+  }
+
+  bool _hasActiveDownloads() {
+    for (final entry in widget.clientDownloads.entries) {
+      if (entry.value.containsKey(widget.fileIndex)) {
+        final status = entry.value[widget.fileIndex]!;
+        if (!status.isCompleted &&
+            status.progress > 0 &&
+            status.progress < 1.0) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  List<MapEntry<String, DownloadStatus>> _getActiveClients() {
+    final activeClients = <MapEntry<String, DownloadStatus>>[];
+    for (final entry in widget.clientDownloads.entries) {
+      if (entry.value.containsKey(widget.fileIndex)) {
+        final status = entry.value[widget.fileIndex]!;
+        if (!status.isCompleted && status.progress > 0) {
+          activeClients.add(MapEntry(entry.key, status));
+        }
+      }
+    }
+    return activeClients;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final activeClients = _getActiveClients();
+
+    if (activeClients.isEmpty && !widget.hasAnyClientCompleted) {
+      return Padding(
+        padding: EdgeInsets.only(top: 4),
+        child: Text(
+          'Waiting for download...',
+          style: GoogleFonts.outfit(
+            color: Colors.grey[500],
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      );
+    }
+
+    if (activeClients.isEmpty) {
+      return SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children:
+          activeClients.map((entry) {
+            final clientIP = entry.key;
+            final status = entry.value;
+            final deviceName =
+                widget.clientDeviceNames[clientIP] ??
+                widget.formatClientIP(clientIP);
+
+            return Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.devices_rounded,
+                        size: 12,
+                        color: Colors.yellow[300],
+                      ),
+                      SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          deviceName,
+                          style: GoogleFonts.outfit(
+                            color: Colors.grey[400],
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Text(
+                        '${(status.progress * 100).toStringAsFixed(0)}%',
+                        style: GoogleFonts.outfit(
+                          color: Colors.yellow[300],
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (status.speedMbps > 0) ...[
+                        SizedBox(width: 6),
+                        Text(
+                          '${status.speedMbps.toStringAsFixed(1)} Mbps',
+                          style: GoogleFonts.outfit(
+                            color: Colors.grey[500],
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  SizedBox(height: 4),
+                  // Use TweenAnimationBuilder for smooth progress animation
+                  TweenAnimationBuilder<double>(
+                    tween: Tween(begin: 0, end: status.progress),
+                    duration: Duration(milliseconds: 250),
+                    curve: Curves.easeOut,
+                    builder: (context, value, _) {
+                      return ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: value,
+                          backgroundColor: Colors.grey[800],
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.yellow[300]!,
+                          ),
+                          minHeight: 4,
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+    );
+  }
+}
+
+// Smooth Loading Dialog with animated content transitions
+class _SmoothLoadingDialog extends StatefulWidget {
+  final String title;
+  final String subtitle;
+  final String? step;
+  final IconData icon;
+
+  const _SmoothLoadingDialog({
+    required this.title,
+    required this.subtitle,
+    this.step,
+    required this.icon,
+  });
+
+  @override
+  State<_SmoothLoadingDialog> createState() => _SmoothLoadingDialogState();
+}
+
+class _SmoothLoadingDialogState extends State<_SmoothLoadingDialog>
+    with TickerProviderStateMixin {
+  late AnimationController _rotationController;
+  late AnimationController _pulseController;
+  late Animation<double> _scaleAnimation;
+
+  late String _title;
+  late String _subtitle;
+  String? _step;
+  late IconData _icon;
+  bool _isSuccess = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _title = widget.title;
+    _subtitle = widget.subtitle;
+    _step = widget.step;
+    _icon = widget.icon;
+
+    _rotationController = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: 1500),
+    )..repeat();
+
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: 1000),
+    )..repeat(reverse: true);
+
+    _scaleAnimation = Tween<double>(begin: 0.95, end: 1.05).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+  }
+
+  void updateContent({
+    required String title,
+    required String subtitle,
+    String? step,
+    required IconData icon,
+  }) {
+    setState(() {
+      _title = title;
+      _subtitle = subtitle;
+      _step = step;
+      _icon = icon;
+      _isSuccess = false;
+    });
+  }
+
+  void showSuccess() {
+    setState(() {
+      _isSuccess = true;
+      _title = 'Connected!';
+      _subtitle = 'Connection established successfully';
+      _step = 'COMPLETE';
+      _icon = Icons.check_circle_rounded;
+    });
+  }
+
+  @override
+  void dispose() {
+    _rotationController.dispose();
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: AnimatedContainer(
+        duration: Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+        padding: EdgeInsets.all(28),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1C1E),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color:
+                _isSuccess
+                    ? Colors.green.withOpacity(0.5)
+                    : const Color(0xFFFFD600).withOpacity(0.3),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color:
+                  _isSuccess
+                      ? Colors.green.withOpacity(0.15)
+                      : const Color(0xFFFFD600).withOpacity(0.1),
+              blurRadius: 30,
+              spreadRadius: 5,
+            ),
+            BoxShadow(
+              color: Colors.black.withOpacity(0.5),
+              blurRadius: 20,
+              offset: Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Animated icon container
+            AnimatedBuilder(
+              animation: _pulseController,
+              builder: (context, child) {
+                return Transform.scale(
+                  scale: _isSuccess ? 1.0 : _scaleAnimation.value,
+                  child: AnimatedContainer(
+                    duration: Duration(milliseconds: 300),
+                    width: 80,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors:
+                            _isSuccess
+                                ? [Colors.green, Colors.green[700]!]
+                                : [
+                                  const Color(0xFFFFD600),
+                                  const Color(0xFFFFA000),
+                                ],
+                      ),
+                      boxShadow: null,
+                    ),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        // Rotating arc (hidden on success)
+                        if (!_isSuccess)
+                          AnimatedBuilder(
+                            animation: _rotationController,
+                            builder: (context, child) {
+                              return Transform.rotate(
+                                angle: _rotationController.value * 2 * pi,
+                                child: SizedBox(
+                                  width: 70,
+                                  height: 70,
+                                  child: CustomPaint(
+                                    painter: _ArcPainter(
+                                      color: Colors.black.withOpacity(0.3),
+                                      strokeWidth: 3,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        // Center icon with animation
+                        AnimatedSwitcher(
+                          duration: Duration(milliseconds: 200),
+                          child: Icon(
+                            _icon,
+                            key: ValueKey(_icon),
+                            color: _isSuccess ? Colors.white : Colors.black,
+                            size: 32,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+            SizedBox(height: 28),
+            // Step indicator with animation
+            AnimatedSwitcher(
+              duration: Duration(milliseconds: 200),
+              transitionBuilder: (child, animation) {
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: Offset(0, 0.2),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                );
+              },
+              child:
+                  _step != null
+                      ? Container(
+                        key: ValueKey(_step),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color:
+                              _isSuccess
+                                  ? Colors.green.withOpacity(0.15)
+                                  : const Color(0xFFFFD600).withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color:
+                                _isSuccess
+                                    ? Colors.green.withOpacity(0.3)
+                                    : const Color(0xFFFFD600).withOpacity(0.3),
+                          ),
+                        ),
+                        child: Text(
+                          _step!,
+                          style: GoogleFonts.outfit(
+                            color:
+                                _isSuccess
+                                    ? Colors.green
+                                    : const Color(0xFFFFD600),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      )
+                      : SizedBox.shrink(),
+            ),
+            if (_step != null) SizedBox(height: 16),
+            // Title with animation
+            AnimatedSwitcher(
+              duration: Duration(milliseconds: 200),
+              transitionBuilder: (child, animation) {
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: Offset(0, 0.1),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                );
+              },
+              child: Text(
+                _title,
+                key: ValueKey(_title),
+                style: GoogleFonts.outfit(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.5,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            SizedBox(height: 10),
+            // Subtitle with animation
+            AnimatedSwitcher(
+              duration: Duration(milliseconds: 200),
+              child: Text(
+                _subtitle,
+                key: ValueKey(_subtitle),
+                style: GoogleFonts.outfit(
+                  color: Colors.grey[400],
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                  height: 1.4,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            SizedBox(height: 24),
+            // Progress dots (hidden on success)
+            AnimatedOpacity(
+              duration: Duration(milliseconds: 200),
+              opacity: _isSuccess ? 0.0 : 1.0,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(3, (index) {
+                  return AnimatedBuilder(
+                    animation: _rotationController,
+                    builder: (context, child) {
+                      final delay = index * 0.2;
+                      final value = ((_rotationController.value + delay) % 1.0);
+                      final opacity = (value < 0.5 ? value * 2 : 2 - value * 2);
+                      return Container(
+                        margin: EdgeInsets.symmetric(horizontal: 4),
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(
+                            0xFFFFD600,
+                          ).withOpacity(0.3 + opacity * 0.7),
+                        ),
+                      );
+                    },
+                  );
+                }),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Searchable All Devices Bottom Sheet
+class _AllDevicesSheet extends StatefulWidget {
+  final List<DiscoveredDevice> devices;
+  final bool isDemoMode;
+  final IconData Function(String name, {String? platform}) getDeviceIcon;
+  final void Function(DiscoveredDevice device) onDeviceTap;
+
+  const _AllDevicesSheet({
+    required this.devices,
+    required this.isDemoMode,
+    required this.getDeviceIcon,
+    required this.onDeviceTap,
+  });
+
+  @override
+  State<_AllDevicesSheet> createState() => _AllDevicesSheetState();
+}
+
+class _AllDevicesSheetState extends State<_AllDevicesSheet> {
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+
+  List<DiscoveredDevice> get filteredDevices {
+    if (_searchQuery.isEmpty) return widget.devices;
+
+    return widget.devices.where((device) {
+      return device.deviceName.toLowerCase().contains(
+        _searchQuery.toLowerCase(),
+      );
+    }).toList();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.7,
+      ),
+      decoration: const BoxDecoration(
+        color: Color(0xFF1C1C1E),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle bar
+          Container(
+            margin: const EdgeInsets.only(top: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+            child: Row(
+              children: [
+                Icon(Icons.devices_rounded, color: Colors.white70, size: 22),
+                const SizedBox(width: 12),
+                Text(
+                  'All Devices (${widget.devices.length})',
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.close_rounded,
+                      color: Colors.white70,
+                      size: 18,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Search bar
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: TextField(
+                controller: _searchController,
+                onChanged: (value) => setState(() => _searchQuery = value),
+                style: GoogleFonts.outfit(color: Colors.white, fontSize: 15),
+                decoration: InputDecoration(
+                  hintText: 'Search devices...',
+                  hintStyle: GoogleFonts.outfit(
+                    color: Colors.white38,
+                    fontSize: 15,
+                  ),
+                  prefixIcon: const Icon(
+                    Icons.search_rounded,
+                    color: Colors.white38,
+                    size: 20,
+                  ),
+                  suffixIcon:
+                      _searchQuery.isNotEmpty
+                          ? GestureDetector(
+                            onTap: () {
+                              _searchController.clear();
+                              setState(() => _searchQuery = '');
+                            },
+                            child: const Icon(
+                              Icons.clear_rounded,
+                              color: Colors.white38,
+                              size: 18,
+                            ),
+                          )
+                          : null,
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const Divider(color: Colors.white12, height: 1),
+          // Device list
+          Flexible(
+            child:
+                filteredDevices.isEmpty
+                    ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(40),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.search_off_rounded,
+                              color: Colors.white24,
+                              size: 48,
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              'No devices found',
+                              style: GoogleFonts.outfit(
+                                color: Colors.white38,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                    : ListView.builder(
+                      shrinkWrap: true,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      itemCount: filteredDevices.length,
+                      itemBuilder: (context, index) {
+                        final device = filteredDevices[index];
+
+                        // Handle demo vs real devices
+                        String name = device.deviceName;
+
+                        // Determine icon and subtitle based on device/platform
+                        String? platform = device.platform;
+                        IconData icon = widget.getDeviceIcon(
+                          name,
+                          platform: platform,
+                        );
+                        String subtitle =
+                            widget.isDemoMode ? 'Demo Device' : 'Network';
+
+                        // Standard colors for all devices
+                        // final bool useInvertedColors = false; // Unused
+
+                        return ListTile(
+                          onTap:
+                              widget.isDemoMode
+                                  ? null
+                                  : () => widget.onDeviceTap(device),
+                          leading: Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color:
+                                  (widget.isDemoMode
+                                      ? Colors.grey[700]
+                                      : Colors.black38),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white12,
+                                width: 1,
+                              ),
+                            ),
+                            child: Icon(icon, color: Colors.white, size: 22),
+                          ),
+                          title: Text(
+                            name,
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            subtitle,
+                            style: GoogleFonts.outfit(
+                              color: Colors.white54,
+                              fontSize: 12,
+                            ),
+                          ),
+                          trailing:
+                              widget.isDemoMode
+                                  ? null
+                                  : const Icon(
+                                    Icons.chevron_right_rounded,
+                                    color: Colors.white38,
+                                    size: 24,
+                                  ),
+                        );
+                      },
+                    ),
+          ),
+          SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
+        ],
+      ),
     );
   }
 }
