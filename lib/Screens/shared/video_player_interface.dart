@@ -27,6 +27,7 @@ abstract class PlatformVideoPlayer {
   Stream<bool> get bufferingStream;
   Stream<bool> get completedStream;
   Stream<String> get errorStream;
+  Stream<String> get captionStream;
 
   // ─── Track Info ───────────────────────────────────────────
   Stream<List<SubtitleTrackInfo>> get subtitleTracksStream;
@@ -52,13 +53,10 @@ class SubtitleTrackInfo {
   final String? title;
   final String? language;
 
-  SubtitleTrackInfo({
-    required this.id,
-    this.title,
-    this.language,
-  });
+  SubtitleTrackInfo({required this.id, this.title, this.language});
 
-  static SubtitleTrackInfo get none => SubtitleTrackInfo(id: 'no', title: 'None');
+  static SubtitleTrackInfo get none =>
+      SubtitleTrackInfo(id: 'no', title: 'None');
 
   @override
   bool operator ==(Object other) =>
@@ -77,11 +75,7 @@ class AudioTrackInfo {
   final String? title;
   final String? language;
 
-  AudioTrackInfo({
-    required this.id,
-    this.title,
-    this.language,
-  });
+  AudioTrackInfo({required this.id, this.title, this.language});
 
   @override
   bool operator ==(Object other) =>

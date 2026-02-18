@@ -8,7 +8,23 @@
 // Window class name
 const wchar_t kMpvWindowClassName[] = L"MpvVideoWindow";
 
-MpvWindow::MpvWindow() {}
+// Job object to auto-kill MPV when ZapShare exits (even on crash/force-kill)
+static HANDLE g_job_object = nullptr;
+
+static void EnsureJobObject() {
+    if (g_job_object) return;
+    g_job_object = CreateJobObject(nullptr, nullptr);
+    if (g_job_object) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = {};
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(g_job_object, JobObjectExtendedLimitInformation,
+                                &info, sizeof(info));
+    }
+}
+
+MpvWindow::MpvWindow() {
+    EnsureJobObject();
+}
 
 MpvWindow::~MpvWindow() {
   Destroy();
@@ -16,29 +32,29 @@ MpvWindow::~MpvWindow() {
 
 void MpvWindow::RegisterWindowClass() {
   WNDCLASS wc = {};
-  wc.lpfnWndProc = DefWindowProc; // We don't need special handling, MPV takes over drawing
+  wc.lpfnWndProc = DefWindowProc;
   wc.hInstance = GetModuleHandle(nullptr);
   wc.lpszClassName = kMpvWindowClassName;
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-  wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH); // Black background ensuring no weird artifacts
+  wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
   RegisterClass(&wc);
 }
 
 bool MpvWindow::Create() {
   RegisterWindowClass();
 
-  // Create a top-level POPUP window.
-  // WS_POPUP: No borders, no caption.
-  // WS_VISIBLE: visible initially (can act as black background)
-  // WS_EX_TOOLWINDOW: Hides from taskbar/alt-tab
-  // WS_EX_NOACTIVATE: Prevents taking focus
+  // Create a top-level POPUP window — NOT owned, NOT visible initially.
+  // We place it BEHIND Flutter in Z-order via UpdatePosition().
+  // WS_EX_TOOLWINDOW: Hides from taskbar and alt-tab
+  // WS_EX_NOACTIVATE: Prevents stealing focus from Flutter
+  // No WS_VISIBLE: Hidden until video playback starts
   hwnd_ = CreateWindowEx(
       WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
       kMpvWindowClassName,
       L"ZapShare Video",
-      WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN,
-      0, 0, 100, 100, // Initial size, will be updated immediately
-      nullptr,        // No parent!
+      WS_POPUP | WS_CLIPCHILDREN,  // Hidden initially
+      0, 0, 100, 100,
+      nullptr,        // No owner — owned windows are forced ABOVE owner by Windows
       nullptr,
       GetModuleHandle(nullptr),
       nullptr);
@@ -54,7 +70,6 @@ bool MpvWindow::Create() {
 
 DWORD MpvWindow::LaunchMpv(const std::wstring& mpv_executable_path, const std::string& ipc_pipe_name) {
   if (!hwnd_) {
-      // If window was destroyed (e.g. via dispose), recreate it
       if (!Create()) {
           return ERROR_INVALID_WINDOW_HANDLE;
       }
@@ -73,41 +88,38 @@ DWORD MpvWindow::LaunchMpv(const std::wstring& mpv_executable_path, const std::s
   // Build command line
   std::wstring command = L"\"" + mpv_executable_path + L"\"";
   
-  // WID
+  // WID — render into our window
   command += L" --wid=" + std::to_wstring((long long)hwnd_);
   
-  // IPC
+  // IPC pipe
   std::wstring w_ipc(ipc_pipe_name.begin(), ipc_pipe_name.end());
   command += L" --input-ipc-server=" + w_ipc;
   
-  // Rendering & HWDEC (Strict Constraints)
-  // Use 'gpu' instead of 'gpu-next' for better compatibility with older Intel drivers
+  // Rendering
   command += L" --vo=gpu"; 
   command += L" --gpu-api=d3d11";
-  command += L" --hwdec=no";
+  command += L" --hwdec=auto-safe";  // Use HW decode when safe (saves CPU & RAM vs software decode)
   
-  // Essential UI/Behavior settings
+  // UI/Behavior
   command += L" --no-input-default-bindings";
-  command += L" --no-osc";             // No on-screen controller
-  command += L" --no-osd-bar";         // No OSD bar
-  command += L" --keep-open=yes";      // Don't close on end
-  command += L" --idle=yes";           // Wait for commands
-  command += L" --force-window=yes";   // Ensure window exists
+  command += L" --no-osc";
+  command += L" --no-osd-bar";
+  command += L" --keep-open=yes";
+  command += L" --idle=yes";
+  command += L" --force-window=yes";
   command += L" --player-operation-mode=pseudo-gui";
   
-  // Debug logging - Use absolute path for safety if possible, or just filename
+  // Logging (warn level to reduce disk I/O)
   command += L" --log-file=mpv_ipc_debug.log";
-  command += L" --msg-level=all=v";
+  command += L" --msg-level=all=warn";
   
-  // Optimize for smooth playback
-  command += L" --video-sync=display-resample"; // Smooth motion
-  command += L" --interpolation";
-  command += L" --tscale=oversample";
+  // Smooth playback (lightweight only — no --interpolation/--tscale which eat ~200MB GPU RAM)
+  command += L" --video-sync=display-resample";
 
-  // Critical for ZapShare network streaming
+  // Network streaming cache — reduced from 500M/20s to 50M/5s to cut RAM from ~990MB to ~150MB
   command += L" --cache=yes";
-  command += L" --demuxer-max-bytes=500M";
-  command += L" --demuxer-readahead-secs=20";
+  command += L" --demuxer-max-bytes=50M";
+  command += L" --demuxer-readahead-secs=5";
   command += L" --force-seekable=yes";
 
   STARTUPINFO si = { sizeof(si) };
@@ -117,74 +129,81 @@ DWORD MpvWindow::LaunchMpv(const std::wstring& mpv_executable_path, const std::s
   OutputDebugStringW(command.c_str());
   OutputDebugStringW(L"\n");
   
-  std::wcerr << L"[MpvWindow] Launching MPV with command: " << command << std::endl;
+  std::wcerr << L"[MpvWindow] Launching MPV: " << command << std::endl;
 
-  // Create process
-  // Note: command string must be mutable for CreateProcessW
   std::vector<wchar_t> cmd_vec(command.begin(), command.end());
-  cmd_vec.push_back(0); // Null terminator
+  cmd_vec.push_back(0);
 
+  // CREATE_SUSPENDED so we can assign to Job Object before the process runs
   if (CreateProcess(
           nullptr,
           cmd_vec.data(),
           nullptr,
           nullptr,
-          FALSE, // Don't inherit handles
-          CREATE_NO_WINDOW, // No console window
+          FALSE,
+          CREATE_NO_WINDOW | CREATE_SUSPENDED,
           nullptr,
           nullptr,
           &si,
           &pi)) {
+    // Assign to Job Object — guarantees MPV is killed if ZapShare crashes or is force-closed
+    if (g_job_object) {
+        AssignProcessToJobObject(g_job_object, pi.hProcess);
+    }
+    ResumeThread(pi.hThread);
+    
     mpv_process_ = pi.hProcess;
     mpv_thread_ = pi.hThread;
-    return 0; // Success
+    is_video_active_ = true;
+    return 0;
   } else {
     DWORD err = GetLastError();
     std::cerr << "Failed to launch MPV: " << err << std::endl;
-    return err; // Return error code
+    return err;
   }
 }
 
 void MpvWindow::UpdatePosition(HWND flutter_hwnd) {
   if (!hwnd_ || !flutter_hwnd) return;
 
-  // Get Flutter window client area bounds (inner content size)
-  RECT rect;
-  GetClientRect(flutter_hwnd, &rect); // (0, 0, width, height)
+  // If Flutter is minimized, hide MPV
+  if (IsIconic(flutter_hwnd)) {
+      if (IsWindowVisible(hwnd_)) {
+          ShowWindow(hwnd_, SW_HIDE);
+      }
+      return;
+  }
 
-  // Convert to screen coordinates
+  // Get Flutter window client area in screen coordinates
+  RECT rect;
+  GetClientRect(flutter_hwnd, &rect);
+
   POINT topLeft = {rect.left, rect.top};
   ClientToScreen(flutter_hwnd, &topLeft);
   
-  // Calculate width/height
   int width = rect.right - rect.left;
   int height = rect.bottom - rect.top;
 
-  // Check if Flutter window is minimized
-  if (IsIconic(flutter_hwnd)) {
-      ShowWindow(hwnd_, SW_HIDE);
-      return;
-  } else {
-      // Ensure visible if not minimized
-      ShowWindow(hwnd_, SW_SHOWNA); 
+  // Only show if video is active
+  if (is_video_active_ && !IsWindowVisible(hwnd_)) {
+      ShowWindow(hwnd_, SW_SHOWNA);
   }
 
-  // Positioning
-  // We place MPV window *behind* Flutter window in Z-order.
-  // hWndInsertAfter = flutter_hwnd -> places MPV *below* Flutter in Z-order.
+  // Place MPV *behind* Flutter in Z-order so Flutter's transparent overlay is on top.
+  // IMPORTANT: NO SWP_ASYNCWINDOWPOS — synchronous positioning prevents visual
+  // glitches (black gaps, misalignment) during resize and fullscreen transitions.
   SetWindowPos(hwnd_, flutter_hwnd, 
                topLeft.x, topLeft.y, 
                width, height, 
-               SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOCOPYBITS | SWP_ASYNCWINDOWPOS);
-               
-  // Note: SWP_ASYNCWINDOWPOS helps prevent blocking the calling thread (Flutter UI thread) 
-  // if the MPV window (different thread/process) is busy.
+               SWP_NOACTIVATE | SWP_NOCOPYBITS);
 }
 
-void MpvWindow::Destroy() {
+void MpvWindow::Stop() {
+  is_video_active_ = false;
+  
   if (mpv_process_) {
-    // Graceful exit via IPC preferably, but force kill on destroy is safer to avoid zombies
     TerminateProcess(mpv_process_, 0);
+    WaitForSingleObject(mpv_process_, 1000);  // Wait up to 1s for clean exit
     CloseHandle(mpv_process_);
     mpv_process_ = nullptr;
     if (mpv_thread_) {
@@ -193,6 +212,15 @@ void MpvWindow::Destroy() {
     }
   }
 
+  // Hide the window but don't destroy it (can be reused)
+  if (hwnd_) {
+    ShowWindow(hwnd_, SW_HIDE);
+  }
+}
+
+void MpvWindow::Destroy() {
+  Stop();
+
   if (hwnd_) {
     DestroyWindow(hwnd_);
     hwnd_ = nullptr;
@@ -200,7 +228,7 @@ void MpvWindow::Destroy() {
 }
 
 void MpvWindow::Show() {
-  if (hwnd_) ShowWindow(hwnd_, SW_SHOWNA);
+  if (hwnd_ && is_video_active_) ShowWindow(hwnd_, SW_SHOWNA);
 }
 
 void MpvWindow::Hide() {

@@ -10,8 +10,8 @@ class MpvWindow {
   MpvWindow();
   ~MpvWindow();
 
-  // Creates the MPV video window.
-  // invalidates existing window if any.
+  // Creates the MPV video window (hidden by default).
+  // Call Show() + UpdatePosition() to make visible.
   bool Create();
 
   // Launch MPV process with the given arguments attached to this window
@@ -21,6 +21,9 @@ class MpvWindow {
   // Synchronize position with the Flutter window
   // Used to keep MPV window strictly behind Flutter window
   void UpdatePosition(HWND flutter_hwnd);
+
+  // Stop MPV process and destroy the window
+  void Stop();
 
   // Destroy window and process
   void Destroy();
@@ -32,13 +35,18 @@ class MpvWindow {
   // Get the window handle
   HWND GetHandle() const { return hwnd_; }
   
-  // Check if MPV acts well
+  // Check if MPV process is still alive
   bool IsMpvRunning();
+
+  // Whether a video is currently active (controls visibility on minimize/restore)
+  bool IsVideoActive() const { return is_video_active_; }
+  void SetVideoActive(bool active) { is_video_active_ = active; }
 
  private:
   HWND hwnd_ = nullptr;
   HANDLE mpv_process_ = nullptr;
   HANDLE mpv_thread_ = nullptr;
+  bool is_video_active_ = false;
   
   // Register window class
   void RegisterWindowClass();

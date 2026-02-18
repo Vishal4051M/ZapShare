@@ -24,6 +24,7 @@ class NativePlatformMpvPlayer implements PlatformVideoPlayer {
   final _bufferingController = StreamController<bool>.broadcast();
   final _completedController = StreamController<bool>.broadcast();
   final _errorController = StreamController<String>.broadcast();
+  final _captionController = StreamController<String>.broadcast();
 
   final _subtitleTracksController =
       StreamController<List<SubtitleTrackInfo>>.broadcast();
@@ -137,9 +138,11 @@ class NativePlatformMpvPlayer implements PlatformVideoPlayer {
         }
         break;
       case 'onSubtitle':
-        // Not used for track selection, but could be used for custom rendering if needed
-        // For now logging it or we can expose it if the interface supported it
-        // debugPrint("Subtitle text: ${call.arguments}");
+        if (call.arguments is String) {
+          _captionController.add(call.arguments as String);
+        } else {
+          _captionController.add('');
+        }
         break;
     }
   }
@@ -319,6 +322,7 @@ class NativePlatformMpvPlayer implements PlatformVideoPlayer {
     _bufferingController.close();
     _completedController.close();
     _errorController.close();
+    _captionController.close();
 
     _subtitleTracksController.close();
     _audioTracksController.close();
@@ -365,6 +369,8 @@ class NativePlatformMpvPlayer implements PlatformVideoPlayer {
   Stream<bool> get completedStream => _completedController.stream;
   @override
   Stream<String> get errorStream => _errorController.stream;
+  @override
+  Stream<String> get captionStream => _captionController.stream;
 
   @override
   Stream<List<SubtitleTrackInfo>> get subtitleTracksStream =>
@@ -399,6 +405,16 @@ class NativePlatformMpvPlayer implements PlatformVideoPlayer {
   @override
   Future<void> setProperty(String key, String value) async {
     await _sendCommand(['set_property', key, value]);
+  }
+
+  /// Tell native code to re-sync MPV window position.
+  /// Called after fullscreen toggle or window resize events.
+  Future<void> notifyResize() async {
+    try {
+      await _channel.invokeMethod('resize');
+    } catch (e) {
+      debugPrint("notifyResize error: $e");
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -482,23 +498,14 @@ class _NativeMpvWidgetState extends State<_NativeMpvWidget> {
     }
 
     // IMPORTANT: This container must be transparent to reveal the MPV window behind it.
-    // It captures gestures to toggle play/pause via the controller.
+    // No GestureDetector here — the VideoPlayerScreen handles all gestures/taps.
     return Container(
       color: Colors.transparent,
       width: double.infinity,
       height: double.infinity,
-      child: Stack(
-        children: [
-          GestureDetector(
-            onTap: () {
-              widget.player.playOrPause();
-            },
-            behavior: HitTestBehavior.translucent,
-            child: Container(color: Colors.transparent),
-          ),
-          if (!_initialized)
-            const IgnorePointer(
-              child: Center(
+      child:
+          !_initialized
+              ? const Center(
                 child: SizedBox(
                   width: 40,
                   height: 40,
@@ -507,10 +514,8 @@ class _NativeMpvWidgetState extends State<_NativeMpvWidget> {
                     strokeWidth: 3,
                   ),
                 ),
-              ),
-            ),
-        ],
-      ),
+              )
+              : null,
     );
   }
 }

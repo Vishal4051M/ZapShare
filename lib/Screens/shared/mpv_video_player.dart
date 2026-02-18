@@ -1,11 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'video_player_interface.dart';
 
-/// Windows MPV video player with native Win32 child window rendering
-/// Uses media_kit for MPV integration with Flutter overlay UI
+/// Cross-platform MPV video player using media_kit
+/// Used for Android, Linux, macOS (and potentially Windows fallback)
 class MpvVideoPlayer implements PlatformVideoPlayer {
   late final Player _player;
   late final VideoController _controller;
@@ -21,9 +22,12 @@ class MpvVideoPlayer implements PlatformVideoPlayer {
       StreamController<AudioTrackInfo?>.broadcast();
 
   MpvVideoPlayer() {
+    final isAndroid = Platform.isAndroid;
     _player = Player(
       configuration: PlayerConfiguration(
-        bufferSize: 256 * 1024 * 1024, // 256 MB for Windows (4K/HDR files)
+        // 128 MB for Android (prevents rebuffer stalls)
+        // 256 MB for Desktop (handles large HDR/4K files)
+        bufferSize: isAndroid ? 128 * 1024 * 1024 : 256 * 1024 * 1024,
         logLevel: MPVLogLevel.warn,
       ),
     );
@@ -104,25 +108,79 @@ class MpvVideoPlayer implements PlatformVideoPlayer {
     final np = _player.platform as NativePlayer;
 
     try {
-      // ═══ HARDWARE DECODING ═══
-      await np.setProperty('hwdec', 'auto-safe');
-      await np.setProperty('hwdec-codecs', 'all');
+      if (Platform.isAndroid) {
+        // ═══ ANDROID: Maximum performance config ═══
+        // Hardware decoding — mediacodec for zero-copy HW decode
+        await np.setProperty('hwdec', 'mediacodec');
+        await np.setProperty('hwdec-codecs', 'all');
 
-      // ═══ PLAYBACK ═══
-      await np.setProperty('keep-open', 'yes');
+        // Software fallback
+        await np.setProperty('vd-lavc-software-fallback', '60');
 
-      // ═══ SEEKING ═══
-      await np.setProperty('hr-seek', 'yes');
+        // Minimal scaling for mobile
+        await np.setProperty('scale', 'bilinear');
+        await np.setProperty('dscale', 'bilinear');
+        await np.setProperty('cscale', 'bilinear');
 
-      // ═══ BUFFERING ═══
-      await np.setProperty('cache', 'yes');
-      await np.setProperty('cache-secs', '120');
-      await np.setProperty('demuxer-max-bytes', '256MiB');
-      await np.setProperty('demuxer-readahead-secs', '300');
+        // Audio-sync avoids frame timing issues
+        await np.setProperty('video-sync', 'audio');
 
-      // ═══ AUDIO ═══
-      await np.setProperty('audio-pitch-correction', 'yes');
-      await np.setProperty('audio-channels', 'auto-safe');
+        // Drop frames at VO level only
+        await np.setProperty('framedrop', 'vo');
+
+        // Large demuxer buffers + async cache
+        await np.setProperty('demuxer-max-bytes', '150MiB');
+        await np.setProperty('demuxer-max-back-bytes', '32MiB');
+        await np.setProperty('demuxer-readahead-secs', '300');
+
+        // Async cache layer
+        await np.setProperty('cache', 'yes');
+        await np.setProperty('cache-secs', '120');
+        await np.setProperty('cache-pause-initial', 'yes');
+        await np.setProperty('cache-pause-wait', '1');
+
+        // Fast seeking
+        await np.setProperty('hr-seek', 'yes');
+        await np.setProperty('hr-seek-framedrop', 'yes');
+
+        // Deinterlace auto
+        await np.setProperty('deinterlace', 'auto');
+
+        // Audio
+        await np.setProperty('audio-pitch-correction', 'yes');
+        await np.setProperty('audio-channels', 'auto-safe');
+
+        // Performance
+        await np.setProperty('vd-lavc-threads', '0');
+        await np.setProperty('vd-lavc-dr', 'yes');
+        await np.setProperty('untimed', 'no');
+      } else {
+        // ═══ DESKTOP (Linux/Mac/Fallback) ═══
+        // ═══ HARDWARE DECODING ═══
+        await np.setProperty('hwdec', 'auto-safe');
+        await np.setProperty('hwdec-codecs', 'all');
+
+        // ═══ PLAYBACK ═══
+        await np.setProperty('keep-open', 'yes');
+
+        // ═══ SEEKING ═══
+        await np.setProperty('hr-seek', 'yes');
+
+        // ═══ BUFFERING ═══
+        await np.setProperty('cache', 'yes');
+        await np.setProperty('cache-secs', '120');
+        await np.setProperty('demuxer-max-bytes', '256MiB');
+        await np.setProperty('demuxer-readahead-secs', '300');
+
+        // ═══ AUDIO ═══
+        await np.setProperty('audio-pitch-correction', 'yes');
+        await np.setProperty('audio-channels', 'auto-safe');
+      }
+
+      // ═══ SUBTITLES ═══
+      // Start with subtitles hidden, will be shown when user selects a track
+      // This prevents double rendering and gives user control
+      await np.setProperty('sub-visibility', 'no');
 
       _isInitialized = true;
     } catch (e) {
@@ -157,7 +215,11 @@ class MpvVideoPlayer implements PlatformVideoPlayer {
             'stream-lavf-o',
             'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5,timeout=30000000',
           );
-          await np.setProperty('cache-secs', '120');
+          await np.setProperty('cache-secs', Platform.isAndroid ? '90' : '180');
+          if (Platform.isAndroid) {
+            await np.setProperty('demuxer-readahead-secs', '600');
+            await np.setProperty('cache-pause-wait', '3');
+          }
         } catch (e) {
           debugPrint('Warning: Failed to set network properties: $e');
         }
@@ -195,17 +257,32 @@ class MpvVideoPlayer implements PlatformVideoPlayer {
   Future<void> setSubtitleTrack(dynamic track) async {
     if (track == null) {
       await _player.setSubtitleTrack(SubtitleTrack.no());
+      // Hide subtitles when turning off
+      if (_player.platform is NativePlayer) {
+        final np = _player.platform as NativePlayer;
+        await np.setProperty('sub-visibility', 'no');
+      }
     } else if (track is SubtitleTrackInfo) {
       if (track.id == 'no') {
         await _player.setSubtitleTrack(SubtitleTrack.no());
+        // Hide subtitles when turning off
+        if (_player.platform is NativePlayer) {
+          final np = _player.platform as NativePlayer;
+          await np.setProperty('sub-visibility', 'no');
+        }
       } else {
-        // Find the matching media_kit track
-        final tracks = await _player.stream.tracks.first;
-        final mpvTrack = tracks.subtitle.firstWhere(
+        // Use current state (synchronous) instead of stream.first (waits for next emission, hangs)
+        final currentTracks = _player.state.tracks;
+        final mpvTrack = currentTracks.subtitle.firstWhere(
           (t) => t.id == track.id,
           orElse: () => SubtitleTrack.no(),
         );
         await _player.setSubtitleTrack(mpvTrack);
+        // Ensure subtitles are visible when selecting a track
+        if (_player.platform is NativePlayer) {
+          final np = _player.platform as NativePlayer;
+          await np.setProperty('sub-visibility', 'yes');
+        }
       }
     }
   }
@@ -213,10 +290,11 @@ class MpvVideoPlayer implements PlatformVideoPlayer {
   @override
   Future<void> setAudioTrack(dynamic track) async {
     if (track is AudioTrackInfo) {
-      final tracks = await _player.stream.tracks.first;
-      final mpvTrack = tracks.audio.firstWhere(
+      // Use current state (synchronous) instead of stream.first (waits for next emission, hangs)
+      final currentTracks = _player.state.tracks;
+      final mpvTrack = currentTracks.audio.firstWhere(
         (t) => t.id == track.id,
-        orElse: () => tracks.audio.first,
+        orElse: () => currentTracks.audio.first,
       );
       await _player.setAudioTrack(mpvTrack);
     }
@@ -244,6 +322,10 @@ class MpvVideoPlayer implements PlatformVideoPlayer {
   Stream<String> get errorStream => _player.stream.error;
 
   @override
+  Stream<String> get captionStream =>
+      _player.stream.subtitle.map((list) => list.join('\n'));
+
+  @override
   Stream<List<SubtitleTrackInfo>> get subtitleTracksStream =>
       _subtitleTracksController.stream;
 
@@ -265,32 +347,17 @@ class MpvVideoPlayer implements PlatformVideoPlayer {
     Color? backgroundColor,
     Widget Function(BuildContext)? subtitleBuilder,
   }) {
-    return Stack(
-      children: [
-        Video(
-          controller: _controller,
-          fill: backgroundColor ?? Colors.black,
-          fit: fit ?? BoxFit.contain,
-          controls: NoVideoControls,
-        ),
-        // Add explicit SubtitleView because NoVideoControls disables the built-in one
-        SubtitleView(
-          controller: _controller,
-          configuration: const SubtitleViewConfiguration(
-            style: TextStyle(
-              height: 1.4,
-              fontSize: 32.0,
-              letterSpacing: 0.0,
-              wordSpacing: 0.0,
-              color: Color(0xffffffff),
-              fontWeight: FontWeight.normal,
-              backgroundColor: Color(0xaa000000),
-            ),
-            textAlign: TextAlign.center,
-            padding: EdgeInsets.all(24.0),
-          ),
-        ),
-      ],
+    // Do NOT add SubtitleView here — VideoPlayerScreen renders subtitles
+    // via its own captionStream overlay. Adding SubtitleView causes
+    // double subtitles on Android.
+    return Video(
+      controller: _controller,
+      fill: backgroundColor ?? Colors.black,
+      fit: fit ?? BoxFit.contain,
+      controls: NoVideoControls,
+      subtitleViewConfiguration: const SubtitleViewConfiguration(
+        visible: false,
+      ),
     );
   }
 

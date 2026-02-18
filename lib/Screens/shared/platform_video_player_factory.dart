@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'video_player_interface.dart';
 import 'mpv_video_player.dart';
-import 'exoplayer_video_player.dart';
 
 import 'native_platform_mpv_player.dart';
 
@@ -20,9 +19,8 @@ class PlatformVideoPlayerFactory {
       // Use standard media_kit texture implementation.
       // The native hole-punching attempts (NativePlatformMpvPlayer) caused white screens/crashes.
       return NativePlatformMpvPlayer();
-    } else if (Platform.isAndroid) {
-      return ExoPlayerVideoPlayer();
     } else {
+      // Android, Linux, macOS
       return MpvVideoPlayer();
     }
   }

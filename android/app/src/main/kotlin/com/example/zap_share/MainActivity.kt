@@ -688,6 +688,18 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
+                "setScreenOrientation" -> {
+                    val mode = call.argument<String>("mode") ?: "auto"
+                    val orientation = when (mode) {
+                        "landscape" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                        "portrait" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                        "auto" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                        else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                    }
+                    requestedOrientation = orientation
+                    result.success(true)
+                }
+
                 else -> {
                     result.notImplemented()
                 }

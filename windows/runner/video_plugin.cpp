@@ -324,6 +324,15 @@ void VideoPlugin::HandleMethodCall(
           return;
       }
       
+      // CRITICAL: Immediately show and position the MPV window after launch.
+      // At restricted window sizes, no WM_SIZE/WM_MOVE fires, so UpdatePosition
+      // from the message handler never triggers — the window stays invisible.
+      if (main_hwnd_) {
+          mpv_window_->Show();
+          mpv_window_->UpdatePosition(main_hwnd_);
+          DebugLog("MPV window shown and positioned behind Flutter.");
+      }
+      
       // 2. Connect to IPC
       // Wait for pipe to be available
       // Try for up to 5 seconds
@@ -383,7 +392,16 @@ void VideoPlugin::HandleMethodCall(
       
   } else if (method_name == "dispose") {
       StopReadThread();
-      mpv_window_->Destroy();
+      // Use Stop() instead of Destroy() — kills MPV process and hides window,
+      // but keeps the HWND alive for reuse on next video play.
+      mpv_window_->Stop();
+      result->Success();
+
+  } else if (method_name == "resize") {
+      // Called from Dart after fullscreen toggle to re-sync MPV window position
+      if (main_hwnd_ && mpv_window_->IsVideoActive()) {
+          mpv_window_->UpdatePosition(main_hwnd_);
+      }
       result->Success();
       
   } else if (method_name == "command") {

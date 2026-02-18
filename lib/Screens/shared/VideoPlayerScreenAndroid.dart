@@ -6,9 +6,11 @@ import 'package:screen_brightness/screen_brightness.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:media_kit/src/player/native/player/player.dart' as native_player;
+import 'package:media_kit/src/player/native/player/player.dart'
+    as native_player;
 import 'package:window_manager/window_manager.dart';
 import 'package:zap_share/services/device_discovery_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Keyboard shortcut map for the video player (VLC-style)
 /// Space/K: Play/Pause | Left/Right: Seek ±5s | Shift+Left/Right: Seek ±30s
@@ -43,7 +45,8 @@ class VideoPlayerScreenAndroid extends StatefulWidget {
   });
 
   @override
-  State<VideoPlayerScreenAndroid> createState() => _VideoPlayerScreenAndroidState();
+  State<VideoPlayerScreenAndroid> createState() =>
+      _VideoPlayerScreenAndroidState();
 }
 
 class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
@@ -78,6 +81,16 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
 
   // Locked?
   bool _locked = false;
+  bool _rotationLocked = false;
+
+  // Aspect Ratio
+  int _currentFitIndex = 0;
+  static const _boxFits = [
+    {'name': 'Fit', 'mode': BoxFit.contain},
+    {'name': 'Fill (Crop)', 'mode': BoxFit.cover},
+    {'name': 'Stretch', 'mode': BoxFit.fill},
+    {'name': 'Original', 'mode': BoxFit.none},
+  ];
 
   // Fullscreen
   bool _isFullscreen = false;
@@ -121,6 +134,7 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
 
   // Position update throttle (reduces rebuilds → less frame jank)
   DateTime _lastPositionUpdate = DateTime.now();
+  DateTime _lastSeekTime = DateTime.now();
 
   // Smoothed position for UI (avoids jitter from stream irregularity)
   Duration _displayPosition = Duration.zero;
@@ -174,10 +188,17 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     final _isAndroid = Platform.isAndroid;
     _player = Player(
       configuration: PlayerConfiguration(
-        bufferSize: _isAndroid
-            ? 128 * 1024 * 1024  // 128 MB on Android (prevents rebuffer stalls)
-            : 256 * 1024 * 1024, // 256 MB on Windows (handles large HDR/4K files)
-        logLevel: MPVLogLevel.warn, // Only warnings/errors — info generates I/O every frame & steals CPU
+        bufferSize:
+            _isAndroid
+                ? 128 *
+                    1024 *
+                    1024 // 128 MB on Android (prevents rebuffer stalls)
+                : 256 *
+                    1024 *
+                    1024, // 256 MB on Windows (handles large HDR/4K files)
+        logLevel:
+            MPVLogLevel
+                .warn, // Only warnings/errors — info generates I/O every frame & steals CPU
       ),
     );
     _videoController = VideoController(
@@ -192,7 +213,11 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
       if (!mounted || _isPlaying == playing) return; // skip no-op
       _isPlaying = playing;
       setState(() {});
-      _addLog('STATE', playing ? 'Playing' : 'Paused', playing ? _LogLevel.info : _LogLevel.warn);
+      _addLog(
+        'STATE',
+        playing ? 'Playing' : 'Paused',
+        playing ? _LogLevel.info : _LogLevel.warn,
+      );
     });
     _player.stream.position.listen((pos) {
       if (!mounted) return;
@@ -226,7 +251,8 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
       final oldBuf = _buffered;
       _buffered = buf;
       // Only rebuild if controls visible AND buffer changed significantly (>1s)
-      if (_controlsVisible && (buf - oldBuf).abs() > const Duration(seconds: 1)) {
+      if (_controlsVisible &&
+          (buf - oldBuf).abs() > const Duration(seconds: 1)) {
         setState(() {});
       }
     });
@@ -234,8 +260,11 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
       if (!mounted || _isBuffering == buffering) return;
       _isBuffering = buffering;
       setState(() {});
-      _addLog('BUFFER', buffering ? 'Buffering started...' : 'Buffering ended',
-          buffering ? _LogLevel.warn : _LogLevel.info);
+      _addLog(
+        'BUFFER',
+        buffering ? 'Buffering started...' : 'Buffering ended',
+        buffering ? _LogLevel.warn : _LogLevel.info,
+      );
     });
     _player.stream.completed.listen((completed) {
       if (mounted) {
@@ -251,7 +280,11 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
           _subtitleTracks = tracks.subtitle;
           _audioTracks = tracks.audio;
         });
-        _addLog('TRACKS', 'Video: ${tracks.video.length}, Audio: ${tracks.audio.length}, Sub: ${tracks.subtitle.length}', _LogLevel.info);
+        _addLog(
+          'TRACKS',
+          'Video: ${tracks.video.length}, Audio: ${tracks.audio.length}, Sub: ${tracks.subtitle.length}',
+          _LogLevel.info,
+        );
       }
     });
     _player.stream.track.listen((track) {
@@ -259,8 +292,7 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
         setState(() {
           _activeSubtitleTrack = track.subtitle;
           _subtitlesEnabled =
-              track.subtitle != SubtitleTrack.no() &&
-              track.subtitle.id != 'no';
+              track.subtitle != SubtitleTrack.no() && track.subtitle.id != 'no';
           _activeAudioTrack = track.audio;
         });
       }
@@ -299,12 +331,17 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
         DeviceOrientation.landscapeLeft,
         DeviceOrientation.landscapeRight,
         DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
       ]);
     }
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
     // Initialize screen brightness for VLC-like swipe gesture
     _initBrightness();
+    _loadSubtitleSettings();
+
+    // Pause device discovery during video playback to save resources & CPU
+    DeviceDiscoveryService().pauseDiscovery();
   }
 
   // ─── Cast session (remote control) ─────────────────────────
@@ -325,13 +362,17 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
           break;
         case 'seek':
           if (control.seekPosition != null) {
-            _player.seek(Duration(milliseconds: (control.seekPosition! * 1000).toInt()));
+            _player.seek(
+              Duration(milliseconds: (control.seekPosition! * 1000).toInt()),
+            );
           }
           break;
         case 'volume':
           if (control.volume != null) {
             setState(() => _volume = control.volume!);
-            _player.setVolume(control.volume! * 100); // media_kit volume is 0-100
+            _player.setVolume(
+              control.volume! * 100,
+            ); // media_kit volume is 0-100
           }
           break;
         case 'stop':
@@ -356,7 +397,10 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     });
   }
 
-  void _sendStatusNow(DeviceDiscoveryService discoveryService, String controllerIp) {
+  void _sendStatusNow(
+    DeviceDiscoveryService discoveryService,
+    String controllerIp,
+  ) {
     discoveryService.sendCastStatus(
       controllerIp,
       position: _position.inMilliseconds / 1000.0,
@@ -406,7 +450,10 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
         // Async cache layer — decouples I/O from decoder completely
         await np.setProperty('cache', 'yes');
         await np.setProperty('cache-secs', '120');
-        await np.setProperty('cache-pause-initial', 'yes'); // Wait for initial cache fill to avoid stutter
+        await np.setProperty(
+          'cache-pause-initial',
+          'yes',
+        ); // Wait for initial cache fill to avoid stutter
         await np.setProperty('cache-pause-wait', '1');
 
         // Fast seeking
@@ -430,6 +477,8 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
         // For VOD/file playback it breaks frame pacing.
         await np.setProperty('untimed', 'no');
 
+        // Disable native rendering to avoid duplicates with Flutter overlays
+        await np.setProperty('sub-visibility', 'no');
       } else {
         // ═══ WINDOWS: Ultimate Performance Config ═══
         // Optimized for H.264/H.265 smoothness.
@@ -438,8 +487,8 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
 
         // Hardware decoding - 'auto' is generally fastest.
         // If you see green artifacts, try 'd3d11va' or 'dxva2'.
-        await np.setProperty('hwdec', 'auto'); 
-        
+        await np.setProperty('hwdec', 'auto');
+
         // Allow hardware decoding for all codecs
         await np.setProperty('hwdec-codecs', 'all');
 
@@ -447,7 +496,10 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
         // It resamples audio to match video framerate, eliminating 3:2 pulldown jank.
         await np.setProperty('video-sync', 'display-resample');
         await np.setProperty('interpolation', 'yes');
-        await np.setProperty('tscale', 'oversample'); // High quality interpolation
+        await np.setProperty(
+          'tscale',
+          'oversample',
+        ); // High quality interpolation
 
         // SCALING: 'bilinear' is fastest, 'spline36' is good balance.
         // Using bilinear for maximum performance.
@@ -455,15 +507,15 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
         await np.setProperty('dscale', 'bilinear');
         await np.setProperty('cscale', 'bilinear');
 
-        // CACHE: Reduced cache sizes to prevent GC pauses. 
+        // CACHE: Reduced cache sizes to prevent GC pauses.
         // Large caches in Dart memory can cause "stop-the-world" stutters.
         await np.setProperty('cache', 'yes');
-        await np.setProperty('demuxer-max-bytes', '64MiB'); 
+        await np.setProperty('demuxer-max-bytes', '64MiB');
         await np.setProperty('demuxer-readahead-secs', '20');
 
         // THREADING: Allow multi-threaded decoding
-        await np.setProperty('vd-lavc-threads', '0'); 
-        
+        await np.setProperty('vd-lavc-threads', '0');
+
         // LATENCY: Turn off latency hacks for files (improves pacing)
         await np.setProperty('untimed', 'no');
 
@@ -474,8 +526,10 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
       // === Network-specific settings for cast/stream (both platforms) ===
       if (source.startsWith('http')) {
         await np.setProperty('network-timeout', '30');
-        await np.setProperty('stream-lavf-o',
-            'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5,timeout=30000000');
+        await np.setProperty(
+          'stream-lavf-o',
+          'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5,timeout=30000000',
+        );
         // Network streams: larger cache + user-agent for compatibility
         await np.setProperty('cache-secs', Platform.isAndroid ? '90' : '180');
         await np.setProperty('demuxer-readahead-secs', '600');
@@ -486,8 +540,16 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     try {
       Media media = Media(source);
       _addLog('OPEN', 'Opening: $source', _LogLevel.info);
-      _addLog('CONFIG', 'Platform: ${Platform.isAndroid ? "Android" : "Windows"}', _LogLevel.info);
-      _addLog('CONFIG', 'HW Accel: ${Platform.isAndroid ? "mediacodec" : "auto-copy"}', _LogLevel.info);
+      _addLog(
+        'CONFIG',
+        'Platform: ${Platform.isAndroid ? "Android" : "Windows"}',
+        _LogLevel.info,
+      );
+      _addLog(
+        'CONFIG',
+        'HW Accel: ${Platform.isAndroid ? "mediacodec" : "auto-copy"}',
+        _LogLevel.info,
+      );
       await _player.open(media);
       _addLog('OPEN', 'Media opened successfully', _LogLevel.info);
       setState(() {
@@ -509,9 +571,7 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     // Load external subtitle if provided
     if (widget.subtitlePath != null && widget.subtitlePath!.isNotEmpty) {
       try {
-        await _player.setSubtitleTrack(
-          SubtitleTrack.uri(widget.subtitlePath!),
-        );
+        await _player.setSubtitleTrack(SubtitleTrack.uri(widget.subtitlePath!));
       } catch (e) {
         debugPrint('Failed to load subtitle: $e');
       }
@@ -530,12 +590,11 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
           videoPath.split(Platform.pathSeparator).last.split('.').first;
       final subExts = ['srt', 'ass', 'ssa', 'vtt', 'sub'];
       for (final ext in subExts) {
-        final subFile =
-            File('${dir.path}${Platform.pathSeparator}$videoName.$ext');
+        final subFile = File(
+          '${dir.path}${Platform.pathSeparator}$videoName.$ext',
+        );
         if (await subFile.exists()) {
-          await _player.setSubtitleTrack(
-            SubtitleTrack.uri(subFile.path),
-          );
+          await _player.setSubtitleTrack(SubtitleTrack.uri(subFile.path));
           return;
         }
       }
@@ -556,7 +615,9 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     _keyboardFocusNode.dispose();
     _player.dispose();
     // Reset brightness to system default on exit
-    try { ScreenBrightness().resetScreenBrightness(); } catch (_) {}
+    try {
+      ScreenBrightness().resetScreenBrightness();
+    } catch (_) {}
 
     // Restore orientation and system UI
     if (Platform.isAndroid) {
@@ -572,6 +633,9 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     if (Platform.isWindows && _isFullscreen) {
       windowManager.setFullScreen(false);
     }
+
+    // Resume device discovery when player is closed
+    DeviceDiscoveryService().resumeDiscovery();
 
     super.dispose();
   }
@@ -728,7 +792,9 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     if (key == LogicalKeyboardKey.keyF || key == LogicalKeyboardKey.f11) {
       _toggleFullscreen();
       _showActionIndicator(
-        _isFullscreen ? Icons.fullscreen_rounded : Icons.fullscreen_exit_rounded,
+        _isFullscreen
+            ? Icons.fullscreen_rounded
+            : Icons.fullscreen_exit_rounded,
         _isFullscreen ? 'Fullscreen' : 'Exit Fullscreen',
       );
       return KeyEventResult.handled;
@@ -759,7 +825,9 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     if (key == LogicalKeyboardKey.keyS) {
       _toggleSubtitles();
       _showActionIndicator(
-        _subtitlesEnabled ? Icons.subtitles_off_rounded : Icons.subtitles_rounded,
+        _subtitlesEnabled
+            ? Icons.subtitles_off_rounded
+            : Icons.subtitles_rounded,
         _subtitlesEnabled ? 'Subtitles Off' : 'Subtitles On',
       );
       return KeyEventResult.handled;
@@ -781,7 +849,10 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     if (key == LogicalKeyboardKey.bracketLeft) {
       final newSpeed = (_playbackSpeed - 0.25).clamp(0.25, 4.0);
       _setSpeed(newSpeed);
-      _showActionIndicator(Icons.slow_motion_video_rounded, 'Speed ${newSpeed}x');
+      _showActionIndicator(
+        Icons.slow_motion_video_rounded,
+        'Speed ${newSpeed}x',
+      );
       return KeyEventResult.handled;
     }
 
@@ -828,6 +899,12 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     if (numKeys.containsKey(key) && !isCtrl && !isShift) {
       _seekToPercent(numKeys[key]!);
       _showActionIndicator(Icons.skip_next_rounded, 'Seek to ${numKeys[key]}%');
+      return KeyEventResult.handled;
+    }
+
+    // C: Toggle Aspect Ratio
+    if (key == LogicalKeyboardKey.keyC) {
+      _toggleAspectRatio();
       return KeyEventResult.handled;
     }
 
@@ -994,8 +1071,10 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     final estFps = _fmtNum(results['estimated-vf-fps']);
     final displayFps = _fmtNum(results['display-fps']);
     final hwdec = results['hwdec-current'];
-    final hwdecLabel = (hwdec != null && hwdec.isNotEmpty && hwdec != 'no')
-        ? '$hwdec (HW)' : 'Software';
+    final hwdecLabel =
+        (hwdec != null && hwdec.isNotEmpty && hwdec != 'no')
+            ? '$hwdec (HW)'
+            : 'Software';
     final droppedVo = results['frame-drop-count'] ?? '0';
     final droppedDec = results['decoder-frame-drop-count'] ?? '0';
     final delayedVo = results['vo-delayed-frame-count'] ?? '0';
@@ -1026,7 +1105,11 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
         'Audio Codec': acodec,
         'Audio Bitrate': aBitrate,
         'Cache Ahead': '${cacheDur}s',
-        'Color': [colormatrix, primaries, gamma].where((s) => s.isNotEmpty).join(' / '),
+        'Color': [
+          colormatrix,
+          primaries,
+          gamma,
+        ].where((s) => s.isNotEmpty).join(' / '),
       };
     });
   }
@@ -1073,7 +1156,11 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
             // Header
             Row(
               children: [
-                const Icon(Icons.analytics_rounded, color: _accentColor, size: 16),
+                const Icon(
+                  Icons.analytics_rounded,
+                  color: _accentColor,
+                  size: 16,
+                ),
                 const SizedBox(width: 6),
                 Text(
                   'PLAYBACK STATS',
@@ -1087,14 +1174,19 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                 const Spacer(),
                 GestureDetector(
                   onTap: _toggleStats,
-                  child: const Icon(Icons.close_rounded, color: Colors.white38, size: 16),
+                  child: const Icon(
+                    Icons.close_rounded,
+                    color: Colors.white38,
+                    size: 16,
+                  ),
                 ),
               ],
             ),
             const Divider(color: Colors.white12, height: 12),
             // Stats rows
             ..._stats.entries.map((e) {
-              final isDropped = e.key.startsWith('Dropped') || e.key.startsWith('Delayed');
+              final isDropped =
+                  e.key.startsWith('Dropped') || e.key.startsWith('Delayed');
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 1.5),
                 child: Row(
@@ -1115,9 +1207,13 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                       child: Text(
                         e.value,
                         style: GoogleFonts.robotoMono(
-                          color: isDropped ? _dropColor(e.value) : Colors.white.withOpacity(0.85),
+                          color:
+                              isDropped
+                                  ? _dropColor(e.value)
+                                  : Colors.white.withOpacity(0.85),
                           fontSize: 10,
-                          fontWeight: isDropped ? FontWeight.w700 : FontWeight.w500,
+                          fontWeight:
+                              isDropped ? FontWeight.w700 : FontWeight.w500,
                         ),
                       ),
                     ),
@@ -1128,10 +1224,7 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
             const SizedBox(height: 4),
             Text(
               Platform.isWindows ? 'Press I to close' : 'Tap × to close',
-              style: GoogleFonts.robotoMono(
-                color: Colors.white24,
-                fontSize: 9,
-              ),
+              style: GoogleFonts.robotoMono(color: Colors.white24, fontSize: 9),
             ),
           ],
         ),
@@ -1193,7 +1286,11 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
             // Header
             Row(
               children: [
-                const Icon(Icons.terminal_rounded, color: _accentColor, size: 14),
+                const Icon(
+                  Icons.terminal_rounded,
+                  color: _accentColor,
+                  size: 14,
+                ),
                 const SizedBox(width: 6),
                 Text(
                   'LIVE LOG',
@@ -1223,71 +1320,91 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                 // Clear button
                 GestureDetector(
                   onTap: () => setState(() => _logEntries.clear()),
-                  child: const Icon(Icons.delete_sweep_rounded, color: Colors.white38, size: 16),
+                  child: const Icon(
+                    Icons.delete_sweep_rounded,
+                    color: Colors.white38,
+                    size: 16,
+                  ),
                 ),
                 const SizedBox(width: 8),
                 GestureDetector(
                   onTap: _toggleLogs,
-                  child: const Icon(Icons.close_rounded, color: Colors.white38, size: 16),
+                  child: const Icon(
+                    Icons.close_rounded,
+                    color: Colors.white38,
+                    size: 16,
+                  ),
                 ),
               ],
             ),
             const Divider(color: Colors.white10, height: 8),
             // Log entries
             Expanded(
-              child: _logEntries.isEmpty
-                  ? Center(
-                      child: Text(
-                        'Waiting for log events...',
-                        style: GoogleFonts.robotoMono(color: Colors.white24, fontSize: 10),
-                      ),
-                    )
-                  : ListView.builder(
-                      controller: _logScrollController,
-                      itemCount: _logEntries.length,
-                      itemBuilder: (_, i) {
-                        final entry = _logEntries[i];
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 0.5),
-                          child: RichText(
-                            text: TextSpan(
-                              style: GoogleFonts.robotoMono(fontSize: 9, height: 1.4),
-                              children: [
-                                TextSpan(
-                                  text: '${entry.timeStr} ',
-                                  style: const TextStyle(color: Colors.white24),
-                                ),
-                                TextSpan(
-                                  text: '${entry.levelIcon} ',
-                                  style: TextStyle(color: entry.color),
-                                ),
-                                TextSpan(
-                                  text: '[${entry.tag}] ',
-                                  style: TextStyle(
-                                    color: entry.color.withOpacity(0.7),
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                TextSpan(
-                                  text: entry.message,
-                                  style: TextStyle(
-                                    color: entry.level == _LogLevel.error
-                                        ? Colors.redAccent
-                                        : Colors.white.withOpacity(0.75),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            maxLines: 3,
-                            overflow: TextOverflow.ellipsis,
+              child:
+                  _logEntries.isEmpty
+                      ? Center(
+                        child: Text(
+                          'Waiting for log events...',
+                          style: GoogleFonts.robotoMono(
+                            color: Colors.white24,
+                            fontSize: 10,
                           ),
-                        );
-                      },
-                    ),
+                        ),
+                      )
+                      : ListView.builder(
+                        controller: _logScrollController,
+                        itemCount: _logEntries.length,
+                        itemBuilder: (_, i) {
+                          final entry = _logEntries[i];
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 0.5),
+                            child: RichText(
+                              text: TextSpan(
+                                style: GoogleFonts.robotoMono(
+                                  fontSize: 9,
+                                  height: 1.4,
+                                ),
+                                children: [
+                                  TextSpan(
+                                    text: '${entry.timeStr} ',
+                                    style: const TextStyle(
+                                      color: Colors.white24,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: '${entry.levelIcon} ',
+                                    style: TextStyle(color: entry.color),
+                                  ),
+                                  TextSpan(
+                                    text: '[${entry.tag}] ',
+                                    style: TextStyle(
+                                      color: entry.color.withOpacity(0.7),
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: entry.message,
+                                    style: TextStyle(
+                                      color:
+                                          entry.level == _LogLevel.error
+                                              ? Colors.redAccent
+                                              : Colors.white.withOpacity(0.75),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          );
+                        },
+                      ),
             ),
             // Footer hint
             Text(
-              Platform.isWindows ? 'Press L to close | Scroll to browse' : 'Tap \u00d7 to close',
+              Platform.isWindows
+                  ? 'Press L to close | Scroll to browse'
+                  : 'Tap \u00d7 to close',
               style: GoogleFonts.robotoMono(color: Colors.white24, fontSize: 8),
             ),
           ],
@@ -1331,17 +1448,7 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
   }
 
   void _toggleSubtitles() {
-    if (_subtitlesEnabled) {
-      _player.setSubtitleTrack(SubtitleTrack.no());
-    } else {
-      if (_subtitleTracks.isNotEmpty) {
-        final first = _subtitleTracks.firstWhere(
-          (t) => t.id != 'no' && t.id != 'auto',
-          orElse: () => _subtitleTracks.first,
-        );
-        _player.setSubtitleTrack(first);
-      }
-    }
+    _showSubtitlePicker();
   }
 
   // ─── Cycle subtitle / audio tracks (V / B keys) ─────────
@@ -1357,7 +1464,9 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     // Find current index
     int currentIdx = 0;
     if (_activeSubtitleTrack != null) {
-      currentIdx = allOptions.indexWhere((t) => t.id == _activeSubtitleTrack!.id);
+      currentIdx = allOptions.indexWhere(
+        (t) => t.id == _activeSubtitleTrack!.id,
+      );
       if (currentIdx < 0) currentIdx = 0;
     }
 
@@ -1380,7 +1489,9 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
 
     int currentIdx = 0;
     if (_activeAudioTrack != null) {
-      currentIdx = _audioTracks.indexWhere((t) => t.id == _activeAudioTrack!.id);
+      currentIdx = _audioTracks.indexWhere(
+        (t) => t.id == _activeAudioTrack!.id,
+      );
       if (currentIdx < 0) currentIdx = 0;
     }
 
@@ -1389,16 +1500,112 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     _player.setAudioTrack(next);
 
     // Show indicator
+    // Show indicator
     final name = next.title ?? next.language ?? 'Track ${next.id}';
     _showActionIndicator(Icons.audiotrack_rounded, 'Audio', name);
   }
 
+  // ─── Rotation ─────────────────────────────────────────────
+
+  void _toggleRotation() {
+    setState(() {
+      _rotationLocked = !_rotationLocked;
+    });
+
+    if (_rotationLocked) {
+      final orientation = MediaQuery.of(context).orientation;
+      if (orientation == Orientation.landscape) {
+        // Lock to landscape (both directions for 180° flip)
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]);
+      } else {
+        // Lock to portrait (both directions for 180° flip)
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+        ]);
+      }
+      _showActionIndicator(
+        Icons.screen_lock_rotation_rounded,
+        'Rotation Locked',
+      );
+    } else {
+      // Auto-rotate: Allow all 4 orientations for full 360° rotation like VLC
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+      ]);
+      _showActionIndicator(
+        Icons.screen_rotation_rounded,
+        'Auto-Rotate',
+        'Unlocked',
+      );
+    }
+  }
+
+  // ─── Aspect Ratio ────────────────────────────────────────
+
+  void _toggleAspectRatio() {
+    setState(() {
+      _currentFitIndex = (_currentFitIndex + 1) % _boxFits.length;
+    });
+    final current = _boxFits[_currentFitIndex];
+    final name = current['name'] as String;
+
+    _showActionIndicator(Icons.aspect_ratio_rounded, 'Aspect Ratio', name);
+  }
+
+  // ─── Subtitle Persistence ────────────────────────────────
+
+  Future<void> _loadSubtitleSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _subtitleFontSize = prefs.getDouble('sub_font_size') ?? 32.0;
+      _subtitleColor = Color(prefs.getInt('sub_color') ?? Colors.white.value);
+      _subtitleBgColor = Color(
+        prefs.getInt('sub_bg_color') ?? const Color(0x99000000).value,
+      );
+      _subtitleFontFamily = prefs.getString('sub_font_family') ?? 'Default';
+      _subtitlesEnabled = prefs.getBool('sub_enabled') ?? false;
+    });
+  }
+
+  Future<void> _saveSubtitleSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('sub_font_size', _subtitleFontSize);
+    await prefs.setInt('sub_color', _subtitleColor.value);
+    await prefs.setInt('sub_bg_color', _subtitleBgColor.value);
+    await prefs.setString('sub_font_family', _subtitleFontFamily);
+    await prefs.setBool('sub_enabled', _subtitlesEnabled);
+    if (_activeSubtitleTrack != null) {
+      await prefs.setString('last_sub_track_id', _activeSubtitleTrack!.id);
+    }
+  }
+
   // ─── Fullscreen ──────────────────────────────────────────
 
-  void _toggleFullscreen() {
+  void _toggleFullscreen() async {
     if (Platform.isWindows) {
-      setState(() => _isFullscreen = !_isFullscreen);
-      windowManager.setFullScreen(_isFullscreen);
+      setState(() {
+        _isFullscreen = !_isFullscreen;
+        // Force controls visible so the overlay rebuilds at the new window size.
+        _controlsVisible = true;
+      });
+      await windowManager.setFullScreen(_isFullscreen);
+
+      // The window_manager plugin toggles fullscreen asynchronously.
+      // Force Flutter to rebuild layout with fresh MediaQuery after
+      // the window metrics have settled.
+      for (final delay in [150, 350, 600]) {
+        Future.delayed(Duration(milliseconds: delay), () {
+          if (mounted) setState(() {});
+        });
+      }
     } else if (Platform.isAndroid) {
       if (_isFullscreen) {
         // Exit fullscreen - allow portrait
@@ -1573,8 +1780,8 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                   _isMuted
                       ? Icons.volume_off_rounded
                       : _volume > 0.5
-                          ? Icons.volume_up_rounded
-                          : Icons.volume_down_rounded,
+                      ? Icons.volume_up_rounded
+                      : Icons.volume_down_rounded,
                   color: _accentColor,
                   size: 20,
                 ),
@@ -1646,8 +1853,8 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                   _brightness > 0.6
                       ? Icons.brightness_high_rounded
                       : _brightness > 0.3
-                          ? Icons.brightness_medium_rounded
-                          : Icons.brightness_low_rounded,
+                      ? Icons.brightness_medium_rounded
+                      : Icons.brightness_low_rounded,
                   color: _accentColor,
                   size: 20,
                 ),
@@ -1708,77 +1915,204 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
       autofocus: true,
       onKeyEvent: _handleKeyEvent,
       child: Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          // ── Video (wrapped in RepaintBoundary to isolate from overlay repaints) ──
-          Center(
-            child: RepaintBoundary(
-              child: Video(
-                controller: _videoController,
-                fill: Colors.black,
-                subtitleViewConfiguration: SubtitleViewConfiguration(
-                  style: _currentSubtitleStyle,
-                  padding: const EdgeInsets.only(bottom: 60),
+        backgroundColor: Colors.black,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            // ── Video (wrapped in RepaintBoundary to isolate from overlay repaints) ──
+            Center(
+              child: RepaintBoundary(
+                child: Video(
+                  controller: _videoController,
+                  fit: _boxFits[_currentFitIndex]['mode'] as BoxFit,
+                  fill: Colors.black,
+                  // No SubtitleViewConfiguration - MPV handles subtitles natively
+                  // to avoid double rendering
+                  controls: NoVideoControls,
                 ),
-                controls: NoVideoControls,
               ),
             ),
-          ),
 
-          // ── Tap area (show/hide controls, double-tap, VLC swipe gestures) ──
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: _toggleControls,
-              onDoubleTapDown: (d) => _handleDoubleTap(d, screenWidth),
-              onDoubleTap: () {},
-              onVerticalDragStart: _onVerticalDragStart,
-              onVerticalDragUpdate: _onVerticalDragUpdate,
-              onVerticalDragEnd: _onVerticalDragEnd,
-              child: const SizedBox.expand(),
+            // ── Tap area (show/hide controls, double-tap, VLC swipe gestures) ──
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _toggleControls,
+                onDoubleTapDown: (d) => _handleDoubleTap(d, screenWidth),
+                onDoubleTap: () {},
+                onVerticalDragStart: _onVerticalDragStart,
+                onVerticalDragUpdate: _onVerticalDragUpdate,
+                onVerticalDragEnd: _onVerticalDragEnd,
+                child: const SizedBox.expand(),
+              ),
             ),
-          ),
 
-          // ── Double-tap seek overlay ──
-          if (_doubleTapSide != null)
-            Positioned(
-              left: _doubleTapSide == 0 ? 0 : null,
-              right: _doubleTapSide == 1 ? 0 : null,
-              top: 0,
-              bottom: 0,
-              width: screenWidth * 0.4,
-              child: Center(
+            // ── Double-tap seek overlay ──
+            if (_doubleTapSide != null)
+              Positioned(
+                left: _doubleTapSide == 0 ? 0 : null,
+                right: _doubleTapSide == 1 ? 0 : null,
+                top: 0,
+                bottom: 0,
+                width: screenWidth * 0.4,
+                child: Center(
+                  child: AnimatedOpacity(
+                    opacity: 1.0,
+                    duration: const Duration(milliseconds: 200),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 14,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.5),
+                        borderRadius: BorderRadius.circular(40),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _doubleTapSide == 0
+                                ? Icons.fast_rewind_rounded
+                                : Icons.fast_forward_rounded,
+                            color: _accentColor,
+                            size: 28,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '10s',
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+            // ── Buffering indicator ──
+            if (_isBuffering)
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const CircularProgressIndicator(
+                    color: _accentColor,
+                    strokeWidth: 3,
+                  ),
+                ),
+              ),
+
+            // ── VLC-like swipe volume overlay (left side) ──
+            if (_showSwipeVolumeOverlay) _buildSwipeVolumeOverlay(),
+
+            // ── VLC-like swipe brightness overlay (right side) ──
+            if (_showSwipeBrightnessOverlay) _buildSwipeBrightnessOverlay(),
+
+            // ── Seek preview tooltip (Removed) ──
+            // if (_isSeeking) _buildSeekPreview(),
+
+            // ── Controls overlay (only when not locked) ──
+            // Wrapped in RepaintBoundary so overlay repaints never
+            // cause the Video texture widget to re-composite.
+            if (_controlsVisible && !_locked) ...[
+              RepaintBoundary(child: _buildTopBar()),
+              RepaintBoundary(child: _buildCenterControls()),
+              RepaintBoundary(child: _buildBottomBar()),
+            ],
+
+            // ── Lock/Unlock button ──
+            // Always show when locked (so user can unlock), and when controls visible
+            if (_controlsVisible || _locked)
+              Positioned(
+                right: 16,
+                top: MediaQuery.of(context).size.height / 2 - 20,
                 child: AnimatedOpacity(
-                  opacity: 1.0,
+                  opacity: (_controlsVisible || _locked) ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: _buildPillButton(
+                    icon:
+                        _locked ? Icons.lock_rounded : Icons.lock_open_rounded,
+                    onTap: () {
+                      setState(() {
+                        _locked = !_locked;
+                        if (!_locked) {
+                          // When unlocking, show controls
+                          _controlsVisible = true;
+                        }
+                      });
+                      _startHideTimer();
+                    },
+                    active: _locked,
+                  ),
+                ),
+              ),
+
+            // Speed menu
+            if (_showSpeedMenu) _buildSpeedMenu(),
+
+            // ── Action indicator overlay (YouTube/VLC-style toast) ──
+            if (_showActionOverlay) _buildActionIndicator(),
+
+            // ── Volume indicator overlay (keyboard volume changes) ──
+            if (_showVolumeOverlay)
+              Positioned(
+                top: 40,
+                right: 20,
+                child: AnimatedOpacity(
+                  opacity: _showVolumeOverlay ? 1.0 : 0.0,
                   duration: const Duration(milliseconds: 200),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 14,
+                      horizontal: 16,
+                      vertical: 12,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.5),
-                      borderRadius: BorderRadius.circular(40),
+                      color: const Color(0xE6141416),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: _accentColor.withOpacity(0.3)),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
-                          _doubleTapSide == 0
-                              ? Icons.fast_rewind_rounded
-                              : Icons.fast_forward_rounded,
+                          _isMuted
+                              ? Icons.volume_off_rounded
+                              : _volume > 0.5
+                              ? Icons.volume_up_rounded
+                              : Icons.volume_down_rounded,
                           color: _accentColor,
-                          size: 28,
+                          size: 22,
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 80,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: LinearProgressIndicator(
+                              value: _volume,
+                              backgroundColor: Colors.white.withOpacity(0.15),
+                              valueColor: const AlwaysStoppedAnimation<Color>(
+                                _accentColor,
+                              ),
+                              minHeight: 6,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
                         Text(
-                          '10s',
+                          '${(_volume * 100).round()}%',
                           style: GoogleFonts.outfit(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
+                            color: Colors.white70,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],
@@ -1786,351 +2120,153 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                   ),
                 ),
               ),
-            ),
 
-          // ── Buffering indicator ──
-          if (_isBuffering)
-            Center(
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const CircularProgressIndicator(
-                  color: _accentColor,
-                  strokeWidth: 3,
-                ),
-              ),
-            ),
-
-          // ── VLC-like swipe volume overlay (left side) ──
-          if (_showSwipeVolumeOverlay) _buildSwipeVolumeOverlay(),
-
-          // ── VLC-like swipe brightness overlay (right side) ──
-          if (_showSwipeBrightnessOverlay) _buildSwipeBrightnessOverlay(),
-
-          // ── Seek preview tooltip ──
-          if (_isSeeking) _buildSeekPreview(),
-
-          // ── Controls overlay (only when not locked) ──
-          // Wrapped in RepaintBoundary so overlay repaints never
-          // cause the Video texture widget to re-composite.
-          if (_controlsVisible && !_locked) ...[
-            RepaintBoundary(child: _buildTopBar()),
-            RepaintBoundary(child: _buildCenterControls()),
-            RepaintBoundary(child: _buildBottomBar()),
-          ],
-
-          // ── Lock/Unlock button ──
-          // Always show when locked (so user can unlock), and when controls visible
-          if (_controlsVisible || _locked)
-            Positioned(
-              right: 16,
-              top: MediaQuery.of(context).size.height / 2 - 20,
-              child: AnimatedOpacity(
-                opacity: (_controlsVisible || _locked) ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 200),
-                child: _buildPillButton(
-                  icon:
-                      _locked ? Icons.lock_rounded : Icons.lock_open_rounded,
-                  onTap: () {
-                    setState(() {
-                      _locked = !_locked;
-                      if (!_locked) {
-                        // When unlocking, show controls
-                        _controlsVisible = true;
-                      }
-                    });
-                    _startHideTimer();
-                  },
-                  active: _locked,
-                ),
-              ),
-            ),
-
-          // Speed menu
-          if (_showSpeedMenu) _buildSpeedMenu(),
-
-          // ── Action indicator overlay (YouTube/VLC-style toast) ──
-          if (_showActionOverlay) _buildActionIndicator(),
-
-          // ── Volume indicator overlay (keyboard volume changes) ──
-          if (_showVolumeOverlay)
-            Positioned(
-              top: 40,
-              right: 20,
-              child: AnimatedOpacity(
-                opacity: _showVolumeOverlay ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 200),
+            // ── Error overlay ──
+            if (_hasError)
+              Positioned.fill(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xE6141416),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _accentColor.withOpacity(0.3)),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        _isMuted
-                            ? Icons.volume_off_rounded
-                            : _volume > 0.5
-                                ? Icons.volume_up_rounded
-                                : Icons.volume_down_rounded,
-                        color: _accentColor,
-                        size: 22,
-                      ),
-                      const SizedBox(width: 10),
-                      SizedBox(
-                        width: 80,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: _volume,
-                            backgroundColor: Colors.white.withOpacity(0.15),
-                            valueColor: const AlwaysStoppedAnimation<Color>(_accentColor),
-                            minHeight: 6,
-                          ),
+                  color: Colors.black87,
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.error_outline_rounded,
+                          color: Colors.redAccent,
+                          size: 56,
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${(_volume * 100).round()}%',
-                        style: GoogleFonts.outfit(
-                          color: Colors.white70,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-
-          // ── Error overlay ──
-          if (_hasError)
-            Positioned.fill(
-              child: Container(
-                color: Colors.black87,
-                child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 56),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Playback Error',
-                        style: GoogleFonts.outfit(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 40),
-                        child: Text(
-                          _errorMessage ?? 'Unknown error occurred',
+                        const SizedBox(height: 16),
+                        Text(
+                          'Playback Error',
                           style: GoogleFonts.outfit(
-                            color: Colors.white60,
-                            fontSize: 14,
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
                           ),
-                          textAlign: TextAlign.center,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
                         ),
-                      ),
-                      const SizedBox(height: 24),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          ElevatedButton.icon(
-                            onPressed: _retryPlayback,
-                            icon: const Icon(Icons.refresh_rounded, size: 18),
-                            label: Text(
-                              'Retry${_retryCount > 0 ? ' ($_retryCount/$_maxRetries)' : ''}',
-                              style: GoogleFonts.outfit(fontWeight: FontWeight.w600),
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _accentColor,
-                              foregroundColor: Colors.black,
-                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(30),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          OutlinedButton(
-                            onPressed: () => Navigator.of(context).pop(),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.white,
-                              side: const BorderSide(color: Colors.white24),
-                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(30),
-                              ),
-                            ),
-                            child: Text('Go Back',
-                              style: GoogleFonts.outfit(fontWeight: FontWeight.w600)),
-                          ),
-                        ],
-                      ),
-                      if (_retryCount > 0)
+                        const SizedBox(height: 8),
                         Padding(
-                          padding: const EdgeInsets.only(top: 12),
+                          padding: const EdgeInsets.symmetric(horizontal: 40),
                           child: Text(
-                            'Auto-retrying...',
+                            _errorMessage ?? 'Unknown error occurred',
                             style: GoogleFonts.outfit(
-                              color: _accentColor.withOpacity(0.7),
-                              fontSize: 12,
+                              color: Colors.white60,
+                              fontSize: 14,
                             ),
+                            textAlign: TextAlign.center,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-
-          // ── Debug stats overlay ──
-          if (_showStats) RepaintBoundary(child: _buildStatsOverlay()),
-
-          // ── Real-time log console ──
-          if (_showLogs) RepaintBoundary(child: _buildLogOverlay()),
-
-          // ── Keyboard shortcuts hint (show briefly on first load) ──
-          if (Platform.isWindows && _controlsVisible && !_locked)
-            Positioned(
-              bottom: MediaQuery.of(context).padding.bottom + 90,
-              left: 16,
-              child: AnimatedOpacity(
-                opacity: _controlsVisible ? 0.6 : 0.0,
-                duration: const Duration(milliseconds: 250),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.4),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    'Space: Play/Pause  \u2190\u2192: Seek  \u2191\u2193: Volume  F: Fullscreen  M: Mute  V: Subs  B: Audio',
-                    style: GoogleFonts.outfit(
-                      color: Colors.white38,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w500,
+                        const SizedBox(height: 24),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            ElevatedButton.icon(
+                              onPressed: _retryPlayback,
+                              icon: const Icon(Icons.refresh_rounded, size: 18),
+                              label: Text(
+                                'Retry${_retryCount > 0 ? ' ($_retryCount/$_maxRetries)' : ''}',
+                                style: GoogleFonts.outfit(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _accentColor,
+                                foregroundColor: Colors.black,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 24,
+                                  vertical: 12,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            OutlinedButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.white,
+                                side: const BorderSide(color: Colors.white24),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 24,
+                                  vertical: 12,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(30),
+                                ),
+                              ),
+                              child: Text(
+                                'Go Back',
+                                style: GoogleFonts.outfit(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_retryCount > 0)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Text(
+                              'Auto-retrying...',
+                              style: GoogleFonts.outfit(
+                                color: _accentColor.withOpacity(0.7),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
               ),
-            ),
-        ],
+
+            // ── Debug stats overlay ──
+            if (_showStats) RepaintBoundary(child: _buildStatsOverlay()),
+
+            // ── Real-time log console ──
+            if (_showLogs) RepaintBoundary(child: _buildLogOverlay()),
+
+            // ── Keyboard shortcuts hint (show briefly on first load) ──
+            if (Platform.isWindows && _controlsVisible && !_locked)
+              Positioned(
+                bottom: MediaQuery.of(context).padding.bottom + 90,
+                left: 16,
+                child: AnimatedOpacity(
+                  opacity: _controlsVisible ? 0.6 : 0.0,
+                  duration: const Duration(milliseconds: 250),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.4),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'Space: Play/Pause  \u2190\u2192: Seek  \u2191\u2193: Volume  F: Fullscreen  M: Mute  V: Subs  B: Audio',
+                      style: GoogleFonts.outfit(
+                        color: Colors.white38,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
-    ),
     );
   }
 
   // ─── Seek preview ────────────────────────────────────────
 
-  Widget _buildSeekPreview() {
-    return Positioned(
-      top: MediaQuery.of(context).size.height * 0.2,
-      left: 0,
-      right: 0,
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          decoration: BoxDecoration(
-            color: const Color(0xE6141416),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: _accentColor.withOpacity(0.3)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.6),
-                blurRadius: 20,
-                spreadRadius: 4,
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Seek position indicator (icon-based — no duplicate Video widget
-              // which would cause frame contention with the main player surface)
-              Container(
-                width: 180,
-                height: 100,
-                decoration: BoxDecoration(
-                  color: Colors.black,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _accentColor.withOpacity(0.4)),
-                ),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    // Seek direction icon
-                    Icon(
-                      _seekPreviewPosition > _position
-                          ? Icons.fast_forward_rounded
-                          : Icons.fast_rewind_rounded,
-                      color: _accentColor,
-                      size: 44,
-                    ),
-                    // Progress bar inside preview
-                    Positioned(
-                      bottom: 0,
-                      left: 0,
-                      right: 0,
-                      child: ClipRRect(
-                        borderRadius: const BorderRadius.only(
-                          bottomLeft: Radius.circular(7),
-                          bottomRight: Radius.circular(7),
-                        ),
-                        child: LinearProgressIndicator(
-                          value: _duration.inMilliseconds > 0
-                              ? _seekPreviewPosition.inMilliseconds /
-                                  _duration.inMilliseconds
-                              : 0,
-                          backgroundColor: Colors.black54,
-                          valueColor: const AlwaysStoppedAnimation<Color>(
-                              _accentColor),
-                          minHeight: 3,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-              // Time display
-              Text(
-                _formatDuration(_seekPreviewPosition),
-                style: GoogleFonts.outfit(
-                  color: _accentColor,
-                  fontSize: 24,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              if (_duration.inMilliseconds > 0) ...[
-                const SizedBox(height: 2),
-                Text(
-                  _seekDifference(),
-                  style: GoogleFonts.outfit(
-                    color: Colors.white60,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  // ─── Seek preview (Removed) ────────────────────────────
+  // Widget _buildSeekPreview() { ... }
 
   String _seekDifference() {
     final diff = _seekPreviewPosition - _position;
@@ -2197,28 +2333,35 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                     onTap: _showAudioTrackPicker,
                   ),
                 ),
-              // Subtitles toggle
+              // Subtitle toggle (Consolidated)
               _buildPillButton(
-                icon: _subtitlesEnabled
-                    ? Icons.subtitles_rounded
-                    : Icons.subtitles_off_rounded,
+                icon:
+                    _subtitlesEnabled
+                        ? Icons.subtitles_rounded
+                        : Icons.subtitles_off_rounded,
                 onTap: _toggleSubtitles,
                 active: _subtitlesEnabled,
               ),
-              const SizedBox(width: 8),
-              // Subtitle track picker
-              if (_subtitleTracks.length > 1)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: _buildPillButton(
-                    icon: Icons.closed_caption_rounded,
-                    onTap: _showSubtitlePicker,
-                  ),
-                ),
               // Subtitle style customization
               _buildPillButton(
                 icon: Icons.text_format_rounded,
                 onTap: _showSubtitleStylePicker,
+              ),
+              const SizedBox(width: 8),
+              // Rotation toggle
+              _buildPillButton(
+                icon:
+                    _rotationLocked
+                        ? Icons.screen_lock_rotation_rounded
+                        : Icons.screen_rotation_rounded,
+                onTap: _toggleRotation,
+                active: _rotationLocked,
+              ),
+              const SizedBox(width: 8),
+              // Aspect Ratio
+              _buildPillButton(
+                icon: Icons.aspect_ratio_rounded,
+                onTap: _toggleAspectRatio,
               ),
               const SizedBox(width: 8),
               // Debug stats toggle
@@ -2237,9 +2380,10 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
               const SizedBox(width: 8),
               // Fullscreen toggle
               _buildPillButton(
-                icon: _isFullscreen
-                    ? Icons.fullscreen_exit_rounded
-                    : Icons.fullscreen_rounded,
+                icon:
+                    _isFullscreen
+                        ? Icons.fullscreen_exit_rounded
+                        : Icons.fullscreen_rounded,
                 onTap: _toggleFullscreen,
                 active: _isFullscreen,
               ),
@@ -2271,11 +2415,12 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
               const SizedBox(width: 36),
               // Play / Pause
               _buildCircleButton(
-                icon: _isCompleted
-                    ? Icons.replay_rounded
-                    : (_isPlaying
-                        ? Icons.pause_rounded
-                        : Icons.play_arrow_rounded),
+                icon:
+                    _isCompleted
+                        ? Icons.replay_rounded
+                        : (_isPlaying
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded),
                 size: 72,
                 iconSize: 44,
                 filled: true,
@@ -2390,22 +2535,25 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                         vertical: 5,
                       ),
                       decoration: BoxDecoration(
-                        color: _playbackSpeed != 1.0
-                            ? _accentColor.withOpacity(0.2)
-                            : Colors.white.withOpacity(0.1),
+                        color:
+                            _playbackSpeed != 1.0
+                                ? _accentColor.withOpacity(0.2)
+                                : Colors.white.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
-                          color: _playbackSpeed != 1.0
-                              ? _accentColor.withOpacity(0.5)
-                              : Colors.white.withOpacity(0.15),
+                          color:
+                              _playbackSpeed != 1.0
+                                  ? _accentColor.withOpacity(0.5)
+                                  : Colors.white.withOpacity(0.15),
                         ),
                       ),
                       child: Text(
                         '${_playbackSpeed}x',
                         style: GoogleFonts.outfit(
-                          color: _playbackSpeed != 1.0
-                              ? _accentColor
-                              : Colors.white70,
+                          color:
+                              _playbackSpeed != 1.0
+                                  ? _accentColor
+                                  : Colors.white70,
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
                         ),
@@ -2450,11 +2598,13 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
           secondaryActiveTrackColor: Colors.white.withOpacity(0.3),
         ),
         child: Slider(
-          value: _isSeeking
-              ? _seekPreviewPosition.inMilliseconds
-                  .toDouble()
-                  .clamp(0.0, max)
-              : pos,
+          value:
+              _isSeeking
+                  ? _seekPreviewPosition.inMilliseconds.toDouble().clamp(
+                    0.0,
+                    max,
+                  )
+                  : pos,
           secondaryTrackValue: buf,
           min: 0,
           max: max > 0 ? max : 1,
@@ -2469,13 +2619,21 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
               _seekPreviewPosition = Duration(milliseconds: v.toInt());
             });
             _startHideTimer();
+
+            // Live seek (Scrubbing) - Throttled
+            final now = DateTime.now();
+            if (now.difference(_lastSeekTime).inMilliseconds > 150) {
+              _lastSeekTime = now;
+              _player.seek(_seekPreviewPosition);
+            }
           },
           onChangeEnd: (v) {
             final seekTarget = Duration(milliseconds: v.toInt());
             _player.seek(seekTarget);
             setState(() {
               _isSeeking = false;
-              _position = seekTarget; // Immediately update position to avoid jump-back
+              _position =
+                  seekTarget; // Immediately update position to avoid jump-back
               _displayPosition = seekTarget;
             });
             _startHideTimer();
@@ -2539,9 +2697,10 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                       horizontal: 4,
                     ),
                     decoration: BoxDecoration(
-                      color: isActive
-                          ? _accentColor.withOpacity(0.15)
-                          : Colors.transparent,
+                      color:
+                          isActive
+                              ? _accentColor.withOpacity(0.15)
+                              : Colors.transparent,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Center(
@@ -2599,8 +2758,11 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.audiotrack_rounded,
-                        color: _accentColor, size: 22),
+                    const Icon(
+                      Icons.audiotrack_rounded,
+                      color: _accentColor,
+                      size: 22,
+                    ),
                     const SizedBox(width: 8),
                     Text(
                       'Audio Tracks',
@@ -2632,19 +2794,24 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                             isActive ? FontWeight.w700 : FontWeight.w500,
                       ),
                     ),
-                    subtitle: track.language != null
-                        ? Text(
-                            track.language!,
-                            style: GoogleFonts.outfit(
-                              color: Colors.grey[500],
-                              fontSize: 12,
-                            ),
-                          )
-                        : null,
-                    trailing: isActive
-                        ? const Icon(Icons.check_circle_rounded,
-                            color: _accentColor, size: 20)
-                        : null,
+                    subtitle:
+                        track.language != null
+                            ? Text(
+                              track.language!,
+                              style: GoogleFonts.outfit(
+                                color: Colors.grey[500],
+                                fontSize: 12,
+                              ),
+                            )
+                            : null,
+                    trailing:
+                        isActive
+                            ? const Icon(
+                              Icons.check_circle_rounded,
+                              color: _accentColor,
+                              size: 20,
+                            )
+                            : null,
                     onTap: () {
                       _player.setAudioTrack(track);
                       Navigator.pop(ctx);
@@ -2709,17 +2876,23 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                     'Off',
                     style: GoogleFonts.outfit(
                       color: !_subtitlesEnabled ? _accentColor : Colors.white,
-                      fontWeight: !_subtitlesEnabled
-                          ? FontWeight.w700
-                          : FontWeight.w500,
+                      fontWeight:
+                          !_subtitlesEnabled
+                              ? FontWeight.w700
+                              : FontWeight.w500,
                     ),
                   ),
-                  trailing: !_subtitlesEnabled
-                      ? const Icon(Icons.check_circle_rounded,
-                          color: _accentColor, size: 20)
-                      : null,
+                  trailing:
+                      !_subtitlesEnabled
+                          ? const Icon(
+                            Icons.check_circle_rounded,
+                            color: _accentColor,
+                            size: 20,
+                          )
+                          : null,
                   onTap: () {
                     _player.setSubtitleTrack(SubtitleTrack.no());
+                    setState(() => _subtitlesEnabled = false);
                     Navigator.pop(ctx);
                   },
                 ),
@@ -2738,21 +2911,31 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                             isActive ? FontWeight.w700 : FontWeight.w500,
                       ),
                     ),
-                    subtitle: track.language != null
-                        ? Text(
-                            track.language!,
-                            style: GoogleFonts.outfit(
-                              color: Colors.grey[500],
-                              fontSize: 12,
-                            ),
-                          )
-                        : null,
-                    trailing: isActive
-                        ? const Icon(Icons.check_circle_rounded,
-                            color: _accentColor, size: 20)
-                        : null,
+                    subtitle:
+                        track.language != null
+                            ? Text(
+                              track.language!,
+                              style: GoogleFonts.outfit(
+                                color: Colors.grey[500],
+                                fontSize: 12,
+                              ),
+                            )
+                            : null,
+                    trailing:
+                        isActive
+                            ? const Icon(
+                              Icons.check_circle_rounded,
+                              color: _accentColor,
+                              size: 20,
+                            )
+                            : null,
                     onTap: () {
                       _player.setSubtitleTrack(track);
+                      setState(() {
+                        _activeSubtitleTrack = track;
+                        _subtitlesEnabled = true;
+                      });
+                      _saveSubtitleSettings();
                       Navigator.pop(ctx);
                     },
                   );
@@ -2803,8 +2986,11 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(Icons.text_format_rounded,
-                            color: _accentColor, size: 22),
+                        const Icon(
+                          Icons.text_format_rounded,
+                          color: _accentColor,
+                          size: 22,
+                        ),
                         const SizedBox(width: 8),
                         Text(
                           'Subtitle Style',
@@ -2829,7 +3015,9 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                       child: Center(
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
                           color: _subtitleBgColor,
                           child: Text(
                             'Sample Subtitle Text',
@@ -2837,9 +3025,10 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                               fontSize: _subtitleFontSize.clamp(14.0, 48.0),
                               color: _subtitleColor,
                               fontWeight: FontWeight.w600,
-                              fontFamily: _subtitleFontFamily == 'Default'
-                                  ? null
-                                  : _subtitleFontFamily,
+                              fontFamily:
+                                  _subtitleFontFamily == 'Default'
+                                      ? null
+                                      : _subtitleFontFamily,
                             ),
                           ),
                         ),
@@ -2850,15 +3039,22 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                     // Font Size
                     Row(
                       children: [
-                        Text('Font Size',
-                            style: GoogleFonts.outfit(
-                                color: Colors.white70, fontSize: 14)),
+                        Text(
+                          'Font Size',
+                          style: GoogleFonts.outfit(
+                            color: Colors.white70,
+                            fontSize: 14,
+                          ),
+                        ),
                         const Spacer(),
-                        Text('${_subtitleFontSize.toInt()}',
-                            style: GoogleFonts.outfit(
-                                color: _accentColor,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700)),
+                        Text(
+                          '${_subtitleFontSize.toInt()}',
+                          style: GoogleFonts.outfit(
+                            color: _accentColor,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ],
                     ),
                     SliderTheme(
@@ -2876,6 +3072,7 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                         onChanged: (v) {
                           setModalState(() {});
                           setState(() => _subtitleFontSize = v);
+                          _saveSubtitleSettings();
                         },
                       ),
                     ),
@@ -2884,161 +3081,205 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                     const SizedBox(height: 8),
                     Align(
                       alignment: Alignment.centerLeft,
-                      child: Text('Font Color',
-                          style: GoogleFonts.outfit(
-                              color: Colors.white70, fontSize: 14)),
+                      child: Text(
+                        'Font Color',
+                        style: GoogleFonts.outfit(
+                          color: Colors.white70,
+                          fontSize: 14,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: _subtitleColorPresets.map((preset) {
-                        final color = preset['color'] as Color;
-                        final name = preset['name'] as String;
-                        final isActive = _subtitleColor.value == color.value;
-                        return GestureDetector(
-                          onTap: () {
-                            setModalState(() {});
-                            setState(() => _subtitleColor = color);
-                          },
-                          child: Column(
-                            children: [
-                              Container(
-                                width: 36,
-                                height: 36,
-                                decoration: BoxDecoration(
-                                  color: color,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: isActive
-                                        ? _accentColor
-                                        : Colors.white24,
-                                    width: isActive ? 3 : 1,
+                      children:
+                          _subtitleColorPresets.map((preset) {
+                            final color = preset['color'] as Color;
+                            final name = preset['name'] as String;
+                            final isActive =
+                                _subtitleColor.value == color.value;
+                            return GestureDetector(
+                              onTap: () {
+                                setModalState(() {});
+                                setState(() => _subtitleColor = color);
+                                _saveSubtitleSettings();
+                              },
+                              child: Column(
+                                children: [
+                                  Container(
+                                    width: 36,
+                                    height: 36,
+                                    decoration: BoxDecoration(
+                                      color: color,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color:
+                                            isActive
+                                                ? _accentColor
+                                                : Colors.white24,
+                                        width: isActive ? 3 : 1,
+                                      ),
+                                    ),
+                                    child:
+                                        isActive
+                                            ? const Icon(
+                                              Icons.check,
+                                              color: Colors.black,
+                                              size: 18,
+                                            )
+                                            : null,
                                   ),
-                                ),
-                                child: isActive
-                                    ? const Icon(Icons.check,
-                                        color: Colors.black, size: 18)
-                                    : null,
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    name,
+                                    style: GoogleFonts.outfit(
+                                      color: Colors.white54,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(height: 4),
-                              Text(name,
-                                  style: GoogleFonts.outfit(
-                                      color: Colors.white54, fontSize: 10)),
-                            ],
-                          ),
-                        );
-                      }).toList(),
+                            );
+                          }).toList(),
                     ),
 
                     // Background
                     const SizedBox(height: 16),
                     Align(
                       alignment: Alignment.centerLeft,
-                      child: Text('Background',
-                          style: GoogleFonts.outfit(
-                              color: Colors.white70, fontSize: 14)),
+                      child: Text(
+                        'Background',
+                        style: GoogleFonts.outfit(
+                          color: Colors.white70,
+                          fontSize: 14,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: _subtitleBgPresets.map((preset) {
-                        final color = preset['color'] as Color;
-                        final name = preset['name'] as String;
-                        final isActive = _subtitleBgColor.value == color.value;
-                        return GestureDetector(
-                          onTap: () {
-                            setModalState(() {});
-                            setState(() => _subtitleBgColor = color);
-                          },
-                          child: Column(
-                            children: [
-                              Container(
-                                width: 36,
-                                height: 36,
-                                decoration: BoxDecoration(
-                                  color: color,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: isActive
-                                        ? _accentColor
-                                        : Colors.white24,
-                                    width: isActive ? 3 : 1,
+                      children:
+                          _subtitleBgPresets.map((preset) {
+                            final color = preset['color'] as Color;
+                            final name = preset['name'] as String;
+                            final isActive =
+                                _subtitleBgColor.value == color.value;
+                            return GestureDetector(
+                              onTap: () {
+                                setModalState(() {});
+                                setState(() => _subtitleBgColor = color);
+                                _saveSubtitleSettings();
+                              },
+                              child: Column(
+                                children: [
+                                  Container(
+                                    width: 36,
+                                    height: 36,
+                                    decoration: BoxDecoration(
+                                      color: color,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color:
+                                            isActive
+                                                ? _accentColor
+                                                : Colors.white24,
+                                        width: isActive ? 3 : 1,
+                                      ),
+                                    ),
+                                    child:
+                                        isActive
+                                            ? Icon(
+                                              Icons.check,
+                                              color:
+                                                  color.opacity > 0.5
+                                                      ? Colors.white
+                                                      : _accentColor,
+                                              size: 18,
+                                            )
+                                            : null,
                                   ),
-                                ),
-                                child: isActive
-                                    ? Icon(Icons.check,
-                                        color: color.opacity > 0.5
-                                            ? Colors.white
-                                            : _accentColor,
-                                        size: 18)
-                                    : null,
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    name,
+                                    style: GoogleFonts.outfit(
+                                      color: Colors.white54,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(height: 4),
-                              Text(name,
-                                  style: GoogleFonts.outfit(
-                                      color: Colors.white54, fontSize: 10)),
-                            ],
-                          ),
-                        );
-                      }).toList(),
+                            );
+                          }).toList(),
                     ),
 
                     // Font Family
                     const SizedBox(height: 16),
                     Align(
                       alignment: Alignment.centerLeft,
-                      child: Text('Font',
-                          style: GoogleFonts.outfit(
-                              color: Colors.white70, fontSize: 14)),
+                      child: Text(
+                        'Font',
+                        style: GoogleFonts.outfit(
+                          color: Colors.white70,
+                          fontSize: 14,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 8),
                     SizedBox(
                       height: 40,
                       child: ListView(
                         scrollDirection: Axis.horizontal,
-                        children: _fontFamilies.map((f) {
-                          final isActive = _subtitleFontFamily == f;
-                          return Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: GestureDetector(
-                              onTap: () {
-                                setModalState(() {});
-                                setState(() => _subtitleFontFamily = f);
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: isActive
-                                      ? _accentColor.withOpacity(0.2)
-                                      : Colors.white.withOpacity(0.08),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                    color: isActive
-                                        ? _accentColor
-                                        : Colors.white12,
+                        children:
+                            _fontFamilies.map((f) {
+                              final isActive = _subtitleFontFamily == f;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: GestureDetector(
+                                  onTap: () {
+                                    setModalState(() {});
+                                    setState(() => _subtitleFontFamily = f);
+                                    _saveSubtitleSettings();
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          isActive
+                                              ? _accentColor.withOpacity(0.2)
+                                              : Colors.white.withOpacity(0.08),
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(
+                                        color:
+                                            isActive
+                                                ? _accentColor
+                                                : Colors.white12,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      f,
+                                      style: GoogleFonts.outfit(
+                                        color:
+                                            isActive
+                                                ? _accentColor
+                                                : Colors.white70,
+                                        fontSize: 13,
+                                        fontWeight:
+                                            isActive
+                                                ? FontWeight.w700
+                                                : FontWeight.w500,
+                                      ),
+                                    ),
                                   ),
                                 ),
-                                child: Text(
-                                  f,
-                                  style: GoogleFonts.outfit(
-                                    color: isActive
-                                        ? _accentColor
-                                        : Colors.white70,
-                                    fontSize: 13,
-                                    fontWeight: isActive
-                                        ? FontWeight.w700
-                                        : FontWeight.w500,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          );
-                        }).toList(),
+                              );
+                            }).toList(),
                       ),
                     ),
 
-                      const SizedBox(height: 20),
+                    const SizedBox(height: 20),
                     // Reset button
                     TextButton.icon(
                       onPressed: () {
@@ -3049,12 +3290,20 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                           _subtitleBgColor = const Color(0x99000000);
                           _subtitleFontFamily = 'Default';
                         });
+                        _saveSubtitleSettings();
                       },
-                      icon: const Icon(Icons.restore_rounded,
-                          color: Colors.white54, size: 18),
-                      label: Text('Reset to Default',
-                          style: GoogleFonts.outfit(
-                              color: Colors.white54, fontSize: 13)),
+                      icon: const Icon(
+                        Icons.restore_rounded,
+                        color: Colors.white54,
+                        size: 18,
+                      ),
+                      label: Text(
+                        'Reset to Default',
+                        style: GoogleFonts.outfit(
+                          color: Colors.white54,
+                          fontSize: 13,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 16),
                   ],
@@ -3084,9 +3333,13 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: filled ? _accentColor : Colors.black.withOpacity(0.35),
-          border: filled
-              ? null
-              : Border.all(color: Colors.white.withOpacity(0.2), width: 1.5),
+          border:
+              filled
+                  ? null
+                  : Border.all(
+                    color: Colors.white.withOpacity(0.2),
+                    width: 1.5,
+                  ),
         ),
         child: Icon(
           icon,
@@ -3107,14 +3360,16 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
       child: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: active
-              ? _accentColor.withOpacity(0.15)
-              : Colors.black.withOpacity(0.35),
+          color:
+              active
+                  ? _accentColor.withOpacity(0.15)
+                  : Colors.black.withOpacity(0.35),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: active
-                ? _accentColor.withOpacity(0.4)
-                : Colors.white.withOpacity(0.1),
+            color:
+                active
+                    ? _accentColor.withOpacity(0.4)
+                    : Colors.white.withOpacity(0.1),
           ),
         ),
         child: Icon(

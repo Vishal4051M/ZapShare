@@ -639,7 +639,28 @@ class DeviceDiscoveryService {
 
   // WiFi Direct methods removed - using Bluetooth + Hotspot instead
 
+  bool _isPaused = false;
+
+  void pauseDiscovery() {
+    if (_isPaused) return;
+    _isPaused = true;
+    _broadcastTimer?.cancel();
+    print(
+      '⏸️ Discovery broadcasts PAUSED (saving resources for video playback)',
+    );
+  }
+
+  void resumeDiscovery() {
+    if (!_isPaused) return;
+    _isPaused = false;
+    print('▶️ Discovery broadcasts RESUMED');
+    if (_isRunning) {
+      _startBroadcasting();
+    }
+  }
+
   void _startBroadcasting() {
+    if (_isPaused) return;
     _broadcastTimer?.cancel();
     _broadcastTimer = Timer.periodic(
       Duration(seconds: BROADCAST_INTERVAL_SECONDS),
@@ -700,7 +721,7 @@ class DeviceDiscoveryService {
           final tempSocket = await RawDatagramSocket.bind(
             InternetAddress.anyIPv4,
             0, // Port 0 = let OS choose a free port
-            reusePort: !Platform.isWindows, // Windows doesn't support reusePort
+            reusePort: false, // Ephemeral sending port doesn't need reusePort
           );
 
           // Join multicast on this interface (required for sending)
@@ -878,16 +899,8 @@ class DeviceDiscoveryService {
       final senderDeviceId = data['deviceId'] as String?;
       final messageType = data['type'] as String?;
 
-      print(
-        '📨 Received UDP message from ${datagram.address.address}:${datagram.port}',
-      );
-      print('   Type: $messageType');
-      print('   Sender Device ID: $senderDeviceId');
-      print('   My Device ID: $_myDeviceId');
-
       // Ignore our own broadcasts
       if (senderDeviceId == _myDeviceId) {
-        print('   ⏭️  Ignoring own message');
         return;
       }
 
@@ -901,11 +914,9 @@ class DeviceDiscoveryService {
           _handleConnectionRequest(data, datagram.address.address);
           break;
         case 'ZAPSHARE_CONNECTION_RESPONSE':
-          print('   🎯 Handling connection response...');
           _handleConnectionResponse(data, datagram.address.address);
           break;
         case 'ZAPSHARE_CAST_URL':
-          print('   🎬 Handling cast URL...');
           _handleCastUrl(data, datagram.address.address);
           break;
         case 'ZAPSHARE_CAST_CONTROL':
@@ -918,21 +929,16 @@ class DeviceDiscoveryService {
           _handleCastAck(data, datagram.address.address);
           break;
         case 'ZAPSHARE_SCREEN_MIRROR':
-          print(
-            '   📺 Handling screen mirror request from ${datagram.address.address}...',
-          );
-          print('   📺 Raw data keys: ${data.keys.toList()}');
           _handleScreenMirror(data, datagram.address.address);
           break;
         case 'ZAPSHARE_SCREEN_MIRROR_CONTROL':
           _handleScreenMirrorControl(data, datagram.address.address);
           break;
         default:
-          print('   ⚠️  Unknown message type: $messageType');
+        // Unknown message type
       }
     } catch (e) {
-      print('❌ Error handling discovery message: $e');
-      print('   Stack trace: ${StackTrace.current}');
+      // print('❌ Error handling discovery message: $e');
     }
   }
 
@@ -944,14 +950,8 @@ class DeviceDiscoveryService {
     final avatarUrl = data['avatarUrl'] as String?;
     final userName = data['userName'] as String?;
 
-    // Debug: Log what we received
-    print(
-      '📥 Received discovery from $deviceName: avatar=$avatarUrl, userName=$userName',
-    );
-
     // Ignore own device
     if (deviceId == _myDeviceId) {
-      print('🚫 Ignoring own device broadcast: $deviceId');
       return;
     }
 

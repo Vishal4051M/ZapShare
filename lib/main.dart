@@ -74,7 +74,10 @@ Future<void> requestPermissions() async {
 
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+  if (Platform.isWindows ||
+      Platform.isLinux ||
+      Platform.isMacOS ||
+      Platform.isAndroid) {
     MediaKit.ensureInitialized();
   }
   try {

@@ -5,9 +5,11 @@ import 'package:flutter/services.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zap_share/services/device_discovery_service.dart';
 import 'platform_video_player_factory.dart';
 import 'video_player_interface.dart';
+import 'native_platform_mpv_player.dart';
 
 /// Keyboard shortcut map for the video player (VLC-style)
 /// Space/K: Play/Pause | Left/Right: Seek ±5s | Shift+Left/Right: Seek ±30s
@@ -48,6 +50,33 @@ class VideoPlayerScreen extends StatefulWidget {
 class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     with SingleTickerProviderStateMixin {
   late final PlatformVideoPlayer _player;
+
+  // Native orientation control (Android only)
+  static const _safChannel = MethodChannel('zapshare.saf');
+
+  /// Set screen orientation via native Android API (FULL_SENSOR for true auto-rotate)
+  Future<void> _setOrientation(String mode) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _safChannel.invokeMethod('setScreenOrientation', {'mode': mode});
+    } catch (e) {
+      debugPrint('Failed to set orientation: $e');
+      // Fallback to Flutter API
+      if (mode == 'auto') {
+        SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+      } else if (mode == 'landscape') {
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]);
+      } else if (mode == 'portrait') {
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+        ]);
+      }
+    }
+  }
 
   // UI state
   bool _controlsVisible = true;
@@ -91,6 +120,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   Color _subtitleColor = Colors.white;
   Color _subtitleBgColor = const Color(0x99000000);
   String _subtitleFontFamily = 'Default';
+  double _subtitleBottomOffset = 12.0; // Customizable vertical position
 
   // Cast session (remote control)
   StreamSubscription<CastControl>? _castControlSub;
@@ -120,6 +150,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   // Position update throttle (reduces rebuilds → less frame jank)
   DateTime _lastPositionUpdate = DateTime.now();
+  DateTime _lastSeekTime = DateTime.now();
 
   static const _seekDuration = Duration(seconds: 10);
   static const _seekDurationSmall = Duration(seconds: 5);
@@ -151,9 +182,60 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     'Serif',
   ];
 
+  // Aspect Ratio
+  int _currentAspectRatioIndex = 0;
+  // Expanded definition to support both MPV properties and Flutter widgets
+  static const _aspectRatios = [
+    {'name': 'Default', 'value': '-1', 'fit': BoxFit.contain, 'ratio': null},
+    {'name': '16:9', 'value': '16:9', 'fit': BoxFit.contain, 'ratio': 1.7777},
+    {'name': '4:3', 'value': '4:3', 'fit': BoxFit.contain, 'ratio': 1.3333},
+    {'name': 'Fill', 'value': 'fill', 'fit': BoxFit.cover, 'ratio': null},
+    {'name': 'Fit', 'value': 'fit', 'fit': BoxFit.contain, 'ratio': null},
+    {'name': 'Stretch', 'value': 'stretch', 'fit': BoxFit.fill, 'ratio': null},
+  ];
+
+  // Helper for subtitle widget style
+  TextStyle get _currentSubtitleStyle {
+    final shadows = [
+      const Shadow(offset: Offset(0, 1), blurRadius: 2, color: Colors.black),
+      const Shadow(offset: Offset(0, 0), blurRadius: 4, color: Colors.black),
+    ];
+
+    if (_subtitleFontFamily == 'Monospace') {
+      return GoogleFonts.robotoMono(
+        fontSize: _subtitleFontSize,
+        color: _subtitleColor,
+        shadows: shadows,
+      );
+    }
+    if (_subtitleFontFamily == 'Serif') {
+      return GoogleFonts.merriweather(
+        fontSize: _subtitleFontSize,
+        color: _subtitleColor,
+        shadows: shadows,
+      );
+    }
+    if (_subtitleFontFamily == 'Outfit') {
+      return GoogleFonts.outfit(
+        fontSize: _subtitleFontSize,
+        color: _subtitleColor,
+        shadows: shadows,
+      );
+    }
+
+    // Default / Roboto
+    return GoogleFonts.roboto(
+      fontSize: _subtitleFontSize,
+      color: _subtitleColor,
+      shadows: shadows,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
+    _loadSubtitleSettings();
+    _initNotification();
 
     // Create platform-specific player
     // Windows: MPV with native Win32 child window + Flutter overlay UI
@@ -164,6 +246,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _player.playingStream.listen((playing) {
       if (!mounted) return;
       _isPlaying = playing;
+      _updateNotification();
       // Only rebuild if controls are visible (play/pause icon needs update)
       if (_controlsVisible) setState(() {});
     });
@@ -264,18 +347,25 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       _initCastSession();
     }
 
-    // Force landscape for better video experience on Android
+    // Enable auto-rotate on Android via native FULL_SENSOR
     if (Platform.isAndroid) {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-        DeviceOrientation.portraitUp,
-      ]);
+      _setOrientation('auto');
     }
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-
     // Initialize screen brightness for VLC-like swipe gesture
     _initBrightness();
+
+    // Keep screen on for Android
+    if (Platform.isAndroid) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      // Note: VideoPlayer plugin usually handles KEEP_SCREEN_ON, but we force it via window flag if needed?
+      // Flutter doesn't expose FLAG_KEEP_SCREEN_ON directly without a plugin like wakelock_plus.
+      // However, we can use the 'flutter_foreground_task' which is already in the project,
+      // or rely on video_player.
+      // Given the user issue, we will rely on optimize buffering first.
+    }
+
+    // Pause device discovery during video playback to save resources & CPU
+    DeviceDiscoveryService().pauseDiscovery();
   }
 
   // ─── Cast session (remote control) ─────────────────────────
@@ -387,6 +477,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   @override
   void dispose() {
+    _saveSubtitleSettings();
     _hideTimer?.cancel();
     _doubleTapResetTimer?.cancel();
     _castControlSub?.cancel();
@@ -403,11 +494,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
     // Restore orientation and system UI
     if (Platform.isAndroid) {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
+      // Restore full sensor rotation
+      _setOrientation('auto');
     }
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
@@ -416,12 +504,17 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       windowManager.setFullScreen(false);
     }
 
+    // Resume device discovery when player is closed
+    DeviceDiscoveryService().resumeDiscovery();
+
     super.dispose();
   }
 
   // ─── Controls visibility ─────────────────────────────────
 
   void _toggleControls() {
+    // Ensure keyboard shortcuts work after any interaction
+    _keyboardFocusNode.requestFocus();
     if (_locked) {
       // When locked, tapping toggles the unlock button visibility
       setState(() => _controlsVisible = !_controlsVisible);
@@ -586,6 +679,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       } else {
         Navigator.of(context).pop();
       }
+      return KeyEventResult.handled;
+    }
+
+    // C: Toggle Aspect Ratio
+    if (key == LogicalKeyboardKey.keyC) {
+      _toggleAspectRatio();
       return KeyEventResult.handled;
     }
 
@@ -758,17 +857,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }
 
   void _toggleSubtitles() {
-    if (_subtitlesEnabled) {
-      _player.setSubtitleTrack(SubtitleTrackInfo.none);
-    } else {
-      if (_subtitleTracks.isNotEmpty) {
-        final first = _subtitleTracks.firstWhere(
-          (t) => t.id != 'no' && t.id != 'auto',
-          orElse: () => _subtitleTracks.first,
-        );
-        _player.setSubtitleTrack(first);
-      }
-    }
+    _showSubtitlePicker();
   }
 
   // ─── Cycle subtitle / audio tracks (V / B keys) ─────────
@@ -842,30 +931,76 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _showActionIndicator(Icons.audiotrack_rounded, 'Audio', name);
   }
 
-  // ─── Fullscreen ──────────────────────────────────────────
+  // ─── Aspect Ratio ────────────────────────────────────────
 
-  void _toggleFullscreen() {
-    if (Platform.isWindows) {
-      setState(() => _isFullscreen = !_isFullscreen);
-      windowManager.setFullScreen(_isFullscreen);
-    } else if (Platform.isAndroid) {
-      if (_isFullscreen) {
-        // Exit fullscreen - allow portrait
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.portraitUp,
-          DeviceOrientation.landscapeLeft,
-          DeviceOrientation.landscapeRight,
-        ]);
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  void _toggleAspectRatio() {
+    setState(() {
+      _currentAspectRatioIndex =
+          (_currentAspectRatioIndex + 1) % _aspectRatios.length;
+    });
+
+    final current = _aspectRatios[_currentAspectRatioIndex];
+    final val = current['value']! as String;
+    final name = current['name']! as String;
+
+    // Platform abstraction: we assume the underlying player can handle these or we use specific logic.
+    // Since this is VideoPlayerScreen.dart (Windows/MPV primary), we use MPV properties via setProperty if possible,
+    // or we assume the factory created a player that supports this.
+    // The current PlatformVideoPlayer interface doesn't expose generic property setting.
+    // However, we know this file is primarily for Windows MPV (since Android has its own screen).
+    // Let's assume we can cast or extend the interface later.
+    // For now, checks if it is NativePlatformMpvPlayer (which we know it is on Windows).
+
+    if (_player is NativePlatformMpvPlayer) {
+      final mpv = _player;
+      if (val == 'fill') {
+        // Pan & Scan to fill
+        mpv.setProperty('video-aspect-override', '-1');
+        mpv.setProperty('panscan', '1.0');
+      } else if (val == 'fit') {
+        // Fit (contain)
+        mpv.setProperty('video-aspect-override', '-1');
+        mpv.setProperty('panscan', '0.0');
+      } else if (val == 'stretch') {
+        // Stretch (BoxFit.fill) - MPV doesn't hold a simple "stretch" property easily without window size
+        // Fallback to "fill" behavior or specific aspect ratio if we knew it.
+        // For now, treat as fill for MPV.
+        mpv.setProperty('video-aspect-override', '-1');
+        mpv.setProperty('panscan', '1.0');
       } else {
-        // Enter fullscreen - force landscape
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.landscapeLeft,
-          DeviceOrientation.landscapeRight,
-        ]);
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+        // Aspect override
+        mpv.setProperty('video-aspect-override', val);
+        mpv.setProperty('panscan', '0.0');
       }
-      setState(() => _isFullscreen = !_isFullscreen);
+    }
+
+    _showActionIndicator(Icons.aspect_ratio_rounded, 'Aspect Ratio', name);
+  }
+
+  void _toggleFullscreen() async {
+    if (Platform.isWindows) {
+      setState(() {
+        _isFullscreen = !_isFullscreen;
+        // Force controls visible so the overlay rebuilds at the new window size.
+        // Without this, exiting fullscreen with controls hidden leaves the
+        // overlay sized for fullscreen when it next appears.
+        _controlsVisible = true;
+      });
+      await windowManager.setFullScreen(_isFullscreen);
+
+      // The window_manager plugin toggles fullscreen asynchronously:
+      // it changes window style, calls ShowWindow, and SetWindowPos.
+      // Flutter may not immediately receive the final correct metrics.
+      // Multiple delayed re-syncs ensure the layout catches up.
+      for (final delay in [150, 350, 600]) {
+        Future.delayed(Duration(milliseconds: delay), () {
+          if (mounted && _player is NativePlatformMpvPlayer) {
+            (_player as NativePlatformMpvPlayer).notifyResize();
+          }
+          // Force Flutter to rebuild layout with fresh MediaQuery
+          if (mounted) setState(() {});
+        });
+      }
     }
     _startHideTimer();
   }
@@ -902,16 +1037,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     if (source.contains('/')) return source.split('/').last;
     if (source.contains('\\')) return source.split('\\').last;
     return source;
-  }
-
-  TextStyle get _currentSubtitleStyle {
-    return TextStyle(
-      fontSize: _subtitleFontSize,
-      color: _subtitleColor,
-      backgroundColor: _subtitleBgColor,
-      fontWeight: FontWeight.w600,
-      fontFamily: _subtitleFontFamily == 'Default' ? null : _subtitleFontFamily,
-    );
   }
 
   // ─── VLC-like swipe gestures (volume / brightness) ─────
@@ -1167,11 +1292,75 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
             // - Android: ExoPlayer surface view (hardware-accelerated)
             Center(
               child: RepaintBoundary(
-                child: _player.buildVideoWidget(
-                  backgroundColor: Colors.transparent,
+                child: Builder(
+                  builder: (context) {
+                    final current = _aspectRatios[_currentAspectRatioIndex];
+                    final ratio = current['ratio'] as double?;
+                    final fit = current['fit'] as BoxFit?;
+
+                    Widget playerWidget = _player.buildVideoWidget(
+                      backgroundColor: Colors.transparent,
+                      fit: fit,
+                    );
+
+                    // Apply aspect ratio wrapper if defined
+                    if (ratio != null) {
+                      return AspectRatio(
+                        aspectRatio: ratio,
+                        child: playerWidget,
+                      );
+                    }
+
+                    // Otherwise rely on inner fit (passed to player)
+                    return playerWidget;
+                  },
                 ),
               ),
             ),
+
+            // ─── Subtitle Overlay ───
+            // On Windows, MPV handles OSD rendering (prevents double subtitles).
+            // On Android, we render manually via Flutter overlay.
+            // Subtitles shift up when controls/seek bar are visible to avoid overlap.
+            if (_subtitlesEnabled && !Platform.isWindows)
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeInOut,
+                bottom:
+                    _controlsVisible
+                        ? _subtitleBottomOffset + 88
+                        : _subtitleBottomOffset,
+                left: 24,
+                right: 24,
+                child: StreamBuilder<String>(
+                  stream: _player.captionStream,
+                  builder: (context, snapshot) {
+                    final text = snapshot.data;
+                    // If subtitles are enabled but no text, show nothing.
+                    // If text is present, show it.
+                    if (text == null || text.trim().isEmpty) {
+                      return const SizedBox();
+                    }
+                    return Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _subtitleBgColor,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          text,
+                          textAlign: TextAlign.center,
+                          style: _currentSubtitleStyle,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
 
             // ── Initializing overlay ──
             if (_isInitializing)
@@ -1262,37 +1451,28 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                 ),
               ),
 
-            // ── Buffering indicator ──
-            if (_isBuffering)
-              Center(
-                child: Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: const CircularProgressIndicator(
-                    color: _accentColor,
-                    strokeWidth: 3,
-                  ),
-                ),
-              ),
-
             // ── VLC-like swipe volume overlay (left side) ──
             if (_showSwipeVolumeOverlay) _buildSwipeVolumeOverlay(),
 
             // ── VLC-like swipe brightness overlay (right side) ──
             if (_showSwipeBrightnessOverlay) _buildSwipeBrightnessOverlay(),
 
-            // ── Seek preview tooltip ──
-            if (_isSeeking) _buildSeekPreview(),
-
             // ── Controls overlay (only when not locked) ──
             if (_controlsVisible && !_locked) ...[
               _buildTopBar(),
-              _buildCenterControls(),
+              // Show center controls only when NOT buffering
+              if (!_isBuffering) _buildCenterControls(),
               _buildBottomBar(),
             ],
+
+            // ── Buffering indicator (above controls so it's visible) ──
+            if (_isBuffering)
+              const Center(
+                child: CircularProgressIndicator(
+                  color: _accentColor,
+                  strokeWidth: 3,
+                ),
+              ),
 
             // ── Lock/Unlock button ──
             // Always show when locked (so user can unlock), and when controls visible
@@ -1525,104 +1705,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   // ─── Seek preview ────────────────────────────────────────
 
-  Widget _buildSeekPreview() {
-    return Positioned(
-      top: MediaQuery.of(context).size.height * 0.2,
-      left: 0,
-      right: 0,
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          decoration: BoxDecoration(
-            color: const Color(0xE6141416),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: _accentColor.withOpacity(0.3)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.6),
-                blurRadius: 20,
-                spreadRadius: 4,
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Seek position indicator (icon-based — no duplicate Video widget
-              // which would cause frame contention with the main player surface)
-              Container(
-                width: 180,
-                height: 100,
-                decoration: BoxDecoration(
-                  color: Colors.black,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _accentColor.withOpacity(0.4)),
-                ),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    // Seek direction icon
-                    Icon(
-                      _seekPreviewPosition > _position
-                          ? Icons.fast_forward_rounded
-                          : Icons.fast_rewind_rounded,
-                      color: _accentColor,
-                      size: 44,
-                    ),
-                    // Progress bar inside preview
-                    Positioned(
-                      bottom: 0,
-                      left: 0,
-                      right: 0,
-                      child: ClipRRect(
-                        borderRadius: const BorderRadius.only(
-                          bottomLeft: Radius.circular(7),
-                          bottomRight: Radius.circular(7),
-                        ),
-                        child: LinearProgressIndicator(
-                          value:
-                              _duration.inMilliseconds > 0
-                                  ? _seekPreviewPosition.inMilliseconds /
-                                      _duration.inMilliseconds
-                                  : 0,
-                          backgroundColor: Colors.black54,
-                          valueColor: const AlwaysStoppedAnimation<Color>(
-                            _accentColor,
-                          ),
-                          minHeight: 3,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-              // Time display
-              Text(
-                _formatDuration(_seekPreviewPosition),
-                style: GoogleFonts.outfit(
-                  color: _accentColor,
-                  fontSize: 24,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              if (_duration.inMilliseconds > 0) ...[
-                const SizedBox(height: 2),
-                Text(
-                  _seekDifference(),
-                  style: GoogleFonts.outfit(
-                    color: Colors.white60,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  // ─── Seek preview (Removed) ────────────────────────────
+  // Widget _buildSeekPreview() { ... }
 
   String _seekDifference() {
     final diff = _seekPreviewPosition - _position;
@@ -1631,7 +1715,82 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     return '$sign${_formatDuration(absDiff)}';
   }
 
+  Future<void> _loadSubtitleSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _subtitleFontSize = prefs.getDouble('sub_font_size') ?? 40.0;
+      _subtitleColor = Color(prefs.getInt('sub_color') ?? Colors.white.value);
+      _subtitleBgColor = Color(
+        prefs.getInt('sub_bg_color') ?? const Color(0x99000000).value,
+      );
+      _subtitleFontFamily = prefs.getString('sub_font_family') ?? 'Default';
+      _subtitlesEnabled = prefs.getBool('sub_enabled') ?? false;
+      _subtitleBottomOffset = prefs.getDouble('sub_bottom_offset') ?? 12.0;
+    });
+  }
+
+  Future<void> _saveSubtitleSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('sub_font_size', _subtitleFontSize);
+    await prefs.setInt('sub_color', _subtitleColor.value);
+    await prefs.setInt('sub_bg_color', _subtitleBgColor.value);
+    await prefs.setString('sub_font_family', _subtitleFontFamily);
+    await prefs.setBool('sub_enabled', _subtitlesEnabled);
+    await prefs.setDouble('sub_bottom_offset', _subtitleBottomOffset);
+    if (_activeSubtitleTrack != null) {
+      await prefs.setString('last_sub_track_id', _activeSubtitleTrack!.id);
+    }
+  }
+
+  Future<void> _initNotification() async {
+    // Basic setup handled in main.dart
+  }
+
+  Future<void> _updateNotification() async {
+    if (!Platform.isAndroid) return;
+    // Simple placeholder for notification logic
+    // Implementation requires coordination with main.dart's foreground task handler
+  }
+
+  // 0 = Auto, 1 = Landscape, 2 = Portrait
+  int _rotationMode = 0;
+
+  void _toggleRotation() {
+    setState(() {
+      _rotationMode = (_rotationMode + 1) % 3;
+    });
+
+    if (_rotationMode == 1) {
+      // Force Landscape via native API
+      _setOrientation('landscape');
+      _showActionIndicator(
+        Icons.screen_lock_landscape_rounded,
+        'Landscape',
+        'Locked',
+      );
+    } else if (_rotationMode == 2) {
+      // Force Portrait via native API
+      _setOrientation('portrait');
+      _showActionIndicator(
+        Icons.screen_lock_portrait_rounded,
+        'Portrait',
+        'Locked',
+      );
+    } else {
+      // Auto - FULL_SENSOR for true sensor-based auto-rotate
+      _setOrientation('auto');
+      _showActionIndicator(
+        Icons.screen_rotation_rounded,
+        'Auto-Rotate',
+        'Unlocked',
+      );
+    }
+  }
+
   void _applySubtitleStyle() {
+    _saveSubtitleSettings(); // Save whenever style is applied/changed
+
     if (!Platform.isWindows) return;
 
     String toHex(Color c) =>
@@ -1706,16 +1865,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              // Audio track picker (Show if any tracks exist)
-              if (_audioTracks.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: _buildPillButton(
-                    icon: Icons.audiotrack_rounded,
-                    onTap: _showAudioTrackPicker,
-                  ),
-                ),
-              // Subtitles toggle
+              // Audio track picker (Bottom bar only to avoid duplicates)
+              // if (_audioTracks.isNotEmpty) ...
+
+              // Subtitle toggle (Consolidated)
               _buildPillButton(
                 icon:
                     _subtitlesEnabled
@@ -1725,30 +1878,47 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                 active: _subtitlesEnabled,
               ),
               const SizedBox(width: 8),
-              // Subtitle track picker (Show if any tracks exist)
-              if (_subtitleTracks.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: _buildPillButton(
-                    icon: Icons.closed_caption_rounded,
-                    onTap: _showSubtitlePicker,
-                  ),
-                ),
               // Subtitle style customization
               _buildPillButton(
                 icon: Icons.text_format_rounded,
                 onTap: _showSubtitleStylePicker,
               ),
               const SizedBox(width: 8),
-              // Fullscreen toggle
+              // Rotation toggle (Android only)
+              // Rotation toggle
               _buildPillButton(
                 icon:
-                    _isFullscreen
-                        ? Icons.fullscreen_exit_rounded
-                        : Icons.fullscreen_rounded,
-                onTap: _toggleFullscreen,
-                active: _isFullscreen,
+                    _rotationMode == 1
+                        ? Icons.screen_lock_landscape_rounded
+                        : _rotationMode == 2
+                        ? Icons.screen_lock_portrait_rounded
+                        : Icons.screen_rotation_rounded,
+                onTap: _toggleRotation,
+                active: _rotationMode != 0,
               ),
+              const SizedBox(width: 8),
+
+              // Aspect Ratio (All platforms)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: _buildPillButton(
+                  icon: Icons.aspect_ratio_rounded,
+                  onTap: _toggleAspectRatio,
+                ),
+              ),
+
+              // Fullscreen toggle (Windows only - Android is already fullscreen)
+              if (!Platform.isAndroid) ...[
+                const SizedBox(width: 8),
+                _buildPillButton(
+                  icon:
+                      _isFullscreen
+                          ? Icons.fullscreen_exit_rounded
+                          : Icons.fullscreen_rounded,
+                  onTap: _toggleFullscreen,
+                  active: _isFullscreen,
+                ),
+              ],
             ],
           ),
         ),
@@ -1981,6 +2151,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
               _seekPreviewPosition = Duration(milliseconds: v.toInt());
             });
             _startHideTimer();
+
+            // Live seek (Scrubbing) - Throttled
+            final now = DateTime.now();
+            if (now.difference(_lastSeekTime).inMilliseconds > 150) {
+              _lastSeekTime = now;
+              _player.seek(_seekPreviewPosition);
+            }
           },
           onChangeEnd: (v) {
             final seekTarget = Duration(milliseconds: v.toInt());
@@ -2246,6 +2423,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                           : null,
                   onTap: () {
                     _player.setSubtitleTrack(SubtitleTrackInfo.none);
+                    setState(() => _subtitlesEnabled = false);
                     Navigator.pop(ctx);
                   },
                 ),
@@ -2284,6 +2462,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                             : null,
                     onTap: () {
                       _player.setSubtitleTrack(track);
+                      setState(() {
+                        _activeSubtitleTrack = track;
+                        _subtitlesEnabled = true;
+                      });
+                      _saveSubtitleSettings();
                       Navigator.pop(ctx);
                     },
                   );
@@ -2420,6 +2603,48 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                         onChanged: (v) {
                           setModalState(() {});
                           setState(() => _subtitleFontSize = v);
+                          _applySubtitleStyle();
+                        },
+                      ),
+                    ),
+
+                    // Subtitle Position
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Text(
+                          'Position',
+                          style: GoogleFonts.outfit(
+                            color: Colors.white70,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          '${_subtitleBottomOffset.toInt()}',
+                          style: GoogleFonts.outfit(
+                            color: _accentColor,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                    SliderTheme(
+                      data: SliderThemeData(
+                        activeTrackColor: _accentColor,
+                        inactiveTrackColor: Colors.white.withOpacity(0.15),
+                        thumbColor: _accentColor,
+                        overlayColor: _accentColor.withOpacity(0.2),
+                      ),
+                      child: Slider(
+                        value: _subtitleBottomOffset,
+                        min: 0,
+                        max: 100,
+                        divisions: 20,
+                        onChanged: (v) {
+                          setModalState(() {});
+                          setState(() => _subtitleBottomOffset = v);
                           _applySubtitleStyle();
                         },
                       ),
@@ -2636,6 +2861,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                           _subtitleColor = Colors.white;
                           _subtitleBgColor = const Color(0x99000000);
                           _subtitleFontFamily = 'Default';
+                          _subtitleBottomOffset = 12.0;
                         });
                         _applySubtitleStyle();
                       },
