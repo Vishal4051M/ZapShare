@@ -13,6 +13,10 @@ import 'package:zap_share/widgets/connection_request_dialog.dart';
 import 'Screens/windows/WindowsFileShareScreen.dart';
 import 'Screens/windows/WindowsReceiveScreen.dart';
 import 'Screens/android/AndroidReceiveScreen.dart';
+import 'Screens/ios/IOSHomeScreen.dart';
+import 'Screens/ios/IOSReceiveScreen.dart';
+import 'Screens/macos/MacOSHomeScreen.dart';
+import 'Screens/macos/MacOSReceiveScreen.dart';
 import 'Screens/shared/TransferHistoryScreen.dart';
 import 'dart:async';
 import 'package:flutter/services.dart';
@@ -117,9 +121,10 @@ class _DataRushAppState extends State<DataRushApp> {
       if (existing != null && existing.trim().isNotEmpty) return;
 
       final nameController = TextEditingController();
-      final focusNode = FocusNode();
+      // Remove auto-focus initially to prevent keyboard from jarringly popping up immediately
+      final focusNode = FocusNode(); 
 
-      // Wait briefly for navigator context to be available (should be after first frame)
+      // Wait briefly to ensure context is ready
       BuildContext? dialogContext = navigatorKey.currentContext;
       int attempts = 0;
       while (dialogContext == null && attempts < 10) {
@@ -129,71 +134,162 @@ class _DataRushAppState extends State<DataRushApp> {
       }
       if (dialogContext == null) return;
 
-      await showDialog<void>(
+      // Define colors locally for this dialog since they might not be globally exported yet
+      const kZapPrimary = Color(0xFFFFD600);
+      const kZapSurface = Color(0xFF1C1C1E);
+      const kZapBackground = Color(0xFF000000);
+
+      await showGeneralDialog(
         context: dialogContext,
         barrierDismissible: false,
-        builder: (context) {
-          return AlertDialog(
-            backgroundColor: Colors.grey[900],
-            title: const Text(
-              'Set device name',
-              style: TextStyle(color: Colors.white),
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Please enter a name for this device. This will be shown to other devices when sharing.',
-                  style: TextStyle(color: Colors.white70, fontSize: 13),
-                ),
-                const SizedBox(height: 12),
-                Theme(
-                  data: Theme.of(context).copyWith(
-                    textSelectionTheme: TextSelectionThemeData(
-                      cursorColor: Colors.yellow[300],
-                      selectionHandleColor: Colors.yellow[300],
-                      selectionColor: Colors.yellow[100],
-                    ),
-                  ),
-                  child: TextField(
-                    controller: nameController,
-                    focusNode: focusNode,
-                    autofocus: true,
-                    cursorColor: Colors.yellow[300],
-                    textCapitalization: TextCapitalization.words,
-                    inputFormatters: [
-                      // Allow letters, numbers, spaces and basic punctuation
-                      FilteringTextInputFormatter.allow(RegExp(r"[\w\-\.\s']")),
-                      LengthLimitingTextInputFormatter(30),
+        barrierColor: kZapBackground,
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return Scaffold(
+            backgroundColor: kZapBackground,
+            body: SafeArea(
+              child: Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // Logo / Icon
+                      Container(
+                        width: 100,
+                        height: 100,
+                        decoration: BoxDecoration(
+                          color: kZapPrimary.withOpacity(0.1),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: kZapPrimary.withOpacity(0.2),
+                              blurRadius: 40,
+                              spreadRadius: 10,
+                            )
+                          ],
+                          border: Border.all(color: kZapPrimary.withOpacity(0.5)),
+                        ),
+                        child: Icon(
+                          Platform.isIOS ? Icons.apple_rounded : Icons.android_rounded,
+                          size: 48,
+                          color: kZapPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 40),
+
+                      // Welcome Text
+                      const Text(
+                        "Welcome to ZapShare",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        "Let's get you set up. choose a name so others can recognize you.",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.6),
+                          fontSize: 16,
+                          height: 1.5,
+                        ),
+                      ),
+                      const SizedBox(height: 40),
+
+                      // Input Field
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "DEVICE NAME",
+                            style: TextStyle(
+                              color: kZapPrimary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 2,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: kZapSurface,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.white.withOpacity(0.1)),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.5),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 10),
+                                ),
+                              ],
+                            ),
+                            child: TextField(
+                              controller: nameController,
+                              focusNode: focusNode,
+                              cursorColor: kZapPrimary,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              textCapitalization: TextCapitalization.words,
+                              decoration: InputDecoration(
+                                hintText: Platform.isIOS ? "Vijageesh's iPhone" : "My Device",
+                                hintStyle: TextStyle(color: Colors.white.withOpacity(0.2)),
+                                border: InputBorder.none,
+                                contentPadding: const EdgeInsets.all(20),
+                                prefixIcon: Icon(Icons.edit_rounded, color: Colors.white.withOpacity(0.4)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 40),
+
+                      // Continue Button
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            final v = nameController.text.trim();
+                             if (v.isEmpty) {
+                                // Shake animation or error feedback could go here
+                                return;
+                             }
+                            await prefs.setString('device_name', v);
+                            Navigator.of(context).pop();
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: kZapPrimary,
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(vertical: 20),
+                            elevation: 0,
+                            shadowColor: kZapPrimary.withOpacity(0.5),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                          ),
+                          child: const Text(
+                            "Get Started",
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
                     ],
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: 'My phone',
-                      hintStyle: TextStyle(color: Colors.white24),
-                    ),
                   ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () async {
-                  final v = nameController.text.trim();
-                  if (v.isEmpty) return; // keep dialog open until valid
-                  await prefs.setString('device_name', v);
-                  Navigator.of(context).pop();
-                },
-                child: const Text(
-                  'Save',
-                  style: TextStyle(color: Colors.yellow),
                 ),
               ),
-            ],
+            ),
           );
         },
       );
-      // give focus/keyboard a moment
-      await Future.delayed(const Duration(milliseconds: 200));
     } catch (e) {
       print('Error ensuring device name: $e');
     }
@@ -248,20 +344,18 @@ class _DataRushAppState extends State<DataRushApp> {
       builder: (dialogContext) {
         return ConnectionRequestDialog(
           request: request,
-          onAccept: () async {
-            print('✅ [Global] User accepted connection request');
+          onAccept: (files, path) async {
+            // Global dialog acceptance logic (simplified for now)
             Navigator.of(dialogContext).pop();
-
-            // Send acceptance response
-            await _discoveryService.sendConnectionResponse(
-              request.ipAddress,
-              true,
-            );
+            final service = DeviceDiscoveryService(); 
+            // Note: In global context we might not have the logic to start download immediately 
+            // unless we refactor. For now, just send response.
+             await service.sendConnectionResponse(request.ipAddress, true);
 
             // Navigate to receive screen
+            final senderCode = _ipToCode(request.ipAddress);
+            
             if (Platform.isAndroid) {
-              // Navigate to AndroidReceiveScreen with the sender's code
-              final senderCode = _ipToCode(request.ipAddress);
               navigatorKey.currentState?.pushReplacement(
                 MaterialPageRoute(
                   builder:
@@ -269,6 +363,24 @@ class _DataRushAppState extends State<DataRushApp> {
                           AndroidReceiveScreen(autoConnectCode: senderCode),
                 ),
               );
+            } else if (Platform.isMacOS) {
+               navigatorKey.currentState?.push(
+                 MaterialPageRoute(builder: (_) => MacOSReceiveScreen(autoStartCode: senderCode))
+               );
+            } else if (Platform.isIOS) {
+               navigatorKey.currentState?.push(
+                 MaterialPageRoute(
+                   builder: (_) => IOSReceiveScreen(
+                     filterFiles: files,
+                     destinationPath: path,
+                   ),
+                 ),
+               );
+            } else if (Platform.isWindows) {
+                // WindowsReceiveScreen might generally use manual entry, but adding here if updated later
+                navigatorKey.currentState?.push(
+                 MaterialPageRoute(builder: (_) => const WindowsReceiveScreen())
+               );
             }
 
             print('✅ [Global] Redirecting to receive screen');
@@ -310,7 +422,7 @@ class _DataRushAppState extends State<DataRushApp> {
       navigatorKey: navigatorKey,
       theme: ThemeData(
         brightness: Brightness.dark,
-        primaryColor: const Color(0xFFFFD600),
+        primaryColor: const Color(0xFFFFD600), // Premium Yellow
         scaffoldBackgroundColor: Colors.black,
         appBarTheme: const AppBarTheme(
           backgroundColor: Colors.black,
@@ -324,26 +436,25 @@ class _DataRushAppState extends State<DataRushApp> {
           ),
         ),
         cardTheme: CardThemeData(
-          color: const Color(0xFF1A1A1A),
-          elevation: 8,
-          shadowColor: Colors.black.withOpacity(0.3),
+          color: const Color(0xFF1C1C1E), // kZapSurface
+          elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(24),
           ),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             backgroundColor: const Color(0xFFFFD600),
             foregroundColor: Colors.black,
-            elevation: 4,
+            elevation: 0,
             shadowColor: const Color(0xFFFFD600).withOpacity(0.3),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(16),
             ),
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
             textStyle: const TextStyle(
               fontSize: 16,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.bold,
               letterSpacing: 0.5,
             ),
           ),
@@ -351,13 +462,13 @@ class _DataRushAppState extends State<DataRushApp> {
         floatingActionButtonTheme: const FloatingActionButtonThemeData(
           backgroundColor: Color(0xFFFFD600),
           foregroundColor: Colors.black,
-          elevation: 8,
+          elevation: 4,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.all(Radius.circular(16)),
+            borderRadius: BorderRadius.all(Radius.circular(20)),
           ),
         ),
         bottomNavigationBarTheme: const BottomNavigationBarThemeData(
-          backgroundColor: Color(0xFF1A1A1A),
+          backgroundColor: Color(0xFF1C1C1E),
           selectedItemColor: Color(0xFFFFD600),
           unselectedItemColor: Colors.white70,
           type: BottomNavigationBarType.fixed,
@@ -426,12 +537,15 @@ class _DataRushAppState extends State<DataRushApp> {
           ),
         ),
       ),
-      home:
-          Platform.isAndroid
-              ? const AndroidHomeScreen()
-              : Platform.isWindows
+      home: Platform.isAndroid
+          ? const AndroidHomeScreen()
+          : Platform.isWindows
               ? const WindowsNavBar()
-              : AndroidHttpFileShareScreen(),
+              : Platform.isIOS
+                  ? const IOSHomeScreen()
+                  : Platform.isMacOS
+                      ? const IOSHomeScreen() // Temporarily showing iOS screen on macOS for testing
+                      : AndroidHttpFileShareScreen(),
       debugShowCheckedModeBanner: false,
     );
   }

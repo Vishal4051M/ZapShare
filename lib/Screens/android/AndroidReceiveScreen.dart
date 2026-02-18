@@ -12,6 +12,7 @@ import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'AndroidImagePreviewDialog.dart';
+import '../../services/device_discovery_service.dart';
 
 
 const Color kAndroidAccentYellow = Colors.yellow; // lighter yellow for Android
@@ -39,6 +40,7 @@ class DownloadTask {
   bool isSelected;
   bool isPaused;
   int bytesReceived;
+  final String? peerDeviceName; 
   
   DownloadTask({
     required this.url, 
@@ -50,6 +52,7 @@ class DownloadTask {
     this.isSelected = true,
     this.isPaused = false,
     this.bytesReceived = 0,
+    this.peerDeviceName,
   });
 }
 
@@ -98,6 +101,7 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
     super.initState();
     _loadRecentCodes();
     _initLocalNotifications();
+    DeviceDiscoveryService().initialize(); // Ensure device info is loaded
     _codeFocusNode.addListener(() {
       setState(() {});
     });
@@ -195,10 +199,8 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
     String? result = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Select Folder to Save');
     setState(() => _saveFolder = result);
     
-    if (result != null) {
-      // Folder selected successfully
+    // Folder selected successfully
     }
-  }
 
   Future<String> _getDefaultDownloadFolder() async {
     try {
@@ -314,7 +316,6 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
       final url = 'http://$_serverIp:8080/list';
       print('Fetching file list from: $url');
       
-      // Add timeout to the request - increased for release builds
       final resp = await http.get(Uri.parse(url)).timeout(
         Duration(seconds: 30),
         onTimeout: () {
@@ -327,6 +328,11 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
       
       if (resp.statusCode == 200) {
         final List files = jsonDecode(resp.body);
+        
+        // Extract sender name from response headers
+        final senderDeviceName = resp.headers['x-device-name'];
+        print('Sender Device Name: $senderDeviceName');
+        
         print('Parsed files: $files');
         _fileList = files.cast<Map<String, dynamic>>();
         _tasks = _fileList.map((f) => DownloadTask(
@@ -339,6 +345,7 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
           isSelected: true,
           isPaused: false,
           bytesReceived: 0,
+          peerDeviceName: senderDeviceName, // Store for history
         )).toList();
         print('Created ${_tasks.length} download tasks');
         setState(() { _loading = false; });
@@ -399,11 +406,14 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
     setState(() { task.status = 'Downloading'; });
     
     try {
-      // Create HTTP client with increased timeout for release builds
       final client = http.Client();
       final request = http.Request('GET', Uri.parse(task.url));
       request.headers['Connection'] = 'keep-alive';
       request.headers['Cache-Control'] = 'no-cache';
+      
+      // Send my device name to sender
+      final myDeviceName = DeviceDiscoveryService().myDeviceName ?? 'Unknown Device';
+      request.headers['X-Device-Name'] = myDeviceName;
       
       final response = await client.send(request).timeout(
         Duration(minutes: 10), // Increased timeout for large files
@@ -457,11 +467,6 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
         // Force flush sink periodically to ensure data is written
         if (received % (256 * 1024) == 0) { // Flush every 256KB
           await sink.flush();
-        }
-        
-        // Debug logging for release builds
-        if (received % (1024 * 1024) == 0) { // Log every MB
-          print('Download progress: ${task.fileName} - ${received}/${contentLength} bytes');
         }
         
         double progress = received / contentLength;
@@ -520,7 +525,7 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
           'fileSize': contentLength,
           'direction': 'Received',
           'peer': _serverIp ?? '',
-          'peerDeviceName': null, // Could be enhanced to lookup device name
+          'peerDeviceName': task.peerDeviceName, // Save captured device name
           'dateTime': DateTime.now().toIso8601String(),
           'fileLocation': savePath, // Save the actual file path
         };

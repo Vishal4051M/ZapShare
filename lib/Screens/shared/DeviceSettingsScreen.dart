@@ -2,6 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 
+// Modern Color Constants
+// Modern Color Constants
+const Color kZapPrimary = Color(0xFFFFD84D); // Logo Yellow Light
+const Color kZapPrimaryDark = Color(0xFFF5C400); // Logo Yellow Dark
+const Color kZapSurface = Color(0xFF1C1C1E); 
+const Color kZapBackgroundTop = Color(0xFF0E1116);
+const Color kZapBackgroundBottom = Color(0xFF07090D); 
+
 class DeviceSettingsScreen extends StatefulWidget {
   const DeviceSettingsScreen({super.key});
 
@@ -46,7 +54,6 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
   Future<void> _saveDeviceName() async {
     final newName = _deviceNameController.text.trim();
     if (newName.isEmpty) {
-      print('Device name cannot be empty');
       return;
     }
 
@@ -57,15 +64,19 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
       _currentDeviceName = newName;
     });
 
-    print('Device name updated successfully');
-
-    // Unfocus the text field and wait briefly so the keyboard is dismissed before navigating
     try {
       FocusScope.of(context).unfocus();
       await Future.delayed(const Duration(milliseconds: 120));
     } catch (_) {}
 
     Navigator.pop(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Device name updated"),
+        backgroundColor: kZapSurface,
+        behavior: SnackBarBehavior.floating,
+      )
+    );
   }
 
   Future<void> _toggleAutoDiscovery(bool value) async {
@@ -80,114 +91,112 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: Colors.transparent,
         elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
         title: const Text(
-          'Device Settings',
+          'Settings',
           style: TextStyle(
             color: Colors.white,
-            fontSize: 24,
-            fontWeight: FontWeight.w300,
-            letterSpacing: -0.5,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
           ),
         ),
+        centerTitle: true,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [kZapBackgroundTop, kZapBackgroundBottom],
+          ),
+        ),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 120, 24, 24), // Adjust padding for AppBar
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Device Name Section
-            Text(
-              'Device Identity',
+            const Text(
+              'DEVICE IDENTITY',
               style: TextStyle(
-                color: Colors.yellow[300],
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
+                color: Colors.grey,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
             
             Container(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                color: Colors.grey[900],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey[800]!, width: 1),
+                color: kZapSurface,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.white.withOpacity(0.05)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Device Name',
-                    style: TextStyle(
-                      color: Colors.grey[400],
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
                   Theme(
                     data: Theme.of(context).copyWith(
                       textSelectionTheme: TextSelectionThemeData(
-                        cursorColor: Colors.yellow[300],
-                        selectionHandleColor: Colors.yellow[300],
-                        selectionColor: Colors.yellow[100],
+                        cursorColor: kZapPrimary,
+                        selectionHandleColor: kZapPrimary,
+                        selectionColor: kZapPrimary.withOpacity(0.2),
                       ),
                     ),
                     child: TextField(
                       controller: _deviceNameController,
-                      cursorColor: Colors.yellow[300],
+                      cursorColor: kZapPrimary,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
                       ),
                       decoration: InputDecoration(
-                        hintText: 'Enter device name',
-                        hintStyle: TextStyle(color: Colors.grey[600]),
-                        filled: true,
-                        fillColor: Colors.grey[850],
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          borderSide: BorderSide.none,
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 14,
-                        ),
+                        labelText: 'Device Name',
+                        labelStyle: TextStyle(color: Colors.grey[500]),
+                        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey[800]!)),
+                        focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: kZapPrimary)),
+                        contentPadding: const EdgeInsets.symmetric(vertical: 8),
                       ),
                       maxLength: 30,
                     ),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'This name will be visible to other devices on your network',
+                    'Visible to other devices nearby',
                     style: TextStyle(
                       color: Colors.grey[600],
-                      fontSize: 12,
+                      fontSize: 13,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 24),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
                       onPressed: _saveDeviceName,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.yellow[300],
+                        backgroundColor: kZapPrimary,
                         foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        elevation: 0,
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(16),
                         ),
                       ),
                       child: const Text(
                         'Save Changes',
                         style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
                     ),
@@ -199,100 +208,66 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
             const SizedBox(height: 32),
 
             // Discovery Settings
-            Text(
-              'Network Discovery',
+            const Text(
+              'NETWORK',
               style: TextStyle(
-                color: Colors.yellow[300],
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
+                color: Colors.grey,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
 
             Container(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               decoration: BoxDecoration(
-                color: Colors.grey[900],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey[800]!, width: 1),
+                color: kZapSurface,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.white.withOpacity(0.05)),
               ),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.yellow[300]!.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Icon(
-                          Icons.radar,
-                          color: Colors.yellow[300],
-                          size: 24,
-                        ),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Auto-Discovery',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Automatically find devices on local network',
-                              style: TextStyle(
-                                color: Colors.grey[400],
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Switch(
-                        value: _autoDiscoveryEnabled,
-                        onChanged: _toggleAutoDiscovery,
-                        activeColor: Colors.yellow[300],
-                        activeTrackColor: Colors.yellow[700],
-                      ),
-                    ],
-                  ),
-                ],
+              child: SwitchListTile(
+                 activeColor: kZapPrimary,
+                 activeTrackColor: kZapPrimary.withOpacity(0.2),
+                 inactiveThumbColor: Colors.grey[400],
+                 inactiveTrackColor: Colors.grey[800],
+                 contentPadding: EdgeInsets.zero,
+                 title: const Text("Auto-Discovery", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                 subtitle: Text("Find devices automatically on WiFi", style: TextStyle(color: Colors.grey[500], fontSize: 13)),
+                 value: _autoDiscoveryEnabled, 
+                 onChanged: _toggleAutoDiscovery
               ),
             ),
 
             const SizedBox(height: 32),
 
             // Platform Info
-            Text(
-              'Device Information',
+            const Text(
+              'ABOUT',
               style: TextStyle(
-                color: Colors.yellow[300],
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
+                color: Colors.grey,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
 
             Container(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                color: Colors.grey[900],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey[800]!, width: 1),
+                color: kZapSurface,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.white.withOpacity(0.05)),
               ),
               child: Column(
                 children: [
-                  _buildInfoRow('Platform', _getPlatformName(), Icons.phone_android),
-                  const SizedBox(height: 16),
-                  _buildInfoRow('App Version', '1.0.0', Icons.info_outline),
+                  _buildInfoRow('Platform', _getPlatformName(), Icons.phone_iphone_rounded),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Divider(color: Colors.white.withOpacity(0.05), height: 1),
+                  ),
+                  _buildInfoRow('App Version', '1.0.0 (Beta)', Icons.info_outline_rounded),
                 ],
               ),
             ),
@@ -301,36 +276,42 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
           ],
         ),
       ),
+      ),
     );
   }
 
   Widget _buildInfoRow(String label, String value, IconData icon) {
     return Row(
       children: [
-        Icon(icon, color: Colors.grey[600], size: 20),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  color: Colors.grey[500],
-                  fontSize: 12,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(10),
           ),
+          child: Icon(icon, color: Colors.grey[400], size: 20),
+        ),
+        const SizedBox(width: 16),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              value,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
         ),
       ],
     );

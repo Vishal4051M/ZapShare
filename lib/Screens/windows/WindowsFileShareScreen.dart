@@ -214,7 +214,7 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
         print('📱 Building ConnectionRequestDialog...');
         return ConnectionRequestDialog(
           request: request,
-          onAccept: () async {
+          onAccept: (files, path) async {
             print('✅ User accepted connection request');
             // Close the dialog using the dialog context
             Navigator.of(dialogContext).pop();

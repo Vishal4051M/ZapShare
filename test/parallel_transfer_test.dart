@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'dart:async';
-import 'package:zapshare/services/parallel_transfer_service.dart';
+import 'package:zap_share/services/parallel_transfer_service.dart';
 
 /// Test Script for Parallel HTTP Streams
 /// 

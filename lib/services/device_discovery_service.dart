@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
+import 'file_preview_server.dart';
 import 'wifi_direct_service.dart';
 
 // Connection request model
@@ -15,6 +16,7 @@ class ConnectionRequest {
   final List<String> fileNames;
   final int totalSize;
   final DateTime timestamp;
+  final int previewPort; // Added for previews
 
   ConnectionRequest({
     required this.deviceId,
@@ -25,6 +27,7 @@ class ConnectionRequest {
     required this.fileNames,
     required this.totalSize,
     required this.timestamp,
+    this.previewPort = 0,
   });
 }
 
@@ -118,30 +121,24 @@ class DiscoveredDevice {
   }
 }
 
-// Helper class to store network interface info for broadcasting
 class _NetworkInterfaceInfo {
   final NetworkInterface interface;
   final List<InternetAddress> ipv4Addresses;
 
   _NetworkInterfaceInfo(this.interface, this.ipv4Addresses);
 
-  // Calculate broadcast address for a given IP and subnet mask
-  // For /24 networks (most common): 192.168.43.1 -> 192.168.43.255
   String? getBroadcastAddress() {
     if (ipv4Addresses.isEmpty) return null;
-
-    // Use first IPv4 address
     final ip = ipv4Addresses.first.address;
     final parts = ip.split('.');
     if (parts.length != 4) return null;
-
-    // Assume /24 subnet (255.255.255.0) - most common for hotspots and home networks
-    // Broadcast address is: network address + 255 in last octet
     return '${parts[0]}.${parts[1]}.${parts[2]}.255';
   }
 }
 
 class DeviceDiscoveryService {
+
+  final FilePreviewServer _previewServer = FilePreviewServer(); // Preview Server
   static const int DISCOVERY_PORT = 37020; // ZapShare discovery port
   static const String MULTICAST_GROUP =
       '224.0.0.167'; // Compatible with all Android devices (LocalSend uses this)
@@ -378,6 +375,9 @@ class DeviceDiscoveryService {
     }
 
     try {
+      // Start Preview Server
+      await _previewServer.start();
+
       // Start Wi-Fi Direct discovery if on Android
       if (Platform.isAndroid) {
         await _wifiDirectService.startPeerDiscovery();
@@ -666,8 +666,11 @@ class DeviceDiscoveryService {
         try {
           // Create a temporary socket for THIS interface (bound to port 0 = dynamic port)
           // Note: Windows doesn't support reusePort
+          // CRITICAL: Bind to the SPECIFIC IP of the interface to ensure packets go out correct interface
+          final sourceAddress = interfaceInfo.ipv4Addresses.first;
+          
           final tempSocket = await RawDatagramSocket.bind(
-            InternetAddress.anyIPv4,
+            sourceAddress, // Bind to specific interface IP
             0, // Port 0 = let OS choose a free port
             reusePort: !Platform.isWindows, // Windows doesn't support reusePort
           );
@@ -754,8 +757,9 @@ class DeviceDiscoveryService {
   Future<void> sendConnectionRequest(
     String targetIp,
     List<String> fileNames,
-    int totalSize,
-  ) async {
+    int totalSize, {
+    List<String> filePaths = const [],
+  }) async {
     if (_sockets.isEmpty) {
       print('ERROR: Cannot send connection request - no sockets available');
       return;
@@ -768,6 +772,9 @@ class DeviceDiscoveryService {
       return;
     }
 
+    // Register files for preview
+    _previewServer.registerFiles(filePaths);
+
     try {
       final message = jsonEncode({
         'type': 'ZAPSHARE_CONNECTION_REQUEST',
@@ -778,6 +785,7 @@ class DeviceDiscoveryService {
         'fileNames': fileNames,
         'totalSize': totalSize,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'previewPort': _previewServer.port, // ADDED
       });
 
       final data = utf8.encode(message);
@@ -975,7 +983,10 @@ class DeviceDiscoveryService {
       fileNames: List<String>.from(data['fileNames'] as List),
       totalSize: data['totalSize'] as int,
       timestamp: DateTime.fromMillisecondsSinceEpoch(data['timestamp'] as int),
+      previewPort: data['previewPort'] ?? 0, // ADDED
     );
+
+    print('   🔍 Preview Port Parsed: ${request.previewPort}');
 
     _connectionRequestController.add(request);
     print('✅ Connection request added to stream (will show dialog)');
@@ -1129,6 +1140,7 @@ class DeviceDiscoveryService {
   }
 
   Future<void> stop() async {
+    _previewServer.stop();
     _isRunning = false;
     _broadcastTimer?.cancel();
     _cleanupTimer?.cancel();

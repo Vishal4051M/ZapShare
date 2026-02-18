@@ -1048,6 +1048,12 @@ class _AndroidHttpFileShareScreenState
 
     // Get client IP for tracking individual downloads
     final clientIP = request.connectionInfo?.remoteAddress.address ?? 'unknown';
+    
+    // Attempt to get device name from headers (if provided by peer)
+    final clientNameHeader = request.headers.value('x-device-name');
+    if (clientNameHeader != null && clientNameHeader.isNotEmpty) {
+      _clientDeviceNames[clientIP] = clientNameHeader;
+    }
     print(
       'Client $clientIP started downloading file: $fileName (File size: $fileSize bytes)',
     );
@@ -1627,6 +1633,8 @@ class _AndroidHttpFileShareScreenState
           },
         );
         request.response.headers.contentType = ContentType.json;
+        // Send my device name
+        request.response.headers.set('X-Device-Name', _discoveryService.myDeviceName ?? 'ZapShare Android');
         request.response.write(jsonEncode(list));
         await request.response.close();
         return;
@@ -1656,6 +1664,9 @@ class _AndroidHttpFileShareScreenState
             totalSize: data['totalSize'],
             timestamp: DateTime.now(),
           );
+          
+          // Store device name mapping
+          _clientDeviceNames[connectionRequest.ipAddress] = connectionRequest.deviceName;
 
           // Use a Completer to bridge the UI dialog callback to this HTTP response
           final completer = Completer<bool>();
@@ -1678,7 +1689,7 @@ class _AndroidHttpFileShareScreenState
               builder: (dialogContext) {
                 return ConnectionRequestDialog(
                   request: connectionRequest,
-                  onAccept: () {
+                  onAccept: (files, path) {
                     Navigator.of(dialogContext).pop();
                     _isShowingConnectionDialog = false;
                     completer.complete(true);
@@ -2862,7 +2873,7 @@ class _AndroidHttpFileShareScreenState
         print('📱 Building ConnectionRequestDialog...');
         return ConnectionRequestDialog(
           request: request,
-          onAccept: () async {
+          onAccept: (files, path) async {
             print('✅ User accepted connection request');
             // Close the dialog using the dialog context
             Navigator.of(dialogContext).pop();
