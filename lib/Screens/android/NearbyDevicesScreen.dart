@@ -1,10 +1,19 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'dart:async';
-import '../../services/device_discovery_service.dart';
+import 'package:permission_handler/permission_handler.dart';
+import '../../services/wifi_direct_service.dart';
 
+/// Shows nearby Wi-Fi Direct peers.
+///
+/// When the user taps a device:
+///   1. Initiates a Wi-Fi Direct connection to the selected peer
+///   2. Returns the peer info to the calling screen
 class NearbyDevicesScreen extends StatefulWidget {
-  const NearbyDevicesScreen({super.key});
+  /// If true, this device is looking to send files (starts hotspot on tap).
+  /// If false, this device is looking to receive files (connects to sender's hotspot on tap).
+  final bool isSender;
+
+  const NearbyDevicesScreen({super.key, this.isSender = true});
 
   @override
   State<NearbyDevicesScreen> createState() => _NearbyDevicesScreenState();
@@ -12,137 +21,190 @@ class NearbyDevicesScreen extends StatefulWidget {
 
 class _NearbyDevicesScreenState extends State<NearbyDevicesScreen>
     with SingleTickerProviderStateMixin {
-  final DeviceDiscoveryService _discoveryService = DeviceDiscoveryService();
-  List<DiscoveredDevice> _devices = [];
+  final WiFiDirectService _service = WiFiDirectService();
+  List<WiFiDirectPeer> _devices = [];
   bool _isScanning = false;
-  late AnimationController _scanAnimationController;
-  StreamSubscription? _devicesSubscription;
+  bool _isConnecting = false;
+  String? _connectingDeviceAddress;
+  String _statusMessage = '';
+
+  late AnimationController _pulseController;
+  StreamSubscription? _devicesSub;
+  StreamSubscription? _connectionInfoSub;
 
   @override
   void initState() {
     super.initState();
-    _scanAnimationController = AnimationController(
+    _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat();
 
-    _initializeDiscovery();
+    _initDiscovery();
   }
 
-  Future<void> _initializeDiscovery() async {
-    await _discoveryService.initialize();
+  Future<void> _initDiscovery() async {
+    // Request permissions first
+    Map<Permission, PermissionStatus> statuses =
+        await [Permission.location, Permission.nearbyWifiDevices].request();
 
-    _devicesSubscription = _discoveryService.devicesStream.listen((devices) {
+    if (statuses[Permission.nearbyWifiDevices] == PermissionStatus.denied ||
+        statuses[Permission.nearbyWifiDevices] ==
+            PermissionStatus.permanentlyDenied) {
+      // On Android 13+, this is fatal for Wi-Fi Direct
       if (mounted) {
-        setState(() {
-          _devices = devices;
-        });
+        _showError('Nearby Devices permission is required for Wi-Fi Direct');
       }
+    }
+
+    await _service.initialize();
+
+    _devicesSub = _service.peersStream.listen((devices) {
+      if (mounted) setState(() => _devices = devices);
     });
 
-    await _startScanning();
+    setState(() {
+      _isScanning = true;
+      _statusMessage = 'Looking for Wi-Fi Direct devices...';
+    });
+
+    final ok = await _service.startPeerDiscovery();
+    if (!ok && mounted) {
+      setState(() {
+        _isScanning = false;
+        _statusMessage = 'Failed to start Wi-Fi Direct discovery.';
+      });
+    }
+
+    // Listen for incoming connections (if we are Receiver and Sender connects to us)
+    _connectionInfoSub = _service.connectionInfoStream.listen((info) {
+      if (info.groupFormed && mounted && !_isConnecting) {
+        // Connection established externally (invited by peer)
+        // We need to return to the parent screen to handle the file transfer
+
+        // Find the peer if possible, or create a placeholder
+        WiFiDirectPeer? connectedPeer;
+        try {
+          connectedPeer = _devices.firstWhere(
+            (d) => d.status == 0,
+          ); // Status 0 is connected? No, usually 1. 0 is connected.
+          // Actually status: 3=Connected, 0=Connected?
+          // WifiP2pDevice.CONNECTED = 0
+          // WifiP2pDevice.INVITED = 1
+          // WifiP2pDevice.FAILED = 2
+          // WifiP2pDevice.AVAILABLE = 3
+          // WifiP2pDevice.UNAVAILABLE = 4
+          // Let's just pick the first one checking status if possible, or just a dummy
+        } catch (e) {}
+
+        final peer =
+            connectedPeer ??
+            WiFiDirectPeer(
+              deviceName: 'Connected Device',
+              deviceAddress: info.groupOwnerAddress,
+              status: 0,
+              isGroupOwner: info.isGroupOwner,
+              primaryDeviceType: '',
+              secondaryDeviceType: '',
+            );
+
+        Navigator.pop(
+          context,
+          NearbyDeviceResult(
+            peer: peer,
+            role: widget.isSender ? TransferRole.sender : TransferRole.receiver,
+          ),
+        );
+      }
+    });
   }
 
-  Future<void> _startScanning() async {
-    setState(() => _isScanning = true);
-    await _discoveryService.start();
+  Future<void> _refreshScan() async {
+    await _service.stopPeerDiscovery();
+    setState(() {
+      _devices = [];
+      _isScanning = true;
+      _statusMessage = 'Scanning...';
+    });
+    await _service.startPeerDiscovery();
   }
 
-  Future<void> _stopScanning() async {
-    setState(() => _isScanning = false);
-    await _discoveryService.stop();
-  }
+  // ────────────────────────────────────────────────
+  //  Tap handler — Wi-Fi Direct connection
+  // ────────────────────────────────────────────────
 
-  @override
-  void dispose() {
-    _scanAnimationController.dispose();
-    _devicesSubscription?.cancel();
-    _discoveryService.dispose();
-    super.dispose();
-  }
+  Future<void> _onDeviceTapped(WiFiDirectPeer device) async {
+    if (_isConnecting) return;
 
-  IconData _getPlatformIcon(String platform) {
-    switch (platform.toLowerCase()) {
-      case 'android':
-        return Icons.phone_android;
-      case 'ios':
-        return Icons.phone_iphone;
-      case 'windows':
-        return Icons.computer;
-      case 'macos':
-        return Icons.laptop_mac;
-      case 'linux':
-        return Icons.laptop;
-      default:
-        return Icons.devices;
+    setState(() {
+      _isConnecting = true;
+      _connectingDeviceAddress = device.deviceAddress;
+      _statusMessage = 'Connecting to ${device.deviceName}...';
+    });
+
+    try {
+      // Connect to the peer (as client or GO depending on negotiation)
+      // Usually, if we are the sender (Group Owner), we wait for connections.
+      // If we are the receiver (Client), we connect to the GO.
+      // But in Wi-Fi Direct, either can initiate.
+
+      final connected = await _service.connectToPeer(
+        device.deviceAddress,
+        isGroupOwner: widget.isSender, // Prefer being GO if sender
+      );
+
+      if (connected && mounted) {
+        setState(() => _statusMessage = 'Connection initiated...');
+
+        // Wait for connection info callback (handled via stream in parent or service event)
+        // For now, return the peer info
+        Navigator.pop(
+          context,
+          NearbyDeviceResult(
+            peer: device,
+            role: widget.isSender ? TransferRole.sender : TransferRole.receiver,
+          ),
+        );
+      } else if (mounted) {
+        _showError('Failed to connect to ${device.deviceName}');
+      }
+    } catch (e) {
+      if (mounted) _showError('Connection error: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isConnecting = false;
+          _connectingDeviceAddress = null;
+        });
+      }
     }
   }
 
-  Color _getPlatformColor(String platform) {
-    switch (platform.toLowerCase()) {
-      case 'android':
-        return Colors.green;
-      case 'ios':
-        return Colors.blue;
-      case 'windows':
-        return Colors.lightBlue;
-      case 'macos':
-        return Colors.grey;
-      default:
-        return Colors.yellow[300]!;
-    }
-  }
-
-  void _connectToDevice(DiscoveredDevice device) {
-    // Navigate to send screen with device info
-    Navigator.pop(context, device);
-  }
-
-  Future<void> _requestFilesFromDevice(DiscoveredDevice device) async {
-    print(
-      '📤 [NearbyDevices] Sending connection request to ${device.deviceName} at ${device.ipAddress}',
-    );
-
-    // Send a connection request to the device asking them to share files
-    // This will trigger a dialog on the receiver's device
-    await _discoveryService.sendConnectionRequest(device.ipAddress, [
-      'File transfer request',
-    ], 1024); // 1KB placeholder
-
-    print('✅ [NearbyDevices] Connection request sent successfully');
-
-    // Show confirmation
+  void _showError(String message) {
+    setState(() => _statusMessage = message);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Row(
-            children: [
-              Icon(Icons.send, color: Colors.white, size: 20),
-              SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Request sent to ${device.deviceName}',
-                  style: TextStyle(fontSize: 14),
-                ),
-              ),
-            ],
-          ),
-          backgroundColor: Colors.green[700],
-          duration: Duration(seconds: 2),
-          action: SnackBarAction(
-            label: 'OK',
-            textColor: Colors.white,
-            onPressed: () {},
-          ),
+          content: Text(message),
+          backgroundColor: Colors.red[700],
+          duration: const Duration(seconds: 3),
         ),
       );
     }
   }
 
-  void _copyShareCode(DiscoveredDevice device) {
-    Clipboard.setData(ClipboardData(text: device.shareCode));
-    print('Share code copied: ${device.shareCode}');
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    _devicesSub?.cancel();
+    _connectionInfoSub?.cancel();
+    _service.stopPeerDiscovery();
+    super.dispose();
   }
+
+  // ────────────────────────────────────────────────
+  //  UI
+  // ────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -155,70 +217,41 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen>
           icon: const Icon(Icons.arrow_back_ios_rounded, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text(
-          'Nearby Devices',
-          style: TextStyle(
+        title: Text(
+          widget.isSender ? 'Send to Device' : 'Receive from Device',
+          style: const TextStyle(
             color: Colors.white,
-            fontSize: 24,
+            fontSize: 22,
             fontWeight: FontWeight.w300,
             letterSpacing: -0.5,
           ),
         ),
         actions: [
-          IconButton(
-            icon: Icon(
-              _isScanning ? Icons.stop_circle_outlined : Icons.refresh_rounded,
-              color: _isScanning ? Colors.red[300] : Colors.yellow[300],
+          if (!_isConnecting)
+            IconButton(
+              icon: Icon(
+                _isScanning ? Icons.wifi_find : Icons.refresh,
+                color: _isScanning ? Colors.blue[300] : Colors.yellow[300],
+              ),
+              onPressed: _refreshScan,
+              tooltip: 'Refresh',
             ),
-            onPressed: _isScanning ? _stopScanning : _startScanning,
-            tooltip: _isScanning ? 'Stop Scanning' : 'Refresh',
-          ),
         ],
       ),
       body: Column(
         children: [
-          // Scanning indicator
-          if (_isScanning)
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
-              margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.grey[900],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.yellow[300]!.withOpacity(0.3)),
-              ),
-              child: Row(
-                children: [
-                  RotationTransition(
-                    turns: _scanAnimationController,
-                    child: Icon(
-                      Icons.radar,
-                      color: Colors.yellow[300],
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    'Scanning for nearby devices...',
-                    style: TextStyle(
-                      color: Colors.yellow[300],
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          // Status bar
+          _buildStatusBar(),
 
           // Device count
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
             child: Row(
               children: [
-                Icon(Icons.devices, color: Colors.grey[600], size: 16),
+                Icon(Icons.wifi, color: Colors.blue[300], size: 16),
                 const SizedBox(width: 8),
                 Text(
-                  '${_devices.length} device${_devices.length != 1 ? 's' : ''} found',
+                  '${_devices.length} Wi-Fi Direct device${_devices.length != 1 ? 's' : ''} nearby',
                   style: TextStyle(
                     color: Colors.grey[400],
                     fontSize: 13,
@@ -229,22 +262,58 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen>
             ),
           ),
 
-          // Devices list
+          // Device list
           Expanded(
-            child:
-                _devices.isEmpty
-                    ? _buildEmptyState()
-                    : ListView.builder(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 8,
-                      ),
-                      itemCount: _devices.length,
-                      itemBuilder: (context, index) {
-                        final device = _devices[index];
-                        return _buildDeviceCard(device);
-                      },
-                    ),
+            child: _devices.isEmpty ? _buildEmptyState() : _buildDeviceList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusBar() {
+    final Color barColor;
+    final IconData barIcon;
+
+    if (_isConnecting) {
+      barColor = Colors.orange;
+      barIcon = Icons.sync;
+    } else if (_isScanning) {
+      barColor = Colors.blue;
+      barIcon = Icons.wifi_find;
+    } else {
+      barColor = Colors.grey;
+      barIcon = Icons.wifi_off;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 20),
+      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      decoration: BoxDecoration(
+        color: barColor.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: barColor.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          if (_isConnecting || _isScanning)
+            RotationTransition(
+              turns: _pulseController,
+              child: Icon(barIcon, color: barColor, size: 20),
+            )
+          else
+            Icon(barIcon, color: barColor, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              _statusMessage,
+              style: TextStyle(
+                color: barColor,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ],
       ),
@@ -256,12 +325,12 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.search_off, size: 80, color: Colors.grey[800]),
+          Icon(Icons.wifi_find, size: 80, color: Colors.grey[800]),
           const SizedBox(height: 16),
           Text(
             _isScanning
-                ? 'No devices found yet'
-                : 'Start scanning to find devices',
+                ? 'Searching for Wi-Fi Direct devices...'
+                : 'No Wi-Fi Direct devices found',
             style: TextStyle(
               color: Colors.grey[400],
               fontSize: 18,
@@ -270,21 +339,19 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen>
           ),
           const SizedBox(height: 8),
           Text(
-            _isScanning
-                ? 'Make sure ZapShare is open on other devices'
-                : 'Tap the refresh button to scan',
+            'Make sure Wi-Fi is on and ZapShare\nis open on the other device',
             style: TextStyle(color: Colors.grey[600], fontSize: 14),
             textAlign: TextAlign.center,
           ),
-          if (!_isScanning) ...[
-            const SizedBox(height: 24),
+          const SizedBox(height: 24),
+          if (!_isScanning)
             ElevatedButton.icon(
-              onPressed: _startScanning,
-              icon: const Icon(Icons.radar),
-              label: const Text('Start Scanning'),
+              onPressed: _refreshScan,
+              icon: const Icon(Icons.wifi_find),
+              label: const Text('Scan Again'),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.yellow[300],
-                foregroundColor: Colors.black,
+                backgroundColor: Colors.blue[400],
+                foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(
                   horizontal: 24,
                   vertical: 12,
@@ -294,81 +361,73 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen>
                 ),
               ),
             ),
-          ],
         ],
       ),
     );
   }
 
-  Widget _buildDeviceCard(DiscoveredDevice device) {
-    final isOnline = device.isOnline;
-    final platformColor = _getPlatformColor(device.platform);
+  Widget _buildDeviceList() {
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      itemCount: _devices.length,
+      itemBuilder: (context, index) => _buildDeviceCard(_devices[index]),
+    );
+  }
+
+  Widget _buildDeviceCard(WiFiDirectPeer device) {
+    final isConnecting = _connectingDeviceAddress == device.deviceAddress;
+    final platformColor =
+        Colors.green; // Default to Android green for Wi-Fi Direct
+    // Wi-Fi Direct doesn't give us signal strength easily in the peer list usually
+    const signalIcon = Icons.signal_cellular_4_bar;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: Colors.grey[900],
+        color:
+            isConnecting ? Colors.orange.withOpacity(0.08) : Colors.grey[900],
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color:
-              device.isFavorite
-                  ? Colors.yellow[300]!.withOpacity(0.5)
-                  : Colors.grey[800]!,
+              isConnecting ? Colors.orange.withOpacity(0.5) : Colors.grey[800]!,
           width: 1.5,
         ),
-        boxShadow:
-            device.isFavorite
-                ? [
-                  BoxShadow(
-                    color: Colors.yellow[300]!.withOpacity(0.1),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  ),
-                ]
-                : null,
       ),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: isOnline ? () => _connectToDevice(device) : null,
+          onTap: _isConnecting ? null : () => _onDeviceTapped(device),
           borderRadius: BorderRadius.circular(16),
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                // Device icon with status indicator
-                Stack(
-                  children: [
-                    Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        color: platformColor.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(
-                        _getPlatformIcon(device.platform),
-                        color: platformColor,
-                        size: 28,
-                      ),
-                    ),
-                    Positioned(
-                      right: 0,
-                      bottom: 0,
-                      child: Container(
-                        width: 16,
-                        height: 16,
-                        decoration: BoxDecoration(
-                          color: isOnline ? Colors.green : Colors.grey[700],
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.grey[900]!,
-                            width: 2,
+                // Platform icon
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: platformColor.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child:
+                      isConnecting
+                          ? const Center(
+                            child: SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: Colors.orange,
+                              ),
+                            ),
+                          )
+                          : Icon(
+                            Icons
+                                .phone_android, // Assume Android for Wi-Fi Direct
+                            color: platformColor,
+                            size: 28,
                           ),
-                        ),
-                      ),
-                    ),
-                  ],
                 ),
                 const SizedBox(width: 16),
 
@@ -377,49 +436,27 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              device.deviceName,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (device.isFavorite) ...[
-                            const SizedBox(width: 6),
-                            Icon(
-                              Icons.star,
-                              color: Colors.yellow[300],
-                              size: 16,
-                            ),
-                          ],
-                        ],
+                      Text(
+                        device.deviceName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        device.platform,
-                        style: TextStyle(color: Colors.grey[400], fontSize: 13),
-                      ),
-                      const SizedBox(height: 2),
                       Row(
                         children: [
-                          Icon(
-                            Icons.circle,
-                            size: 8,
-                            color: isOnline ? Colors.green : Colors.grey[600],
-                          ),
-                          const SizedBox(width: 6),
+                          Icon(Icons.wifi, size: 12, color: Colors.blue[300]),
+                          const SizedBox(width: 4),
                           Text(
-                            isOnline ? device.ipAddress : 'Offline',
+                            device.deviceAddress,
                             style: TextStyle(
                               color: Colors.grey[500],
                               fontSize: 12,
-                              fontFamily: 'monospace',
+                              fontWeight: FontWeight.w500,
+                              letterSpacing: 0.5,
                             ),
                           ),
                         ],
@@ -428,102 +465,23 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen>
                   ),
                 ),
 
-                // Actions
+                // Signal strength (placeholder)
                 Column(
                   children: [
-                    // Favorite button
-                    IconButton(
-                      icon: Icon(
-                        device.isFavorite ? Icons.star : Icons.star_border,
-                        color:
-                            device.isFavorite
-                                ? Colors.yellow[300]
-                                : Colors.grey[600],
-                      ),
-                      onPressed: () {
-                        _discoveryService.toggleFavorite(device.deviceId);
-                      },
-                      tooltip:
-                          device.isFavorite
-                              ? 'Remove from favorites'
-                              : 'Add to favorites',
-                    ),
-                    // More options
-                    PopupMenuButton<String>(
-                      icon: Icon(Icons.more_vert, color: Colors.grey[600]),
-                      color: Colors.grey[850],
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      itemBuilder:
-                          (context) => [
-                            PopupMenuItem(
-                              value: 'copy_code',
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.copy,
-                                    size: 18,
-                                    color: Colors.grey[400],
-                                  ),
-                                  const SizedBox(width: 12),
-                                  const Text('Copy Share Code'),
-                                ],
-                              ),
-                            ),
-                            PopupMenuItem(
-                              value: 'request_files',
-                              enabled: isOnline,
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.download_rounded,
-                                    size: 18,
-                                    color:
-                                        isOnline
-                                            ? Colors.green[300]
-                                            : Colors.grey[600],
-                                  ),
-                                  const SizedBox(width: 12),
-                                  const Text('Request Files'),
-                                ],
-                              ),
-                            ),
-                            PopupMenuItem(
-                              value: 'connect',
-                              enabled: isOnline,
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.send,
-                                    size: 18,
-                                    color:
-                                        isOnline
-                                            ? Colors.yellow[300]
-                                            : Colors.grey[600],
-                                  ),
-                                  const SizedBox(width: 12),
-                                  const Text('Send Files'),
-                                ],
-                              ),
-                            ),
-                          ],
-                      onSelected: (value) {
-                        switch (value) {
-                          case 'copy_code':
-                            _copyShareCode(device);
-                            break;
-                          case 'request_files':
-                            if (isOnline) _requestFilesFromDevice(device);
-                            break;
-                          case 'connect':
-                            if (isOnline) _connectToDevice(device);
-                            break;
-                        }
-                      },
+                    Icon(signalIcon, color: Colors.green, size: 20),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Good',
+                      style: TextStyle(color: Colors.grey[600], fontSize: 10),
                     ),
                   ],
                 ),
+
+                const SizedBox(width: 8),
+
+                // Tap arrow
+                if (!isConnecting)
+                  Icon(Icons.chevron_right, color: Colors.grey[600], size: 24),
               ],
             ),
           ),
@@ -531,4 +489,17 @@ class _NearbyDevicesScreenState extends State<NearbyDevicesScreen>
       ),
     );
   }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Result model returned to calling screen
+// ════════════════════════════════════════════════════════════════════
+
+enum TransferRole { sender, receiver }
+
+class NearbyDeviceResult {
+  final WiFiDirectPeer peer;
+  final TransferRole role;
+
+  NearbyDeviceResult({required this.peer, required this.role});
 }

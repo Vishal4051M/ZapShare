@@ -4,8 +4,18 @@
 #include <shellapi.h>
 #include <flutter/method_channel.h>
 #include <flutter/standard_method_codec.h>
+#include <flutter/plugin_registrar_windows.h>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "video_plugin.h"
+#include "mpv_window.h"
+#include <dwmapi.h>
+
+#ifndef WM_MPV_EVENT
+#define WM_MPV_EVENT (WM_USER + 101)
+#endif
+
+#pragma comment(lib, "dwmapi.lib")
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -17,37 +27,70 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
 
+  // Create MPV window early (hidden) so it's ready when video playback starts
+  mpv_window_ = std::make_unique<MpvWindow>();
+  if (!mpv_window_->Create()) {
+      OutputDebugStringW(L"Failed to create MPV Window\n");
+  } else {
+      OutputDebugStringW(L"MPV Window Created (hidden)\n");
+  }
+
   RECT frame = GetClientArea();
 
-  // The size here must match the window dimensions to avoid unnecessary surface
-  // creation / destruction in the startup path.
   flutter_controller_ = std::make_unique<flutter::FlutterViewController>(
       frame.right - frame.left, frame.bottom - frame.top, project_);
-  // Ensure that basic setup of the controller was successful.
   if (!flutter_controller_->engine() || !flutter_controller_->view()) {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  
+  // Register VideoPlugin manually
+  video_plugin_ = std::make_unique<VideoPlugin>(
+      flutter_controller_->engine()->messenger(),
+      mpv_window_.get());
+  
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+  
+  // Set Main Window for VideoPlugin event dispatch
+  if (video_plugin_) {
+      video_plugin_->SetMainWindow(GetHandle());
+  }
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
+    HWND hwnd = flutter_controller_->view()->GetNativeWindow();
+
+    // Enable DWM Transparency so Flutter's transparent pixels
+    // reveal the MPV window behind it
+    MARGINS margins = {-1};
+    HRESULT hr = DwmExtendFrameIntoClientArea(hwnd, &margins);
+    if (FAILED(hr)) {
+        OutputDebugStringW(L"DwmExtendFrameIntoClientArea failed\n");
+    }
+    
     this->Show();
+    
+    // Position MPV behind Flutter (but don't show it yet — it will
+    // become visible when video playback starts via is_video_active_)
+    if (mpv_window_) {
+        mpv_window_->UpdatePosition(GetHandle());
+    }
   });
 
-  // Flutter can complete the first frame before the "show window" callback is
-  // registered. The following call ensures a frame is pending to ensure the
-  // window is shown. It is a no-op if the first frame hasn't completed yet.
   flutter_controller_->ForceRedraw();
-
-  // Enable drag and drop
-  EnableDragDrop();
-
+  
   return true;
 }
 
 void FlutterWindow::OnDestroy() {
-  DisableDragDrop();
-  
+  if (video_plugin_) {
+      video_plugin_.reset();
+  }
+
+  if (mpv_window_) {
+      mpv_window_->Destroy();
+      mpv_window_.reset();
+  }
+
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -59,107 +102,125 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
-  // Give Flutter, including plugins, an opportunity to handle window messages.
+  // Give Flutter first crack at handling messages.
+  // BUT: For WM_SIZE, WM_MOVE, WM_ACTIVATE, WM_WINDOWPOSCHANGED, WM_SYSCOMMAND
+  // we MUST NOT early-return even if Flutter consumes them, because
+  // Win32Window::MessageHandler needs to run too (it calls MoveWindow on the
+  // Flutter child content). Without this, Flutter never resizes after fullscreen
+  // toggle and stays stuck at the old layout size.
+  
+  bool flutter_handled = false;
+  LRESULT flutter_result = 0;
+  
   if (flutter_controller_) {
     std::optional<LRESULT> result =
         flutter_controller_->HandleTopLevelWindowProc(hwnd, message, wparam,
                                                       lparam);
     if (result) {
-      return *result;
+      flutter_handled = true;
+      flutter_result = *result;
     }
   }
 
+  // Handle MPV-specific custom messages that should return immediately
   switch (message) {
-    case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
-      break;
-    case WM_DROPFILES: {
-      HDROP hdrop = (HDROP)wparam;
-      if (!is_drag_over_) {
-        is_drag_over_ = true;
-        SendDragEnterToFlutter();
+    case WM_MPV_EVENT:
+      if (video_plugin_) {
+          video_plugin_->ProcessEvents();
       }
-      auto files = GetDroppedFiles(hdrop);
-      SendFilesToFlutter(files);
-      is_drag_over_ = false;
-      SendDragLeaveToFlutter();
-      DragFinish(hdrop);
       return 0;
-    }
-  }
-
-  return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
-}
-
-void FlutterWindow::EnableDragDrop() {
-  DragAcceptFiles(GetHandle(), TRUE);
-}
-
-void FlutterWindow::DisableDragDrop() {
-  DragAcceptFiles(GetHandle(), FALSE);
-}
-
-std::vector<std::string> FlutterWindow::GetDroppedFiles(HDROP hdrop) {
-  std::vector<std::string> files;
-  
-  UINT fileCount = DragQueryFile(hdrop, 0xFFFFFFFF, nullptr, 0);
-  
-  for (UINT i = 0; i < fileCount; i++) {
-    UINT pathLength = DragQueryFile(hdrop, i, nullptr, 0);
-    if (pathLength > 0) {
-      std::wstring widePath(pathLength + 1, L'\0');
-      DragQueryFile(hdrop, i, widePath.data(), pathLength + 1);
-      
-      // Convert wide string to UTF-8
-      int utf8Length = WideCharToMultiByte(CP_UTF8, 0, widePath.c_str(), -1, nullptr, 0, nullptr, nullptr);
-      if (utf8Length > 0) {
-        std::string utf8Path(utf8Length - 1, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, widePath.c_str(), -1, utf8Path.data(), utf8Length, nullptr, nullptr);
-        files.push_back(utf8Path);
+    case WM_FONTCHANGE:
+      if (flutter_controller_) {
+          flutter_controller_->engine()->ReloadSystemFonts();
       }
-    }
+      break;
   }
-  
-  return files;
-}
 
-void FlutterWindow::SendFilesToFlutter(const std::vector<std::string>& files) {
-  if (!flutter_controller_ || !flutter_controller_->engine()) {
-    return;
+  // For messages that DON'T affect window size/position/focus,
+  // respect Flutter's consumption and return early.
+  if (flutter_handled) {
+      switch (message) {
+        // These MUST fall through to Win32Window::MessageHandler
+        // even if Flutter consumed them:
+        case WM_SIZE:
+        case WM_MOVE:
+        case WM_ACTIVATE:
+        case WM_WINDOWPOSCHANGED:
+        case WM_SYSCOMMAND:
+        case WM_DISPLAYCHANGE:
+            break; // Don't return early — fall through to base handler below
+            
+        default:
+            // All other messages: if Flutter handled it, return its result
+            return flutter_result;
+      }
   }
-  
-  auto channel = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-      flutter_controller_->engine()->messenger(), "zapshare/drag_drop",
-      &flutter::StandardMethodCodec::GetInstance());
-  
-  flutter::EncodableList fileList;
-  for (const auto& file : files) {
-    fileList.push_back(flutter::EncodableValue(file));
-  }
-  
-  channel->InvokeMethod("onFilesDropped", std::make_unique<flutter::EncodableValue>(fileList));
-}
 
-void FlutterWindow::SendDragEnterToFlutter() {
-  if (!flutter_controller_ || !flutter_controller_->engine()) {
-    return;
-  }
-  
-  auto channel = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-      flutter_controller_->engine()->messenger(), "zapshare/drag_drop",
-      &flutter::StandardMethodCodec::GetInstance());
-  
-  channel->InvokeMethod("onDragEnter", nullptr);
-}
+  // ALWAYS let the base Win32Window::MessageHandler run for layout-critical
+  // messages. This calls MoveWindow() on the Flutter child content to resize it,
+  // handles WM_ACTIVATE focus, DPI changes, etc.
+  LRESULT base_result = Win32Window::MessageHandler(hwnd, message, wparam, lparam);
 
-void FlutterWindow::SendDragLeaveToFlutter() {
-  if (!flutter_controller_ || !flutter_controller_->engine()) {
-    return;
+  // After the base handler has run, force Flutter to update its metrics
+  // on size-related messages. This is critical after fullscreen toggle:
+  // window_manager changes window style asynchronously and Flutter may
+  // not automatically pick up the new dimensions.
+  if (flutter_controller_) {
+      switch (message) {
+        case WM_SIZE:
+        case WM_WINDOWPOSCHANGED:
+        case WM_EXITSIZEMOVE: {
+            // Force Flutter's view to acknowledge the new size
+            HWND flutter_hwnd = flutter_controller_->view()->GetNativeWindow();
+            if (flutter_hwnd) {
+                InvalidateRect(flutter_hwnd, nullptr, TRUE);
+            }
+            flutter_controller_->ForceRedraw();
+            break;
+        }
+      }
   }
-  
-  auto channel = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-      flutter_controller_->engine()->messenger(), "zapshare/drag_drop",
-      &flutter::StandardMethodCodec::GetInstance());
-  
-  channel->InvokeMethod("onDragLeave", nullptr);
+
+  // AFTER the base handler has resized the Flutter child window,
+  // sync the MPV window to match. This ordering prevents glitches
+  // where MPV would resize before Flutter, showing misaligned content.
+  if (mpv_window_) {
+      switch (message) {
+        case WM_WINDOWPOSCHANGED:
+        case WM_MOVE:
+        case WM_SIZE:
+        case WM_DISPLAYCHANGE:
+             mpv_window_->UpdatePosition(hwnd);
+             break;
+             
+        case WM_ACTIVATE:
+            if (wparam == WA_INACTIVE) {
+                // App lost focus — hide MPV window.
+                // Fixes virtual desktop bleed: switching desktops sends
+                // WA_INACTIVE, so MPV hides. Switching back sends WA_ACTIVE.
+                mpv_window_->Hide();
+            } else {
+                // App gained focus — show and reposition MPV
+                if (mpv_window_->IsVideoActive()) {
+                    mpv_window_->Show();
+                    mpv_window_->UpdatePosition(hwnd);
+                }
+            }
+            break;
+            
+        case WM_SYSCOMMAND:
+            if ((wparam & 0xFFF0) == SC_MINIMIZE) {
+                mpv_window_->Hide();
+            } else if ((wparam & 0xFFF0) == SC_RESTORE || 
+                       (wparam & 0xFFF0) == SC_MAXIMIZE) {
+                if (mpv_window_->IsVideoActive()) {
+                    mpv_window_->Show();
+                    mpv_window_->UpdatePosition(hwnd);
+                }
+            }
+            break;
+      }
+  }
+
+  return base_result;
 }

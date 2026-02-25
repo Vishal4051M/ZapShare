@@ -9,8 +9,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:open_file/open_file.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'package:screen_brightness/screen_brightness.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:zap_share/blocs/navigation/smooth_page_route.dart';
+import 'WebReceivedFilesScreen.dart'
+    show WebReceivedFilesScreen, ReceivedFileItem;
 
 enum FileType {
   image,
@@ -21,6 +24,7 @@ enum FileType {
   spreadsheet,
   presentation,
   archive,
+  apk,
   text,
   other,
 }
@@ -33,6 +37,7 @@ class ReceivedFile {
   double progress;
   String status;
   bool isUploading;
+  double speedMbps;
 
   ReceivedFile({
     required this.name,
@@ -42,52 +47,8 @@ class ReceivedFile {
     this.progress = 1.0,
     this.status = 'Complete',
     this.isUploading = false,
+    this.speedMbps = 0.0,
   });
-}
-
-class PendingFile {
-  final String id;
-  final String name;
-  final int size;
-  final DateTime uploadedAt;
-  final String browserSessionId; // Identifier for browser session
-  bool isSelected;
-  FileType fileType;
-
-  PendingFile({
-    required this.id,
-    required this.name,
-    required this.size,
-    required this.uploadedAt,
-    required this.browserSessionId,
-    this.isSelected = true,
-    required this.fileType,
-  });
-}
-
-class PendingFileWithPreview extends PendingFile {
-  final String previewPath; // Path to preview chunk file
-  final int previewSize; // Size of preview chunk
-
-  PendingFileWithPreview({
-    required String id,
-    required String name,
-    required int size,
-    required DateTime uploadedAt,
-    required String browserSessionId,
-    bool isSelected = true,
-    required FileType fileType,
-    required this.previewPath,
-    required this.previewSize,
-  }) : super(
-         id: id,
-         name: name,
-         size: size,
-         uploadedAt: uploadedAt,
-         browserSessionId: browserSessionId,
-         isSelected: isSelected,
-         fileType: fileType,
-       );
 }
 
 class WebReceiveScreen extends StatefulWidget {
@@ -101,33 +62,37 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   HttpServer? _uploadServer;
   String? _localIp;
   bool _isHosting = false;
-  bool _useHttps = false;
+  int _port = 8090; // Default port for Web Receive
+
   String? _saveFolder;
-  String? _customSaveFolder; // User-selected folder (persisted)
+  String? _customSaveFolder;
   bool _uploadApprovalActive = false;
   DateTime? _uploadApprovalExpiresAt;
 
   List<ReceivedFile> _receivedFiles = [];
-  List<PendingFile> _pendingFiles = []; // Files uploaded but not yet received
-  Map<String, ReceivedFile> _ongoingDownloads =
-      {}; // Track downloads in progress
+  Map<String, ReceivedFile> _ongoingDownloads = {};
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
   final Map<String, int> _fileToNotificationId = {};
 
-  int _currentTab = 0; // 0 = Pending Files, 1 = Received Files
-  final PageController _pageController = PageController();
-
   @override
   void initState() {
     super.initState();
+    _loadPort();
     _initializeServer();
     _initLocalNotifications();
   }
 
+  @override
+  void dispose() {
+    _uploadServer?.close(force: true);
+    _stopForegroundService();
+    super.dispose();
+  }
+
   Future<void> _initLocalNotifications() async {
     const AndroidInitializationSettings androidSettings =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
+        AndroidInitializationSettings('ic_stat_notify');
     final InitializationSettings initSettings = InitializationSettings(
       android: androidSettings,
     );
@@ -138,6 +103,9 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     await FlutterForegroundTask.startService(
       notificationTitle: '⚡ ZapShare Web Receive',
       notificationText: 'Receiving files in background',
+      notificationIcon: const NotificationIcon(
+        metaDataName: 'com.pravera.flutter_foreground_task.notification_icon',
+      ),
     );
   }
 
@@ -162,24 +130,6 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     final speedText =
         speedMbps > 0 ? '${speedMbps.toStringAsFixed(2)} Mbps' : '--';
 
-    // Calculate estimated time remaining
-    String timeRemaining = '';
-    if (speedMbps > 0 && progress > 0 && progress < 100) {
-      final remainingPercent = 100 - progress;
-      final estimatedSeconds = (remainingPercent / speedMbps * 0.8).round();
-
-      if (estimatedSeconds < 60) {
-        timeRemaining = ' • ${estimatedSeconds}s';
-      } else if (estimatedSeconds < 3600) {
-        final minutes = (estimatedSeconds / 60).floor();
-        timeRemaining = ' • ${minutes}m';
-      } else {
-        final hours = (estimatedSeconds / 3600).floor();
-        final minutes = ((estimatedSeconds % 3600) / 60).floor();
-        timeRemaining = ' • ${hours}h ${minutes}m';
-      }
-    }
-
     final android = AndroidNotificationDetails(
       'web_receive_channel',
       'Web Receive',
@@ -192,26 +142,40 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       onlyAlertOnce: true,
       ongoing: true,
       autoCancel: false,
+      icon: 'ic_stat_notify',
     );
 
     final details = NotificationDetails(android: android);
     await _notificationsPlugin.show(
       _notificationIdFor(key),
       '🌐 Receiving from Web',
-      '$fileName • $percent% • $speedText$timeRemaining',
+      '$fileName • $percent% • $speedText',
       details,
     );
   }
 
   Future<void> _cancelProgressNotification(String key) async {
-    await _notificationsPlugin.cancel(_notificationIdFor(key));
+    if (_fileToNotificationId.containsKey(key)) {
+      await _notificationsPlugin.cancel(_fileToNotificationId[key]!);
+      _fileToNotificationId.remove(key);
+    }
   }
 
   Future<void> _initializeServer() async {
     await _requestStoragePermissions();
     await _loadCustomFolder();
     _saveFolder = await _getDefaultDownloadFolder();
-    await _startWebServer();
+    // Fetch local IP but don't start server automatically
+    await _fetchLocalIp();
+  }
+
+  Future<void> _fetchLocalIp() async {
+    final ip = await _getLocalIpv4();
+    if (mounted) {
+      setState(() {
+        _localIp = ip;
+      });
+    }
   }
 
   Future<void> _requestStoragePermissions() async {
@@ -219,7 +183,6 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       if (await Permission.storage.isDenied) {
         await Permission.storage.request();
       }
-
       if (await Permission.manageExternalStorage.isDenied) {
         await Permission.manageExternalStorage.request();
       }
@@ -230,7 +193,6 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
 
   Future<String> _getDefaultDownloadFolder() async {
     try {
-      // Use custom folder if set
       if (_customSaveFolder != null && _customSaveFolder!.isNotEmpty) {
         final dir = Directory(_customSaveFolder!);
         if (!await dir.exists()) {
@@ -239,7 +201,6 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         return dir.path;
       }
 
-      // Prefer public Downloads/ZapShare on Android
       final downloadsCandidate = Directory(
         '/storage/emulated/0/Download/ZapShare',
       );
@@ -252,33 +213,18 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         } catch (_) {}
       }
 
-      // Try platform downloads directory if available
-      try {
-        final downloadsDir = await getDownloadsDirectory();
-        if (downloadsDir != null) {
-          final zapDir = Directory('${downloadsDir.path}/ZapShare');
-          if (!await zapDir.exists()) {
-            await zapDir.create(recursive: true);
-          }
-          return zapDir.path;
+      final downloadsDir = await getDownloadsDirectory();
+      if (downloadsDir != null) {
+        final zapDir = Directory('${downloadsDir.path}/ZapShare');
+        if (!await zapDir.exists()) {
+          await zapDir.create(recursive: true);
         }
-      } catch (_) {}
+        return zapDir.path;
+      }
 
-      // Fallback to app documents
-      final appDir = await getApplicationDocumentsDirectory();
-      final fallback = Directory('${appDir.path}/ZapShare');
-      if (!await fallback.exists()) {
-        await fallback.create(recursive: true);
-      }
-      return fallback.path;
+      return '/storage/emulated/0/Download/ZapShare';
     } catch (e) {
-      print('Error getting app folder: $e');
-      // Fallback to a private folder in app storage
-      final receivedDir = Directory('/data/data/com.example.zapshare/ZapShare');
-      if (!await receivedDir.exists()) {
-        await receivedDir.create(recursive: true);
-      }
-      return receivedDir.path;
+      return '/storage/emulated/0/Download/ZapShare';
     }
   }
 
@@ -289,23 +235,158 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     } catch (_) {}
   }
 
-  Future<void> _setCustomFolder(String? folderPath) async {
+  Future<void> _pickCustomFolder() async {
+    try {
+      String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
+      if (selectedDirectory != null) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('custom_save_folder', selectedDirectory);
+        setState(() {
+          _customSaveFolder = selectedDirectory;
+          _saveFolder = selectedDirectory;
+        });
+        HapticFeedback.mediumImpact();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Save location updated',
+              style: GoogleFonts.outfit(color: Colors.black),
+            ),
+            backgroundColor: const Color(0xFFFFD600),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      print('Error picking folder: $e');
+    }
+  }
+
+  Future<void> _loadPort() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      if (folderPath == null || folderPath.isEmpty) {
-        await prefs.remove('custom_save_folder');
-        setState(() {
-          _customSaveFolder = null;
-        });
-      } else {
-        await prefs.setString('custom_save_folder', folderPath);
-        setState(() {
-          _customSaveFolder = folderPath;
-        });
-      }
-      // Refresh _saveFolder to reflect new choice
-      _saveFolder = await _getDefaultDownloadFolder();
+      setState(() {
+        _port = prefs.getInt('web_receive_port') ?? 8090;
+      });
     } catch (_) {}
+  }
+
+  Future<void> _showPortDialog() async {
+    final controller = TextEditingController(text: _port.toString());
+    final result = await showDialog<int>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            backgroundColor: const Color(0xFF1C1C1E),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            title: Text(
+              'Change Port',
+              style: GoogleFonts.outfit(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Enter a port number (1024-65535)',
+                  style: GoogleFonts.outfit(
+                    color: Colors.grey[400],
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: controller,
+                  keyboardType: TextInputType.number,
+                  style: GoogleFonts.outfit(color: Colors.white),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: Colors.white.withOpacity(0.05),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                    hintText: '8090',
+                    hintStyle: GoogleFonts.outfit(color: Colors.grey[600]),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(
+                  'Cancel',
+                  style: GoogleFonts.outfit(
+                    color: Colors.grey,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  final port = int.tryParse(controller.text);
+                  if (port != null && port >= 1024 && port <= 65535) {
+                    Navigator.pop(context, port);
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Invalid port number',
+                          style: GoogleFonts.outfit(color: Colors.white),
+                        ),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFFFD600),
+                  foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: Text(
+                  'Save',
+                  style: GoogleFonts.outfit(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+    );
+
+    if (result != null && result != _port) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('web_receive_port', result);
+      setState(() {
+        _port = result;
+      });
+
+      if (_isHosting) {
+        await _stopWebServer();
+        await _startWebServer();
+      }
+
+      HapticFeedback.mediumImpact();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Port updated to $_port',
+            style: GoogleFonts.outfit(color: Colors.black),
+          ),
+          backgroundColor: const Color(0xFFFFD600),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   Future<String?> _getLocalIpv4() async {
@@ -314,71 +395,81 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
         type: InternetAddressType.IPv4,
         includeLoopback: false,
       );
+
+      String? fallbackIp;
+
       for (final iface in interfaces) {
         for (final addr in iface.addresses) {
           final ip = addr.address;
-          if (ip.startsWith('127.') || ip.startsWith('169.254.')) continue;
-          if (ip.startsWith('10.') ||
-              ip.startsWith('192.168.') ||
-              ip.startsWith('172.16.') ||
-              ip.startsWith('172.17.') ||
-              ip.startsWith('172.18.') ||
-              ip.startsWith('172.19.') ||
-              ip.startsWith('172.2') ||
-              ip.startsWith('172.30.') ||
-              ip.startsWith('172.31.')) {
+
+          // Skip loopback and link-local
+          if (ip.startsWith('127.') || ip.startsWith('169.254.')) {
+            continue;
+          }
+
+          // Skip VPN/virtual IPs (100.64.0.0/10 - CGNAT, often used by VPNs)
+          if (ip.startsWith('100.')) {
+            fallbackIp ??= ip; // Keep as fallback
+            continue;
+          }
+
+          // Prioritize common local network ranges
+          // 192.168.0.0/16 - Most common home networks
+          if (ip.startsWith('192.168.')) {
             return ip;
           }
+
+          // 10.0.0.0/8 - Large private networks
+          if (ip.startsWith('10.')) {
+            return ip;
+          }
+
+          // 172.16.0.0/12 - Private networks (172.16.x.x to 172.31.x.x)
+          if (ip.startsWith('172.')) {
+            final parts = ip.split('.');
+            if (parts.length >= 2) {
+              final secondOctet = int.tryParse(parts[1]);
+              if (secondOctet != null &&
+                  secondOctet >= 16 &&
+                  secondOctet <= 31) {
+                return ip;
+              }
+            }
+          }
+
+          // Keep any other non-loopback IP as fallback
+          fallbackIp ??= ip;
         }
       }
-      // Fallback: first non-loopback IPv4
-      for (final iface in interfaces) {
-        for (final addr in iface.addresses) {
-          final ip = addr.address;
-          if (!ip.startsWith('127.') && !ip.startsWith('169.254.')) return ip;
-        }
-      }
+
+      // Return fallback if no preferred IP found
+      return fallbackIp;
     } catch (_) {}
     return null;
   }
 
   Future<void> _startWebServer() async {
     try {
-      _localIp ??= await _getLocalIpv4();
-      _uploadServer?.close(force: true);
-      // Try to load TLS certificate/key from project certs or assets and bind secure if available
-      SecurityContext? sc;
-      try {
-        // First try relative project folder (useful during development)
-        final certFile = File('temp-server/certs/server.crt');
-        final keyFile = File('temp-server/certs/server.key');
-        if (await certFile.exists() && await keyFile.exists()) {
-          sc = SecurityContext();
-          sc.useCertificateChain(certFile.path);
-          sc.usePrivateKey(keyFile.path);
-        } else {
-          // Fallback: try loading from assets (assets/certs/...)
-          final certData = await rootBundle.load('assets/certs/server.crt');
-          final keyData = await rootBundle.load('assets/certs/server.key');
-          sc = SecurityContext();
-          sc.useCertificateChainBytes(certData.buffer.asUint8List());
-          sc.usePrivateKeyBytes(keyData.buffer.asUint8List());
-        }
-      } catch (e) {
-        sc = null;
+      // Get local IP first
+      final ip = await _getLocalIpv4();
+      if (ip == null) {
+        throw Exception(
+          'Could not get local IP address. Please check WiFi connection.',
+        );
       }
 
-      if (sc != null) {
-        _uploadServer = await HttpServer.bindSecure(
-          InternetAddress.anyIPv4,
-          8090,
-          sc,
-        );
-        _useHttps = true;
-      } else {
-        _uploadServer = await HttpServer.bind(InternetAddress.anyIPv4, 8090);
-        _useHttps = false;
-      }
+      setState(() {
+        _localIp = ip;
+      });
+
+      // Close any existing server
+      await _uploadServer?.close(force: true);
+
+      // Bind to the port
+      _uploadServer = await HttpServer.bind(InternetAddress.anyIPv4, _port);
+
+      print('Web server started at http://$_localIp:$_port');
+
       setState(() {
         _isHosting = true;
       });
@@ -402,24 +493,43 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
           await _handlePutUpload(request);
           return;
         }
-        if (request.method == 'GET' && path.startsWith('/download/')) {
-          await _handleDownload(request);
-          return;
-        }
-        if (request.method == 'GET' && path == '/files') {
-          await _serveFilesList(request);
-          return;
-        }
         request.response.statusCode = HttpStatus.notFound;
         await request.response.close();
       });
 
-      _showSnackBar('Web server started! Share the URL with others.');
+      if (mounted) {
+        HapticFeedback.mediumImpact();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Web server started at http://$_localIp:$_port',
+              style: GoogleFonts.outfit(color: Colors.black),
+            ),
+            backgroundColor: const Color(0xFFFFD600),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     } catch (e) {
       setState(() {
         _isHosting = false;
+        _localIp = null;
       });
-      _showSnackBar('Failed to start web server: $e');
+      print('Failed to start server: $e');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to start server: $e',
+              style: GoogleFonts.outfit(color: Colors.white),
+            ),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
     }
   }
 
@@ -428,23 +538,19 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     setState(() {
       _isHosting = false;
     });
-    _showSnackBar('Web server stopped');
     await _stopForegroundService();
+    HapticFeedback.mediumImpact();
   }
 
   Future<void> _serveLogo(HttpRequest request) async {
     try {
       final ByteData logoData = await rootBundle.load('assets/images/logo.png');
       final bytes = logoData.buffer.asUint8List();
-
       request.response.statusCode = HttpStatus.ok;
       request.response.headers.contentType = ContentType('image', 'png');
-      request.response.headers.set('Cache-Control', 'public, max-age=86400');
-      request.response.headers.set('Access-Control-Allow-Origin', '*');
       request.response.add(bytes);
       await request.response.close();
     } catch (e) {
-      print('Error serving logo: $e');
       request.response.statusCode = HttpStatus.notFound;
       await request.response.close();
     }
@@ -462,422 +568,54 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ZapShare - Upload Files</title>
   <style>
-    * { 
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box; 
-    }
-    
-    body { 
-      margin: 0; 
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; 
-      background: #000000; 
-      color: #ffffff; 
-      min-height: 100vh;
-      display: flex;
-      overflow-x: hidden;
-    }
-
-    .app-layout {
-      display: flex;
-      width: 100%;
-      min-height: 100vh;
-    }
-
-    /* MAIN CONTENT */
-    .main-content {
-      flex: 1;
-      padding: 120px 40px 40px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      position: relative;
-      z-index: 10;
-      width: 100%;
-    }
-    
-    .container { 
-      max-width: 700px; 
-      width: 100%;
-    }
-
-    /* MOBILE RESPONSIVE */
-    @media (max-width: 1024px) {
-      .main-content {
-        padding: 80px 20px 30px;
-      }
-    }
-
-    @media (max-width: 768px) {
-      .container {
-        max-width: 100%;
-      }
-    }
-
-    @media (max-width: 480px) {
-      .main-content {
-        padding: 30px 16px;
-      }
-    }
-    
-    .card { 
-      background: rgba(26, 26, 26, 0.8); 
-      border: 1px solid rgba(255, 255, 255, 0.1); 
-      border-radius: 16px; 
-      padding: 36px 44px; 
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(40px);
-      animation: fadeInUp 0.6s ease-out 0.3s both;
-    }
-    
-    @media (max-width: 768px) {
-      .card {
-        padding: 24px 18px;
-      }
-    }
-
-    @media (max-width: 480px) {
-      .card {
-        padding: 24px 20px;
-      }
-    }
-    
-    .header {
-      text-align: center;
-      margin-bottom: 28px;
-    }
-    
-    .title {
-      font-size: 20px;
-      font-weight: 600;
-      color: #ffffff;
-      margin-bottom: 6px;
-      letter-spacing: -0.3px;
-    }
-    
-    .subtitle {
-      font-size: 13px;
-      color: rgba(255, 255, 255, 0.6);
-      font-weight: 400;
-      line-height: 1.5;
-    }
-    
-    .upload-area { 
-      border: 2px dashed rgba(255, 255, 255, 0.2); 
-      border-radius: 12px; 
-      padding: 32px 24px; 
-      text-align: center; 
-      background: rgba(0, 0, 0, 0.3); 
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      margin: 0 0 20px 0;
-      cursor: pointer;
-    }
-    
-    .upload-area:hover {
-      border-color: rgba(255, 235, 59, 0.5);
-      background: rgba(255, 235, 59, 0.05);
-      transform: translateY(-2px);
-    }
-    
-    .upload-area.dragover {
-      border-color: #FFEB3B;
-      background: rgba(255, 235, 59, 0.1);
-      transform: scale(1.02);
-      box-shadow: 0 8px 24px rgba(255, 235, 59, 0.2);
-    }
-    
-    input[type=file] { 
-      display: none;
-    }
-    
-    .file-input-label {
-      display: inline-block;
-      padding: 14px 28px;
-      background: linear-gradient(135deg, #FFEB3B 0%, #FFF176 100%);
-      color: #000;
-      border-radius: 12px;
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 14px;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: 0 4px 16px rgba(255, 235, 59, 0.3);
-    }
-    
-    .file-input-label:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 24px rgba(255, 235, 59, 0.4);
-    }
-    
-    .file-input-label:active {
-      transform: translateY(0);
-    }
-    
-    .upload-text {
-      margin: 0 0 12px 0;
-      color: rgba(255, 255, 255, 0.7);
-      font-size: 15px;
-      font-weight: 500;
-    }
-    
-    .upload-hint { 
-      margin-top: 16px; 
-      color: rgba(255, 255, 255, 0.4); 
-      font-size: 11px; 
-      line-height: 1.4;
-    }
-    
-    .selected-files {
-      margin: 0 0 20px 0;
-      padding: 16px;
-      background: rgba(0, 0, 0, 0.3);
-      border-radius: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      display: none;
-      max-height: 300px;
-      overflow-y: auto;
-    }
-    
-    .selected-files::-webkit-scrollbar {
-      width: 6px;
-    }
-    
-    .selected-files::-webkit-scrollbar-track {
-      background: rgba(255, 255, 255, 0.05);
-      border-radius: 10px;
-    }
-    
-    .selected-files::-webkit-scrollbar-thumb {
-      background: rgba(255, 235, 59, 0.3);
-      border-radius: 10px;
-    }
-    
-    .selected-files h4 {
-      margin: 0 0 12px 0;
-      color: #FFEB3B;
-      font-size: 13px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    
-    .file-item {
-      padding: 12px 0;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    
-    .file-item:last-child {
-      border-bottom: none;
-      padding-bottom: 0;
-    }
-    
-    .file-name {
-      color: #fff;
-      font-weight: 600;
-      font-size: 14px;
-      margin-bottom: 4px;
-    }
-    
-    .file-size {
-      color: rgba(255, 255, 255, 0.5);
-      font-size: 12px;
-      font-weight: 500;
-    }
-    
-    .upload-btn { 
-      width: 100%; 
-      padding: 14px; 
-      background: linear-gradient(135deg, #FFEB3B 0%, #FFF176 100%);
-      color: #000; 
-      border: none; 
-      border-radius: 12px; 
-      font-weight: 600; 
-      font-size: 14px;
-      cursor: pointer;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: 0 4px 16px rgba(255, 235, 59, 0.3);
-      margin-top: 0;
-    }
-    
-    .upload-btn:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 24px rgba(255, 235, 59, 0.4);
-    }
-    
-    .upload-btn:active {
-      transform: translateY(0);
-    }
-    
-    .upload-btn:disabled {
-      background: rgba(255, 255, 255, 0.1);
-      color: rgba(255, 255, 255, 0.3);
-      cursor: not-allowed;
-      transform: none;
-      box-shadow: none;
-    }
-    
-    .progress {
-      width: 100%;
-      height: 4px;
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: 2px;
-      overflow: hidden;
-      margin: 16px 0;
-      display: none;
-    }
-    
-    .progress-bar {
-      height: 100%;
-      background: linear-gradient(90deg, #FFEB3B 0%, #FFF176 100%);
-      width: 0%;
-      transition: width 0.3s ease;
-    }
-    
-    .message { 
-      margin-top: 16px; 
-      padding: 14px 18px; 
-      border-radius: 10px; 
-      text-align: center;
-      font-weight: 500;
-      font-size: 13px;
-    }
-    
-    .success { 
-      background: rgba(52, 199, 89, 0.15);
-      border: 1px solid rgba(52, 199, 89, 0.3);
-      color: #34c759;
-    }
-    
-    .error { 
-      background: rgba(255, 59, 48, 0.15);
-      border: 1px solid rgba(255, 59, 48, 0.3);
-      color: #ff3b30;
-    }
-    
-    .info-section {
-      margin-top: 28px;
-      padding-top: 20px;
-      border-top: 1px solid rgba(255, 255, 255, 0.08);
-    }
-    
-    .info-title {
-      font-size: 12px;
-      font-weight: 600;
-      color: #FFEB3B;
-      margin-bottom: 10px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    
-    .info-text {
-      font-size: 13px;
-      color: rgba(255, 255, 255, 0.6);
-      line-height: 1.8;
-    }
-    
-    @keyframes fadeIn {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    
-    @keyframes fadeInUp {
-      from { opacity: 0; transform: translateY(20px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    @keyframes fadeInDown {
-      from { opacity: 0; transform: translateY(-20px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    @keyframes slideIn {
-      from { opacity: 0; transform: translateY(-10px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    
-    @media (max-width: 640px) {
-      .logo-container {
-        top: 16px;
-      }
-      
-      .brand-title {
-        font-size: 16px;
-      }
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #000000; color: #ffffff; min-height: 100vh; display: flex; overflow-x: hidden; }
+    .main-content { flex: 1; padding: 40px; display: flex; align-items: center; justify-content: center; }
+    .container { max-width: 700px; width: 100%; }
+    .card { background: rgba(26, 26, 26, 0.8); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 24px; padding: 40px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); backdrop-filter: blur(40px); }
+    .logo { width: 64px; height: 64px; margin-bottom: 24px; }
+    .title { font-size: 28px; font-weight: 700; color: #ffffff; margin-bottom: 8px; letter-spacing: -0.5px; }
+    .subtitle { font-size: 14px; color: #888; margin-bottom: 32px; }
+    .upload-area { border: 2px dashed rgba(255, 214, 0, 0.3); border-radius: 20px; padding: 48px 32px; text-align: center; background: rgba(255, 214, 0, 0.05); margin-bottom: 24px; cursor: pointer; transition: all 0.3s; }
+    .upload-area:hover { border-color: rgba(255, 214, 0, 0.6); background: rgba(255, 214, 0, 0.1); }
+    .upload-icon { font-size: 48px; margin-bottom: 16px; }
+    .file-input-label { display: inline-block; padding: 16px 32px; background: linear-gradient(135deg, #FFD600 0%, #FFC400 100%); color: #000; border-radius: 16px; cursor: pointer; font-weight: 700; font-size: 16px; transition: transform 0.2s; }
+    .file-input-label:hover { transform: translateY(-2px); }
+    .upload-btn { width: 100%; padding: 18px; background: linear-gradient(135deg, #FFD600 0%, #FFC400 100%); color: #000; border: none; border-radius: 16px; font-weight: 700; font-size: 16px; cursor: pointer; transition: transform 0.2s; }
+    .upload-btn:hover { transform: translateY(-2px); }
+    .upload-btn:disabled { background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.3); cursor: not-allowed; transform: none; }
+    .message { margin-bottom: 16px; color: #aaa; font-size: 14px; min-height: 20px; }
+    .progress-bar { width: 100%; height: 8px; background: rgba(255, 255, 255, 0.1); border-radius: 8px; overflow: hidden; margin-bottom: 16px; display: none; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #FFD600, #FFC400); width: 0%; transition: width 0.3s; }
   </style>
   <script>
     let selectedFiles = [];
-    
     document.addEventListener('DOMContentLoaded', function() {
       const uploadArea = document.getElementById('uploadArea');
       const fileInput = document.getElementById('files');
-      const selectedFilesDiv = document.getElementById('selectedFiles');
       const uploadBtn = document.getElementById('uploadBtn');
-      const progress = document.getElementById('progress');
-      const progressBar = document.getElementById('progressBar');
       const message = document.getElementById('message');
+      const progressBar = document.getElementById('progressBar');
+      const progressFill = document.getElementById('progressFill');
       
-      uploadArea.addEventListener('dragover', function(e) {
-        e.preventDefault();
-        uploadArea.classList.add('dragover');
-      });
-      uploadArea.addEventListener('dragleave', function(e) {
-        e.preventDefault();
-        uploadArea.classList.remove('dragover');
-      });
-      uploadArea.addEventListener('drop', function(e) {
-        e.preventDefault();
-        uploadArea.classList.remove('dragover');
-        handleFiles(e.dataTransfer.files);
-      });
-      fileInput.addEventListener('change', function(e) {
-        handleFiles(e.target.files);
-      });
+      uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.style.borderColor = 'rgba(255, 214, 0, 0.8)'; });
+      uploadArea.addEventListener('dragleave', e => { e.preventDefault(); uploadArea.style.borderColor = ''; });
+      uploadArea.addEventListener('drop', e => { e.preventDefault(); uploadArea.style.borderColor = ''; handleFiles(e.dataTransfer.files); });
+      fileInput.addEventListener('change', e => handleFiles(e.target.files));
       
       function handleFiles(files) {
         selectedFiles = Array.from(files);
-        displaySelectedFiles();
         uploadBtn.disabled = selectedFiles.length === 0;
-      }
-      
-      function displaySelectedFiles() {
-        if (selectedFiles.length === 0) {
-          selectedFilesDiv.style.display = 'none';
-          return;
-        }
-        selectedFilesDiv.style.display = 'block';
-        selectedFilesDiv.innerHTML = '<h4 style="margin: 0 0 12px 0; color: #FFEB3B;">Selected Files:</h4>';
-        selectedFiles.forEach(file => {
-          const fileItem = document.createElement('div');
-          fileItem.className = 'file-item';
-          fileItem.innerHTML = `
-            <div>
-              <div class="file-name">\${file.name}</div>
-              <div class="file-size">\${formatFileSize(file.size)}</div>
-            </div>
-          `;
-          selectedFilesDiv.appendChild(fileItem);
-        });
-      }
-      
-      function formatFileSize(bytes) {
-        if (bytes === 0) return '0 Bytes';
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        message.innerText = selectedFiles.length + ' file(s) selected';
       }
       
       uploadBtn.addEventListener('click', async () => {
         if (selectedFiles.length === 0) return;
         uploadBtn.disabled = true;
-        progress.style.display = 'block';
-        message.innerHTML = '';
+        message.innerText = 'Requesting permission...';
+        progressBar.style.display = 'block';
         
         try {
-          // Ask device for permission
           const meta = selectedFiles.map(f => ({ name: f.name, size: f.size }));
           const approveResp = await fetch('/request-upload', {
             method: 'POST',
@@ -886,219 +624,66 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
           });
           const approve = await approveResp.json();
           if (!approve.approved) {
-            message.innerHTML = '<div class="message error">Upload denied on device</div>';
-            progress.style.display = 'none';
+            message.innerText = 'Upload denied on device';
             uploadBtn.disabled = false;
+            progressBar.style.display = 'none';
             return;
           }
 
-          // Build per-file progress list
-          let list = document.getElementById('file-progress-list');
-          if (!list) {
-            list = document.createElement('div');
-            list.id = 'file-progress-list';
-            list.style.marginTop = '16px';
-            selectedFilesDiv.appendChild(list);
-          }
-          list.innerHTML = '';
-
-          const items = [];
-          selectedFiles.forEach((file, i) => {
-            const wrapper = document.createElement('div');
-            wrapper.style.cssText = 'margin:8px 0; padding:8px; background: rgba(255,255,255,0.05); border-radius:8px;';
-            wrapper.innerHTML = `
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                <div>
-                  <div style="color:#fff; font-weight:500; font-size:14px;">\${file.name}</div>
-                  <div style="color:#ccc; font-size:12px;">\${formatFileSize(file.size)}</div>
-                </div>
-                <div style="display:flex; align-items:center;">
-                  <div style="width:140px; height:6px; background: rgba(255,255,255,0.2); border-radius:3px; margin-right:10px;">
-                    <div id="fpb-\${i}" style="width:0%; height:100%; background:#FFEB3B; border-radius:3px;"></div>
-                  </div>
-                  <span id="fpp-\${i}" style="color:#FFEB3B; font-weight:600; font-size:12px; width:40px; text-align:right;">0%</span>
-                </div>
-              </div>`;
-            list.appendChild(wrapper);
-            items.push({ barId: `fpb-\${i}`, pctId: `fpp-\${i}` });
-          });
-
-          function updateOverall(currentIndex, currentFraction) {
-            const overall = ((currentIndex + currentFraction) / selectedFiles.length) * 100;
-            progressBar.style.width = overall + '%';
-          }
-
-          function uploadFileWithProgress(file, idx) {
-            return new Promise((resolve) => {
+          message.innerText = 'Uploading...';
+          for (let i = 0; i < selectedFiles.length; i++) {
+            const file = selectedFiles[i];
+            const progress = ((i / selectedFiles.length) * 100).toFixed(0);
+            progressFill.style.width = progress + '%';
+            
+            await new Promise((resolve, reject) => {
               const xhr = new XMLHttpRequest();
-              xhr.open('PUT', `/upload?name=\${encodeURIComponent(file.name)}`);
-              xhr.upload.onprogress = (e) => {
-                if (e.lengthComputable) {
-                  const pct = Math.min(100, Math.max(0, Math.round((e.loaded / e.total) * 100)));
-                  const bar = document.getElementById(items[idx].barId);
-                  const pctEl = document.getElementById(items[idx].pctId);
-                  if (bar) bar.style.width = pct + '%';
-                  if (pctEl) pctEl.textContent = pct + '%';
-                  updateOverall(idx, e.total ? (e.loaded / e.total) : 0);
-                }
-              };
-              xhr.onload = () => {
-                const bar = document.getElementById(items[idx].barId);
-                const pctEl = document.getElementById(items[idx].pctId);
-                if (xhr.status >= 200 && xhr.status < 300) {
-                  if (bar) bar.style.background = '#4CAF50';
-                  if (pctEl) pctEl.textContent = '100%';
-                } else {
-                  if (bar) bar.style.background = '#f44336';
-                  if (pctEl) pctEl.textContent = '✗';
-                  if (pctEl) pctEl.style.color = '#f44336';
-                }
-                updateOverall(idx + 1, 0);
-                resolve(xhr.status >= 200 && xhr.status < 300);
-              };
-              xhr.onerror = () => {
-                const bar = document.getElementById(items[idx].barId);
-                const pctEl = document.getElementById(items[idx].pctId);
-                if (bar) bar.style.background = '#f44336';
-                if (pctEl) pctEl.textContent = '✗';
-                if (pctEl) pctEl.style.color = '#f44336';
-                updateOverall(idx + 1, 0);
-                resolve(false);
-              };
+              xhr.open('PUT', '/upload?name=' + encodeURIComponent(file.name));
+              xhr.onload = () => xhr.status === 200 ? resolve() : reject();
+              xhr.onerror = () => reject();
               xhr.send(file);
             });
+            message.innerText = 'Uploaded ' + (i + 1) + '/' + selectedFiles.length;
           }
-
-          let uploaded = 0;
-          for (let i = 0; i < selectedFiles.length; i++) {
-            const ok = await uploadFileWithProgress(selectedFiles[i], i);
-            if (ok) uploaded++;
-          }
-
-          if (uploaded === selectedFiles.length) {
-            message.innerHTML = `<div class=\"message success\">Successfully uploaded \${uploaded} file(s)</div>`;
-          } else {
-            message.innerHTML = `<div class=\"message error\">Uploaded \${uploaded}/\${selectedFiles.length} file(s)</div>`;
-          }
+          progressFill.style.width = '100%';
+          message.innerText = '✓ Upload Complete!';
+          message.style.color = '#4CAF50';
         } catch (e) {
-          message.innerHTML = `<div class=\"message error\">Upload failed: \${e}</div>`;
+          message.innerText = '✗ Upload failed: ' + e;
+          message.style.color = '#f44336';
         } finally {
-          progress.style.display = 'none';
           uploadBtn.disabled = false;
+          selectedFiles = [];
+          setTimeout(() => {
+            progressBar.style.display = 'none';
+            progressFill.style.width = '0%';
+            message.style.color = '#aaa';
+          }, 3000);
         }
       });
     });
   </script>
 </head>
 <body>
-  <div class="app-layout">
-    <!-- MAIN CONTENT -->
-    <div class="main-content">
-      <div class="container">
-        <div class="card">
-          <div class="header">
-            <h2 class="title">Upload Files</h2>
-            <p class="subtitle">Send files to this device instantly</p>
-          </div>
-          
-          <div class="upload-area" id="uploadArea">
-            <div class="upload-text">Drag & drop files here</div>
-            <div style="color: rgba(255, 255, 255, 0.3); margin: 16px 0; font-size: 13px;">or</div>
-            <label for="files" class="file-input-label">Choose Files</label>
-            <input id="files" type="file" multiple />
-            <div class="upload-hint">Files will be transferred over your local network</div>
-          </div>
-          
-          <div id="selectedFiles" class="selected-files"></div>
-          
-          <div class="progress" id="progress">
-            <div class="progress-bar" id="progressBar"></div>
-          </div>
-          
-          <button id="uploadBtn" class="upload-btn" disabled>Upload Files</button>
-          
-          <div id="message"></div>
-          
-          <div class="info-section">
-            <h3 class="info-title">How it works</h3>
-            <p class="info-text">
-              1. Choose or drag files to upload<br>
-              2. Files are sent directly to the device<br>
-              3. Fast, secure, and completely private
-            </p>
-          </div>
+  <div class="main-content">
+    <div class="container">
+      <div class="card">
+        <div class="upload-icon">⚡</div>
+        <h2 class="title">ZapShare Upload</h2>
+        <p class="subtitle">Send files to your device</p>
+        <div class="upload-area" id="uploadArea">
+          <label for="files" class="file-input-label">Choose Files</label>
+          <input id="files" type="file" multiple style="display:none" />
+          <p style="margin-top: 16px; color: #666; font-size: 13px;">or drag and drop files here</p>
         </div>
+        <div id="message" class="message"></div>
+        <div id="progressBar" class="progress-bar">
+          <div id="progressFill" class="progress-fill"></div>
+        </div>
+        <button id="uploadBtn" class="upload-btn" disabled>Upload Files</button>
       </div>
     </div>
   </div>
-  
-  <script>
-    // Load pending files on page load
-    document.addEventListener('DOMContentLoaded', function() {
-      loadPendingFiles();
-      // Refresh every 3 seconds
-      setInterval(loadPendingFiles, 3000);
-    });
-    
-    async function loadPendingFiles() {
-      try {
-        const response = await fetch('/pending');
-        const files = await response.json();
-        displayPendingFiles(files);
-      } catch (error) {
-        console.error('Failed to load pending files:', error);
-        document.getElementById('availableFiles').innerHTML = '<div class="error">Failed to load pending files</div>';
-      }
-    }
-    
-    function displayPendingFiles(files) {
-      const container = document.getElementById('availableFiles');
-      
-      if (files.length === 0) {
-        container.innerHTML = '<div class="no-files">No pending files - upload some files to see them here</div>';
-        return;
-      }
-      
-      container.innerHTML = files.map(file => `
-        <div class="file-item available-file-item">
-          <div class="file-info">
-            <div class="file-name">\${file.name}</div>
-            <div class="file-details">\${formatFileSize(file.size)} • \${formatDate(file.uploadedAt)} • Pending download</div>
-          </div>
-          <div style="color: #FFEB3B; font-size: 12px; font-weight: 500;">
-            Ready on device
-          </div>
-        </div>
-      `).join('');
-    }
-    
-    async function downloadFile(fileName) {
-      try {
-        const response = await fetch(`/download/\${fileName}`);
-        if (response.ok) {
-          const blob = await response.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.style.display = 'none';
-          a.href = url;
-          a.download = decodeURIComponent(fileName);
-          document.body.appendChild(a);
-          a.click();
-          window.URL.revokeObjectURL(url);
-          document.body.removeChild(a);
-        } else {
-          alert('Download failed: ' + response.statusText);
-        }
-      } catch (error) {
-        alert('Download failed: ' + error.message);
-      }
-    }
-    
-    function formatDate(dateString) {
-      const date = new Date(dateString);
-      return date.toLocaleTimeString();
-    }
-  </script>
 </body>
 </html>
 ''';
@@ -1106,115 +691,6 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     await response.close();
   }
 
-  Future<void> _ensureSaveFolder() async {
-    if (_saveFolder == null) {
-      _saveFolder = await _getDefaultDownloadFolder();
-    }
-    final dir = Directory(_saveFolder!);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-  }
-
-  Future<void> _promptForFolderPath() async {
-    final controller = TextEditingController(
-      text: _customSaveFolder ?? _saveFolder ?? '',
-    );
-    final chosen = await showDialog<String>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: Colors.grey[900],
-          title: Text('Set save folder', style: TextStyle(color: Colors.white)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Enter a folder path. If it does not exist, it will be created.',
-                style: TextStyle(color: Colors.grey[400], fontSize: 12),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: controller,
-                style: TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  hintText: '/storage/emulated/0/Download/ZapShare',
-                  hintStyle: TextStyle(color: Colors.grey[600]),
-                  filled: true,
-                  fillColor: Colors.grey[850],
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(color: Colors.grey[800]!),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(null),
-              child: Text('Cancel', style: TextStyle(color: Colors.grey[400])),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(''),
-              child: Text(
-                'Use Default',
-                style: TextStyle(color: Colors.yellow[300]),
-              ),
-            ),
-            TextButton(
-              onPressed:
-                  () => Navigator.of(context).pop(controller.text.trim()),
-              child: Text('Save', style: TextStyle(color: Colors.yellow[300])),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (chosen == null) return; // cancelled
-    if (chosen.isEmpty) {
-      await _setCustomFolder(null);
-      _showSnackBar('Save folder reset to default');
-      return;
-    }
-
-    try {
-      final dir = Directory(chosen);
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
-      }
-      await _setCustomFolder(dir.path);
-      _showSnackBar('Save folder set');
-    } catch (e) {
-      _showSnackBar('Failed to set folder: $e');
-    }
-  }
-
-  Future<void> _handlePutUpload(HttpRequest request) async {
-    try {
-      // Enforce approval window
-      final now = DateTime.now();
-      if (!_uploadApprovalActive ||
-          _uploadApprovalExpiresAt == null ||
-          now.isAfter(_uploadApprovalExpiresAt!)) {
-        request.response.statusCode = HttpStatus.forbidden;
-        request.response.headers.set('Access-Control-Allow-Origin', '*');
-        request.response.write('Upload not approved on device');
-        await request.response.close();
-        return;
-      }
-      // Handle full file transfer
-      await _handleFileTransfer(request);
-    } catch (e) {
-      request.response.statusCode = HttpStatus.internalServerError;
-      request.response.write('Upload failed: $e');
-      await request.response.close();
-    }
-  }
-
-  // Handle browser asking for permission to upload files
   Future<void> _handleRequestUpload(HttpRequest request) async {
     try {
       final body = await utf8.decodeStream(request);
@@ -1225,16 +701,59 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
               .map((m) => {'name': m['name'], 'size': m['size']})
               .toList();
 
-      if (!mounted) {
-        request.response.statusCode = HttpStatus.ok;
-        request.response.headers.set('Content-Type', 'application/json');
-        request.response.headers.set('Access-Control-Allow-Origin', '*');
-        request.response.write(jsonEncode({'approved': false}));
-        await request.response.close();
-        return;
-      }
+      if (!mounted) return;
 
-      final approved = await _showUploadApprovalDialog(files);
+      final approved =
+          await showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder:
+                (context) => AlertDialog(
+                  backgroundColor: const Color(0xFF1C1C1E),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  title: Text(
+                    'Allow Upload?',
+                    style: GoogleFonts.outfit(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  content: Text(
+                    'Receive ${files.length} file(s) from web?',
+                    style: GoogleFonts.outfit(color: Colors.grey[400]),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: Text(
+                        'Deny',
+                        style: GoogleFonts.outfit(
+                          color: Colors.red,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFFD600),
+                        foregroundColor: Colors.black,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: Text(
+                        'Allow',
+                        style: GoogleFonts.outfit(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+          ) ??
+          false;
+
       if (approved) {
         setState(() {
           _uploadApprovalActive = true;
@@ -1245,385 +764,292 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       }
 
       request.response.statusCode = HttpStatus.ok;
-      request.response.headers.set('Content-Type', 'application/json');
+      request.response.headers.contentType = ContentType.json;
       request.response.headers.set('Access-Control-Allow-Origin', '*');
       request.response.write(jsonEncode({'approved': approved}));
       await request.response.close();
     } catch (e) {
       request.response.statusCode = HttpStatus.internalServerError;
-      request.response.write('Failed to request approval: $e');
       await request.response.close();
     }
   }
 
-  Future<bool> _showUploadApprovalDialog(
-    List<Map<String, dynamic>> files,
-  ) async {
-    final totalSize = files.fold<int>(
-      0,
-      (sum, f) => sum + (f['size'] as int? ?? 0),
-    );
-    return await showDialog<bool>(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) {
-            return AlertDialog(
-              backgroundColor: Colors.grey[900],
-              title: Text(
-                'Allow upload?',
-                style: TextStyle(color: Colors.white),
-              ),
-              content: SizedBox(
-                width: double.maxFinite,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${files.length} file(s) • ${_formatBytes(totalSize)}',
-                      style: TextStyle(color: Colors.grey[300]),
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      constraints: const BoxConstraints(maxHeight: 180),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[850],
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.grey[800]!),
-                      ),
-                      child: ListView.builder(
-                        shrinkWrap: true,
-                        itemCount: files.length,
-                        itemBuilder: (context, index) {
-                          final f = files[index];
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.insert_drive_file,
-                                  color: Colors.yellow[300],
-                                  size: 16,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    '${f['name']}',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 13,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  _formatBytes((f['size'] as int?) ?? 0),
-                                  style: TextStyle(
-                                    color: Colors.grey[400],
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Uploads will be allowed for 2 minutes.',
-                      style: TextStyle(color: Colors.grey[500], fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(context).pop(false);
-                  },
-                  child: Text('Deny', style: TextStyle(color: Colors.red[300])),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(context).pop(true);
-                  },
-                  child: Text(
-                    'Allow',
-                    style: TextStyle(color: Colors.yellow[300]),
-                  ),
-                ),
-              ],
-            );
-          },
-        ) ??
-        false;
+  Future<void> _handlePutUpload(HttpRequest request) async {
+    try {
+      if (!_uploadApprovalActive ||
+          _uploadApprovalExpiresAt == null ||
+          DateTime.now().isAfter(_uploadApprovalExpiresAt!)) {
+        request.response.statusCode = HttpStatus.forbidden;
+        await request.response.close();
+        return;
+      }
+      await _handleFileTransfer(request);
+    } catch (e) {
+      request.response.statusCode = HttpStatus.internalServerError;
+      await request.response.close();
+    }
   }
 
-  // (Removed preview chunk handler as previews are no longer used)
-
-  // Handle actual file transfer when download is initiated
   Future<void> _handleFileTransfer(HttpRequest request) async {
     try {
-      await _ensureSaveFolder();
-      final fileName = request.uri.queryParameters['name'] ?? 'unknown_file';
-      String savePath = '$_saveFolder/$fileName';
-      final totalBytes = request.headers.contentLength; // -1 if unknown
+      // Sanitize filename to prevent path traversal or invalid char issues
+      final rawName = request.uri.queryParameters['name'] ?? 'unknown_file';
+      final fileName = rawName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
 
-      // Handle duplicate filenames
+      String savePath = '$_saveFolder/$fileName';
+
       int count = 1;
-      String originalFileName = fileName;
-      while (await File(savePath).exists()) {
-        final bits = originalFileName.split('.');
-        if (bits.length > 1) {
-          final base = bits.sublist(0, bits.length - 1).join('.');
-          final ext = bits.last;
-          savePath = '$_saveFolder/${base}_$count.$ext';
+      while (File(savePath).existsSync()) {
+        final parts = fileName.split('.');
+        if (parts.length > 1) {
+          savePath =
+              '$_saveFolder/${parts.sublist(0, parts.length - 1).join('.')}_$count.${parts.last}';
         } else {
-          savePath = '$_saveFolder/${originalFileName}_$count';
+          savePath = '$_saveFolder/${fileName}_$count';
         }
         count++;
       }
 
-      // Prepare ongoing download entry for progress UI
       setState(() {
         _ongoingDownloads[fileName] = ReceivedFile(
           name: fileName,
-          size: totalBytes > 0 ? totalBytes : 0,
+          size: request.contentLength,
           path: savePath,
           receivedAt: DateTime.now(),
           progress: 0.0,
-          status: 'Receiving... 0%',
+          status: 'Receiving...',
           isUploading: true,
         );
       });
 
-      // Save file content directly to final destination
       final file = File(savePath);
       final sink = file.openWrite();
-      int bytesReceived = 0;
-      int bytesSinceFlush = 0;
-      const int flushThreshold =
-          512 * 1024; // flush every 512KB to limit memory buffering
-      var lastUiUpdate = DateTime.now();
-      final startTime = DateTime.now();
+      int received = 0;
+      int lastNotify = 0;
+      int lastBytes = 0;
+      DateTime lastSpeedTime = DateTime.now();
+      bool uploadSuccess = false;
 
-      // Use an explicit StreamSubscription so we can apply simple backpressure:
-      // pause the incoming stream while we flush the file sink occasionally.
-      final subscription = request.listen(null);
-
-      subscription.onData((chunk) async {
-        // Pause the subscription while we write and (sometimes) flush to avoid build-up
-        subscription.pause();
-        try {
+      try {
+        await for (var chunk in request) {
           sink.add(chunk);
-          bytesReceived += chunk.length;
-          bytesSinceFlush += chunk.length;
+          received += chunk.length;
 
-          // Flush periodically to push bytes to disk and keep memory usage bounded
-          if (bytesSinceFlush >= flushThreshold) {
-            bytesSinceFlush = 0;
-            try {
-              await sink.flush();
-            } catch (_) {}
+          final now = DateTime.now();
+          final elapsed = now.difference(lastSpeedTime).inMilliseconds;
+          double speedMbps = 0.0;
+          if (elapsed > 0) {
+            final bytesDelta = received - lastBytes;
+            speedMbps = (bytesDelta * 8) / (elapsed * 1000);
+            lastBytes = received;
+            lastSpeedTime = now;
           }
 
-          // Throttle UI updates to ~10fps
-          final now = DateTime.now();
-          if (now.difference(lastUiUpdate).inMilliseconds >= 100) {
-            lastUiUpdate = now;
-            if (mounted) {
-              setState(() {
-                final entry = _ongoingDownloads[fileName];
-                if (entry != null) {
-                  final hasTotal = totalBytes > 0;
-                  entry.progress =
-                      hasTotal
-                          ? (bytesReceived / totalBytes).clamp(0.0, 1.0)
-                          : entry.progress;
-                  entry.status =
-                      hasTotal
-                          ? 'Receiving... ${((entry.progress) * 100).toInt()}%'
-                          : 'Receiving... ${_formatBytes(bytesReceived)}';
-                }
-              });
-            }
-
-            // Update notification
-            final hasTotal = totalBytes > 0;
-            final pct =
-                hasTotal
-                    ? ((bytesReceived / totalBytes) * 100).clamp(0, 100).toInt()
+          final nowMs = now.millisecondsSinceEpoch;
+          if (nowMs - lastNotify > 500) {
+            lastNotify = nowMs;
+            final progress =
+                request.contentLength > 0
+                    ? (received / request.contentLength * 100).toInt()
                     : 0;
-
-            // Calculate speed
-            final elapsed = now.difference(startTime).inMilliseconds / 1000.0;
-            final speedMbps =
-                elapsed > 0 ? (bytesReceived / (1024 * 1024)) / elapsed : 0.0;
-
             _showProgressNotification(
               key: fileName,
               fileName: fileName,
-              progress: hasTotal ? pct : 0,
+              progress: progress,
               speedMbps: speedMbps,
             );
+
+            if (mounted) {
+              setState(() {
+                _ongoingDownloads[fileName]?.progress =
+                    request.contentLength > 0
+                        ? received / request.contentLength
+                        : 0.5;
+                _ongoingDownloads[fileName]?.speedMbps = speedMbps;
+              });
+            }
           }
-        } catch (e) {
-          // Re-throw to let outer try/catch handle it via subscription.onError
-          rethrow;
-        } finally {
-          subscription.resume();
+
+          // AGGRESSIVE completion: Break at 99.5% or when all bytes received
+          if (request.contentLength > 0) {
+            if (received >= request.contentLength ||
+                received >= (request.contentLength * 0.995).floor()) {
+              uploadSuccess = true;
+              print('✅ Upload complete: $received/${request.contentLength} bytes');
+              break;
+            }
+          }
         }
-      });
 
-      // Propagate errors to outer try/catch
-      subscription.onError((e) {
-        throw e;
-      });
+        // If loop finished naturally
+        if (!uploadSuccess) {
+          uploadSuccess = true;
+        }
+      } catch (e) {
+        // Recovery: Accept upload if we got 95%+ of expected size
+        if (request.contentLength > 0 &&
+            received >= (request.contentLength * 0.95).floor()) {
+          uploadSuccess = true;
+          print(
+            '⚠️ Stream error but recovered: $received/${request.contentLength} bytes - $e',
+          );
+        } else {
+          await _cancelProgressNotification(fileName);
+          try {
+            await sink.close();
+          } catch (_) {}
+          try {
+            if (await file.exists()) await file.delete();
+          } catch (_) {}
+          rethrow;
+        }
+      }
 
-      // Await completion of the request stream
-      await subscription.asFuture<void>();
-
-      // Ensure all buffered bytes are flushed and file closed
+      // IMMEDIATE file close
       try {
         await sink.flush();
-      } catch (_) {}
-      await sink.close();
+        await sink.close();
+      } catch (e) {
+        print('File close error (ignored): $e');
+      }
+      
+      await _cancelProgressNotification(fileName);
 
-      // Add to received files and remove from pending
-      setState(() {
-        // Remove from ongoing downloads
-        _ongoingDownloads.remove(fileName);
-        _receivedFiles.insert(
-          0,
-          ReceivedFile(
-            name: fileName,
-            size: bytesReceived,
-            path: savePath,
-            receivedAt: DateTime.now(),
-            progress: 1.0,
-            status: 'Complete',
-            isUploading: false,
+      // Only proceed if upload was successful
+      if (uploadSuccess) {
+        setState(() {
+          _ongoingDownloads.remove(fileName);
+          _receivedFiles.insert(
+            0,
+            ReceivedFile(
+              name: fileName,
+              size: received,
+              path: savePath,
+              receivedAt: DateTime.now(),
+              progress: 1.0,
+              status: 'Complete',
+            ),
+          );
+        });
+
+        request.response.statusCode = HttpStatus.ok;
+        request.response.headers.set('Access-Control-Allow-Origin', '*');
+        request.response.headers.set('Connection', 'close');
+        await request.response.close();
+      } else {
+        throw Exception('Upload incomplete');
+      }
+    } catch (e) {
+      await _cancelProgressNotification(
+        request.uri.queryParameters['name'] ?? 'unknown_file',
+      );
+      request.response.statusCode = HttpStatus.internalServerError;
+      await request.response.close();
+    }
+  }
+
+  Future<void> _openFile(ReceivedFile file) async {
+    try {
+      final result = await OpenFile.open(file.path);
+      if (result.type != ResultType.done) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not open file: ${result.message}',
+              style: GoogleFonts.outfit(color: Colors.white),
+            ),
+            backgroundColor: Colors.orange,
           ),
         );
-
-        // Remove from pending files
-        _pendingFiles.removeWhere((pf) => pf.name == fileName);
-      });
-
-      // Record transfer history
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        final history = prefs.getStringList('transfer_history') ?? [];
-        final entry = {
-          'fileName': fileName,
-          'fileSize': bytesReceived,
-          'direction': 'Received',
-          'peer': 'Web Upload',
-          'dateTime': DateTime.now().toIso8601String(),
-          'fileLocation': savePath,
-        };
-        history.insert(0, jsonEncode(entry));
-        if (history.length > 100) history.removeLast();
-        await prefs.setStringList('transfer_history', history);
-      } catch (_) {}
-
-      request.response.statusCode = HttpStatus.ok;
-      request.response.write('File transfer completed');
-      await request.response.close();
-      await _cancelProgressNotification(fileName);
-      // Stop service if no more transfers and server not hosting
-      if (!_isHosting && _ongoingDownloads.isEmpty) {
-        await _stopForegroundService();
       }
     } catch (e) {
-      request.response.statusCode = HttpStatus.internalServerError;
-      request.response.write('File transfer failed: $e');
-      await request.response.close();
-      // Try to cancel notification on error
-      try {
-        await _cancelProgressNotification(
-          request.uri.queryParameters['name'] ?? 'unknown_file',
-        );
-      } catch (_) {}
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Error opening file: $e',
+            style: GoogleFonts.outfit(color: Colors.white),
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
-  // Handle file downloads from web interface
-  Future<void> _handleDownload(HttpRequest request) async {
-    try {
-      final path = request.uri.path;
-      final fileName = Uri.decodeComponent(path.substring('/download/'.length));
+  FileType _getFileType(String fileName) {
+    final ext = fileName.split('.').last.toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].contains(ext))
+      return FileType.image;
+    if (['mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'webm'].contains(ext))
+      return FileType.video;
+    if (['mp3', 'wav', 'aac', 'flac', 'ogg', 'm4a'].contains(ext))
+      return FileType.audio;
+    if (ext == 'pdf') return FileType.pdf;
+    if (['doc', 'docx', 'txt', 'rtf', 'odt'].contains(ext))
+      return FileType.document;
+    if (['xls', 'xlsx', 'csv', 'ods'].contains(ext))
+      return FileType.spreadsheet;
+    if (['ppt', 'pptx', 'odp'].contains(ext)) return FileType.presentation;
+    if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2'].contains(ext))
+      return FileType.archive;
+    if (ext == 'apk') return FileType.apk;
+    if (['txt', 'md', 'json', 'xml', 'html', 'css', 'js'].contains(ext))
+      return FileType.text;
+    return FileType.other;
+  }
 
-      // Find the file in received files
-      final file = _receivedFiles.firstWhere(
-        (f) => f.name == fileName,
-        orElse: () => throw Exception('File not found'),
-      );
-
-      final fileObj = File(file.path);
-      if (!await fileObj.exists()) {
-        request.response.statusCode = HttpStatus.notFound;
-        request.response.write('File not found');
-        await request.response.close();
-        return;
-      }
-
-      request.response.headers.set('Content-Type', 'application/octet-stream');
-      request.response.headers.set(
-        'Content-Disposition',
-        'attachment; filename="$fileName"',
-      );
-      request.response.headers.set(
-        'Content-Length',
-        '${await fileObj.length()}',
-      );
-
-      await request.response.addStream(fileObj.openRead());
-      await request.response.close();
-    } catch (e) {
-      request.response.statusCode = HttpStatus.internalServerError;
-      request.response.write('Download failed: $e');
-      await request.response.close();
+  IconData _getFileTypeIcon(FileType type) {
+    switch (type) {
+      case FileType.image:
+        return Icons.image_rounded;
+      case FileType.video:
+        return Icons.videocam_rounded;
+      case FileType.audio:
+        return Icons.audiotrack_rounded;
+      case FileType.pdf:
+        return Icons.picture_as_pdf_rounded;
+      case FileType.document:
+        return Icons.description_rounded;
+      case FileType.spreadsheet:
+        return Icons.table_chart_rounded;
+      case FileType.presentation:
+        return Icons.slideshow_rounded;
+      case FileType.archive:
+        return Icons.folder_zip_rounded;
+      case FileType.apk:
+        return Icons.android_rounded;
+      case FileType.text:
+        return Icons.text_snippet_rounded;
+      default:
+        return Icons.insert_drive_file_rounded;
     }
   }
 
-  // Serve files list as JSON for web interface
-  Future<void> _serveFilesList(HttpRequest request) async {
-    try {
-      final filesList =
-          _receivedFiles
-              .map(
-                (file) => {
-                  'name': file.name,
-                  'size': file.size,
-                  'receivedAt': file.receivedAt.toIso8601String(),
-                  'downloadUrl': '/download/${Uri.encodeComponent(file.name)}',
-                },
-              )
-              .toList();
-
-      request.response.headers.set('Content-Type', 'application/json');
-      request.response.headers.set('Access-Control-Allow-Origin', '*');
-      request.response.write(jsonEncode(filesList));
-      await request.response.close();
-    } catch (e) {
-      request.response.statusCode = HttpStatus.internalServerError;
-      request.response.write('Failed to get files list: $e');
-      await request.response.close();
+  Color _getFileTypeColor(FileType type) {
+    switch (type) {
+      case FileType.image:
+        return Colors.purple;
+      case FileType.video:
+        return Colors.red;
+      case FileType.audio:
+        return Colors.orange;
+      case FileType.pdf:
+        return Colors.redAccent;
+      case FileType.document:
+        return Colors.blue;
+      case FileType.spreadsheet:
+        return Colors.green;
+      case FileType.presentation:
+        return Colors.deepOrange;
+      case FileType.archive:
+        return Colors.amber;
+      case FileType.apk:
+        return Colors.lightGreen;
+      case FileType.text:
+        return Colors.cyan;
+      default:
+        return Colors.grey;
     }
   }
-
-  // (Removed pending files list API as previews/pending list are removed from web UI)
-
-  // (Removed request-file API as uploads are direct after approval)
-
-  // (Removed check-requests API)
 
   String _formatBytes(int bytes) {
     if (bytes < 1024) return "$bytes B";
@@ -1633,290 +1059,398 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     return "${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB";
   }
 
-  String _formatTime(DateTime dateTime) {
-    final now = DateTime.now();
-    final difference = now.difference(dateTime);
+  String _ipToCode(String ip, {int? port}) {
+    final parts = ip.split('.').map(int.parse).toList();
+    if (parts.length != 4) return '';
+    int n = (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3];
+    String ipCode = n.toRadixString(36).toUpperCase().padLeft(8, '0');
+    int targetPort = port ?? _port;
+    String portCode = targetPort
+        .toRadixString(36)
+        .toUpperCase()
+        .padLeft(3, '0');
+    return ipCode + portCode;
+  }
 
-    if (difference.inDays > 0) {
-      return '${difference.inDays}d ago';
-    } else if (difference.inHours > 0) {
-      return '${difference.inHours}h ago';
-    } else if (difference.inMinutes > 0) {
-      return '${difference.inMinutes}m ago';
-    } else {
-      return 'Just now';
+  @override
+  Widget build(BuildContext context) {
+    final isLandscape =
+        MediaQuery.of(context).orientation == Orientation.landscape;
+
+    if (isLandscape) {
+      return AnnotatedRegion<SystemUiOverlayStyle>(
+        value: SystemUiOverlayStyle.light,
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          body: SafeArea(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Left Side: Header and Server Card
+                Expanded(
+                  flex: 4,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [_buildHeader(), _buildServerCard()],
+                    ),
+                  ),
+                ),
+                // Right Side: Settings and Files
+                Expanded(
+                  flex: 3,
+                  child: Container(
+                    height: double.infinity,
+                    decoration: BoxDecoration(
+                      border: Border(
+                        left: BorderSide(color: Colors.white.withOpacity(0.1)),
+                      ),
+                    ),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(
+                            height: 80,
+                          ), // spacer to align with header visual
+                          _buildSaveLocationCard(),
+                          if (_receivedFiles.isNotEmpty ||
+                              _ongoingDownloads.isNotEmpty) ...[
+                            const SizedBox(height: 24),
+                            _buildFilesButton(),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
     }
-  }
 
-  void _showSnackBar(String message) {
-    // Snack bars disabled as requested
-  }
-
-  void _showStorageInfo() {
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            backgroundColor: Colors.grey[900],
-            title: Text(
-              'Storage Information',
-              style: TextStyle(color: Colors.white),
-            ),
-            content: Text(
-              'Files are received and stored in app storage. Use the "Download" button to copy files to your Downloads folder.',
-              style: TextStyle(color: Colors.grey[300]),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text('OK', style: TextStyle(color: Colors.yellow[300])),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          child: Column(
+            children: [
+              _buildHeader(),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildServerCard(),
+                      const SizedBox(height: 24),
+                      _buildSaveLocationCard(),
+                      if (_receivedFiles.isNotEmpty ||
+                          _ongoingDownloads.isNotEmpty) ...[
+                        const SizedBox(height: 24),
+                        _buildFilesButton(),
+                      ],
+                    ],
+                  ),
+                ),
               ),
             ],
           ),
+        ),
+      ),
     );
   }
 
-  String _ipToCode(String? ip) {
-    if (ip == null || ip == '0.0.0.0') return '--------';
-    try {
-      final parts = ip.split('.');
-      if (parts.length != 4) return '--------';
-
-      final num =
-          (int.parse(parts[0]) << 24) |
-          (int.parse(parts[1]) << 16) |
-          (int.parse(parts[2]) << 8) |
-          int.parse(parts[3]);
-
-      return num.toRadixString(36).toUpperCase().padLeft(8, '0');
-    } catch (e) {
-      return '--------';
-    }
-  }
-
-  void _copyUrlToClipboard() {
-    final scheme = _useHttps ? 'https' : 'http';
-    final url = '$scheme://${_localIp ?? '0.0.0.0'}:8090';
-    Clipboard.setData(ClipboardData(text: url));
-    _showSnackBar('URL copied to clipboard');
-  }
-
-  Future<void> _showQrDialog() async {
-    if (_localIp == null) return;
-
-    final scheme = _useHttps ? 'https' : 'http';
-    final url = '$scheme://${_localIp}:8090';
-
-    try {
-      // Set high brightness
-      double originalBrightness = 0.5;
-      try {
-        originalBrightness = await ScreenBrightness().current;
-        await ScreenBrightness().setScreenBrightness(1.0);
-      } catch (e) {
-        print('Error setting brightness: $e');
-      }
-
-      if (!mounted) return;
-
-      await showDialog(
-        context: context,
-        builder:
-            (context) => Dialog(
-              backgroundColor: Colors.grey[900],
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-                side: BorderSide(color: Colors.yellow[300]!, width: 2),
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+      child: Row(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: const Color(0xFF1C1C1E),
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white.withOpacity(0.05)),
+            ),
+            child: IconButton(
+              icon: const Icon(
+                Icons.arrow_back_ios_new_rounded,
+                color: Colors.white,
+                size: 20,
               ),
-              child: Padding(
-                padding: const EdgeInsets.all(24.0),
+              onPressed: () => context.navigateBack(),
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              'Web Receive',
+              style: GoogleFonts.outfit(
+                color: Colors.white,
+                fontSize: 28,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.5,
+              ),
+            ),
+          ),
+          if (_receivedFiles.isNotEmpty)
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF1C1C1E),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white.withOpacity(0.05)),
+              ),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    icon: const Icon(
+                      Icons.folder_rounded,
+                      color: Colors.white,
+                      size: 22,
+                    ),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder:
+                              (context) => WebReceivedFilesScreen(
+                                files:
+                                    _receivedFiles
+                                        .map(
+                                          (f) => ReceivedFileItem(
+                                            name: f.name,
+                                            size: f.size,
+                                            path: f.path,
+                                            receivedAt: f.receivedAt,
+                                          ),
+                                        )
+                                        .toList(),
+                              ),
+                        ),
+                      );
+                    },
+                  ),
+                  if (_receivedFiles.isNotEmpty)
+                    Positioned(
+                      right: 6,
+                      top: 6,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFFFD600),
+                          shape: BoxShape.circle,
+                        ),
+                        constraints: const BoxConstraints(
+                          minWidth: 18,
+                          minHeight: 18,
+                        ),
+                        child: Text(
+                          '${_receivedFiles.length}',
+                          style: GoogleFonts.outfit(
+                            color: Colors.black,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildServerCard() {
+    final url = _isHosting ? 'http://${_localIp ?? "..."}:$_port' : 'Offline';
+
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1C1E),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color:
+                      _isHosting
+                          ? const Color(0xFFFFD600).withOpacity(0.15)
+                          : Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(
+                  Icons.public_rounded,
+                  color: _isHosting ? const Color(0xFFFFD600) : Colors.grey,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Scan to Connect',
-                      style: TextStyle(
+                      _isHosting ? 'Server Running' : 'Server Stopped',
+                      style: GoogleFonts.outfit(
                         color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 24),
-                    Container(
-                      padding: EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.yellow[300],
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: QrImageView(
-                        data: url,
-                        version: QrVersions.auto,
-                        size: 240.0,
-                        backgroundColor: Colors.transparent,
-                        eyeStyle: QrEyeStyle(
-                          eyeShape: QrEyeShape.square,
-                          color: Colors.black,
-                        ),
-                        dataModuleStyle: QrDataModuleStyle(
-                          dataModuleShape: QrDataModuleShape.square,
-                          color: Colors.black,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 6),
                     Text(
-                      url,
-                      style: TextStyle(
+                      _isHosting ? url : 'Start server to receive files',
+                      style: GoogleFonts.outfit(
                         color: Colors.grey[400],
                         fontSize: 14,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: Text(
-                        'Close',
-                        style: TextStyle(
-                          color: Colors.yellow[300],
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],
                 ),
               ),
-            ),
-      );
-
-      // Restore brightness
-      try {
-        await ScreenBrightness().setScreenBrightness(originalBrightness);
-      } catch (e) {
-        print('Error restoring brightness: $e');
-      }
-    } catch (e) {
-      print('Error showing QR dialog: $e');
-    }
-  }
-
-  @override
-  void dispose() {
-    _uploadServer?.close(force: true);
-    _stopForegroundService();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = _useHttps ? 'https' : 'http';
-    final url = '$scheme://${_localIp ?? '0.0.0.0'}:8090';
-
-    return Scaffold(
-      backgroundColor: Colors.black,
-      resizeToAvoidBottomInset: false,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Header
-            Container(
-              padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: Icon(
-                      Icons.arrow_back_ios_rounded,
-                      color: Colors.white,
-                      size: 20,
+            ],
+          ),
+          // 8-digit code display
+          if (_isHosting && _localIp != null) ...[
+            const SizedBox(height: 24),
+            GestureDetector(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: _ipToCode(_localIp!)));
+                HapticFeedback.mediumImpact();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Code copied to clipboard',
+                      style: GoogleFonts.outfit(color: Colors.black),
                     ),
-                    onPressed: () => Navigator.pop(context),
+                    backgroundColor: const Color(0xFFFFD600),
+                    behavior: SnackBarBehavior.floating,
+                    duration: const Duration(seconds: 2),
                   ),
-                  Expanded(
-                    child: Text(
-                      'Web Receive',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 28,
-                        fontWeight: FontWeight.w300,
-                        letterSpacing: -0.5,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
+                );
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 16,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFD600).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: const Color(0xFFFFD600).withOpacity(0.3),
+                    width: 1.5,
                   ),
-                  IconButton(
-                    icon: Icon(
-                      Icons.qr_code_rounded,
-                      color: Colors.white,
-                      size: 20,
-                    ),
-                    onPressed: _showQrDialog,
-                  ),
-                ],
-              ),
-            ),
-
-            // Main content
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Column(
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const SizedBox(height: 8),
-
-                    // Server status section
-                    _buildServerSection(url),
-
-                    const SizedBox(height: 12),
-
-                    // Swipe tabs for files
-                    _buildSwipeTabs(),
-                    const SizedBox(height: 12),
-
-                    // Content area with swipe
-                    Expanded(
-                      child: PageView(
-                        controller: _pageController,
-                        onPageChanged: (index) {
-                          setState(() {
-                            _currentTab = index;
-                          });
-                        },
-                        children: [
-                          _buildAvailableContent(url),
-                          _buildReceivedFilesContent(),
-                        ],
+                    Icon(
+                      Icons.qr_code_rounded,
+                      color: const Color(0xFFFFD600),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      _ipToCode(_localIp!),
+                      style: GoogleFonts.outfit(
+                        color: const Color(0xFFFFD600),
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 3.0,
                       ),
+                    ),
+                    const SizedBox(width: 12),
+                    Icon(
+                      Icons.copy_rounded,
+                      color: const Color(0xFFFFD600).withOpacity(0.7),
+                      size: 18,
                     ),
                   ],
                 ),
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.file_upload, color: Colors.grey[600], size: 48),
-          const SizedBox(height: 16),
-          Text(
-            'No files received yet',
-            style: TextStyle(
-              color: Colors.grey[400],
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-            ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: _isHosting ? _stopWebServer : _startWebServer,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor:
+                        _isHosting
+                            ? Colors.red.withOpacity(0.15)
+                            : const Color(0xFFFFD600),
+                    foregroundColor: _isHosting ? Colors.red : Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        _isHosting
+                            ? Icons.stop_rounded
+                            : Icons.play_arrow_rounded,
+                        size: 22,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _isHosting ? 'Stop Server' : 'Start Server',
+                        style: GoogleFonts.outfit(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFD600).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: IconButton(
+                  onPressed: _isHosting ? null : _showPortDialog,
+                  icon: const Icon(Icons.settings_rounded),
+                  color: const Color(0xFFFFD600),
+                  tooltip: 'Change Port',
+                  padding: const EdgeInsets.all(18),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           Text(
-            'Files uploaded through the web interface\nwill appear here',
-            style: TextStyle(color: Colors.grey[600], fontSize: 14),
+            'Port: $_port',
+            style: GoogleFonts.outfit(
+              color: Colors.grey[500],
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
             textAlign: TextAlign.center,
           ),
         ],
@@ -1924,1044 +1458,305 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
     );
   }
 
-  Future<void> _openFile(ReceivedFile file) async {
-    try {
-      final result = await OpenFile.open(file.path);
-      if (result.type != ResultType.done) {
-        _showSnackBar('No app found to open this file');
-      }
-    } catch (e) {
-      _showSnackBar('Error opening file: $e');
-    }
-  }
-
-  // Server section - compact design
-  Widget _buildServerSection(String url) {
+  Widget _buildSaveLocationCard() {
     return Container(
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[800]!, width: 1),
+        color: const Color(0xFF1C1C1E),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 12,
-                      height: 12,
-                      decoration: BoxDecoration(
-                        color: _isHosting ? Colors.yellow[300] : Colors.red,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        _isHosting
-                            ? 'Web Server Running'
-                            : 'Web Server Stopped',
-                        style: TextStyle(
-                          color: _isHosting ? Colors.yellow[300] : Colors.red,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    ElevatedButton(
-                      onPressed: _isHosting ? _stopWebServer : _startWebServer,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor:
-                            _isHosting ? Colors.red : Colors.yellow[300],
-                        foregroundColor:
-                            _isHosting ? Colors.white : Colors.black,
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        minimumSize: Size(0, 32),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                      child: Text(
-                        _isHosting ? 'Stop' : 'Start',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                if (_isHosting) ...[
-                  const SizedBox(height: 12),
-                  // 8-Digit Code Display - Compact & Tappable
-                  GestureDetector(
-                    onTap: () {
-                      Clipboard.setData(
-                        ClipboardData(text: _ipToCode(_localIp)),
-                      );
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Code copied to clipboard!'),
-                          duration: Duration(seconds: 2),
-                          backgroundColor: Colors.yellow[700],
-                        ),
-                      );
-                    },
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[850],
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: Colors.yellow[300]!,
-                          width: 1.5,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            _ipToCode(_localIp),
-                            style: TextStyle(
-                              color: Colors.yellow[300],
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 2,
-                              fontFamily: 'monospace',
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Icon(Icons.copy, color: Colors.yellow[300], size: 16),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  GestureDetector(
-                    onTap: _copyUrlToClipboard,
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[800],
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.grey[700]!),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.link, color: Colors.yellow[300], size: 16),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              url,
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                                fontFamily: 'monospace',
-                              ),
-                            ),
-                          ),
-                          Icon(Icons.copy, color: Colors.grey[400], size: 14),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Share this URL with others to let them upload files',
-                    style: TextStyle(color: Colors.grey[400], fontSize: 12),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-
-                // Save Location
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Icon(Icons.folder, color: Colors.yellow[300], size: 16),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Save Location',
-                            style: TextStyle(
-                              color: Colors.grey[400],
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          Text(
-                            _customSaveFolder != null &&
-                                    _customSaveFolder!.isNotEmpty
-                                ? _customSaveFolder!
-                                : 'Download/ZapShare',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // Change/Info buttons
-                    IconButton(
-                      onPressed: () => _promptForFolderPath(),
-                      style: IconButton.styleFrom(
-                        minimumSize: Size(28, 28),
-                        padding: EdgeInsets.all(4),
-                      ),
-                      icon: Icon(
-                        Icons.create_new_folder_outlined,
-                        color: Colors.yellow[300],
-                        size: 18,
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => _showStorageInfo(),
-                      style: IconButton.styleFrom(
-                        minimumSize: Size(28, 28),
-                        padding: EdgeInsets.all(4),
-                      ),
-                      icon: Icon(
-                        Icons.info_outline,
-                        color: Colors.grey[400],
-                        size: 16,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Swipe tabs matching AndroidReceiveScreen
-  Widget _buildSwipeTabs() {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isCompact = screenWidth < 400;
-
-    return Container(
-      height: isCompact ? 44 : 48,
-      decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.grey[800]!, width: 1),
-      ),
-      child: Stack(
-        children: [
-          // Animated background
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-            left:
-                _currentTab == 0
-                    ? 4
-                    : MediaQuery.of(context).size.width / 2 - 20,
-            top: 4,
-            bottom: 4,
-            child: Container(
-              width: MediaQuery.of(context).size.width / 2 - 24,
-              decoration: BoxDecoration(
-                color: Colors.yellow[300],
-                borderRadius: BorderRadius.circular(8),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.yellow[300]!.withOpacity(0.3),
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          // Tab content
           Row(
             children: [
-              // Available Tab
-              Expanded(
-                child: GestureDetector(
-                  onTap: () {
-                    _pageController.animateToPage(
-                      0,
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
-                    );
-                  },
-                  child: Container(
-                    child: Center(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.wifi_tethering,
-                            color:
-                                _currentTab == 0
-                                    ? Colors.black
-                                    : Colors.grey[400],
-                            size: 18,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            isCompact ? 'Available' : 'Available',
-                            style: TextStyle(
-                              color:
-                                  _currentTab == 0
-                                      ? Colors.black
-                                      : Colors.grey[400],
-                              fontSize: isCompact ? 13 : 14,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFD600).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  Icons.folder_rounded,
+                  color: const Color(0xFFFFD600),
+                  size: 24,
                 ),
               ),
-              // Received Files Tab
+              const SizedBox(width: 16),
               Expanded(
-                child: GestureDetector(
-                  onTap: () {
-                    _pageController.animateToPage(
-                      1,
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
-                    );
-                  },
-                  child: Container(
-                    child: Center(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.check_circle_outline,
-                            color:
-                                _currentTab == 1
-                                    ? Colors.black
-                                    : Colors.grey[400],
-                            size: 18,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            isCompact
-                                ? 'Pending (${_pendingFiles.length})'
-                                : 'Received (${_receivedFiles.length + _ongoingDownloads.length})',
-                            style: TextStyle(
-                              color:
-                                  _currentTab == 1
-                                      ? Colors.black
-                                      : Colors.grey[400],
-                              fontSize: isCompact ? 13 : 14,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'SAVE LOCATION',
+                      style: GoogleFonts.outfit(
+                        color: Colors.grey[400],
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.5,
                       ),
                     ),
-                  ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _saveFolder ?? 'Default (Downloads/ZapShare)',
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _pickCustomFolder,
+              icon: Icon(
+                Icons.create_new_folder_rounded,
+                color: const Color(0xFFFFD600),
+                size: 20,
+              ),
+              label: Text(
+                'Change Location',
+                style: GoogleFonts.outfit(
+                  color: const Color(0xFFFFD600),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(
+                  color: const Color(0xFFFFD600).withOpacity(0.3),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  // Available content
-  // Available content - shows pending files ready for download
-  Widget _buildAvailableContent(String url) {
+  Widget _buildFilesButton() {
+    final totalFiles = _receivedFiles.length + _ongoingDownloads.length;
+    final completedFiles = _receivedFiles.length;
+
     return Container(
-      margin: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey[800]!, width: 1),
+        color: const Color(0xFF1C1C1E),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
       ),
-      child: Column(
-        children: [
-          // Server status header
-          Container(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                if (_isHosting) ...[
-                  const SizedBox(height: 16),
-                  if (_pendingFiles.isEmpty && _ongoingDownloads.isEmpty) ...[
-                    Container(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        children: [
-                          Icon(
-                            Icons.upload_file,
-                            color: Colors.grey[600],
-                            size: 48,
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            'No files uploaded yet',
-                            style: TextStyle(
-                              color: Colors.grey[400],
-                              fontSize: 16,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Files will appear here when uploaded from web browsers',
-                            style: TextStyle(
-                              color: Colors.grey[500],
-                              fontSize: 12,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            HapticFeedback.mediumImpact();
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder:
+                    (context) => WebReceivedFilesScreen(
+                      files:
+                          _receivedFiles
+                              .map(
+                                (f) => ReceivedFileItem(
+                                  name: f.name,
+                                  size: f.size,
+                                  path: f.path,
+                                  receivedAt: f.receivedAt,
+                                ),
+                              )
+                              .toList(),
                     ),
-                  ],
-                  if (_pendingFiles.isNotEmpty) ...[
-                    // Download selected files button
-                    if (_pendingFiles.any((f) => f.isSelected))
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: _startSelectedDownloads,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.yellow[300],
-                              foregroundColor: Colors.black,
-                              padding: EdgeInsets.symmetric(vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                            child: Text(
-                              'Download Selected Files (${_pendingFiles.where((f) => f.isSelected).length})',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
+              ),
+            );
+          },
+          borderRadius: BorderRadius.circular(20),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFD600).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.folder_rounded,
+                    color: const Color(0xFFFFD600),
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'RECEIVED FILES',
+                        style: GoogleFonts.outfit(
+                          color: Colors.grey[400],
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.5,
                         ),
                       ),
-                  ],
-                ],
-              ],
-            ),
-          ),
-
-          // Ongoing transfers summary with progress (Android UI)
-          if (_ongoingDownloads.isNotEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.downloading,
-                        color: Colors.yellow[300],
-                        size: 18,
-                      ),
-                      const SizedBox(width: 8),
+                      const SizedBox(height: 4),
                       Text(
-                        'Receiving ${_ongoingDownloads.length} file(s)...',
-                        style: TextStyle(
+                        '$completedFiles completed${_ongoingDownloads.isNotEmpty ? ' • ${_ongoingDownloads.length} receiving' : ''}',
+                        style: GoogleFonts.outfit(
                           color: Colors.white,
+                          fontSize: 15,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  ..._ongoingDownloads.values.map((file) {
-                    final progressPercent =
-                        (file.progress * 100).clamp(0, 100).toInt();
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[850],
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.grey[800]!, width: 1),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  file.name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                '${progressPercent}%',
-                                style: TextStyle(
-                                  color: Colors.yellow[300],
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Container(
-                            height: 6,
-                            decoration: BoxDecoration(
-                              color: Colors.grey[700],
-                              borderRadius: BorderRadius.circular(3),
-                            ),
-                            child: FractionallySizedBox(
-                              widthFactor: file.progress,
-                              alignment: Alignment.centerLeft,
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.yellow[300],
-                                  borderRadius: BorderRadius.circular(3),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            file.status,
-                            style: TextStyle(
-                              color: Colors.grey[400],
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }).toList(),
-                ],
-              ),
-            ),
-
-          // Files list - show pending files
-          if (_isHosting && _pendingFiles.isNotEmpty)
-            Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
                 ),
-                itemCount: _pendingFiles.length,
-                itemBuilder: (context, index) {
-                  final file = _pendingFiles[index];
-                  return _buildPendingFileItem(file, index);
-                },
-              ),
-            ),
-
-          if (!_isHosting)
-            Expanded(
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.cloud_off, color: Colors.grey[600], size: 64),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Server Stopped',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Start the server to begin receiving files',
-                      style: TextStyle(color: Colors.grey[400], fontSize: 14),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  // Pending file item with selection checkbox
-  Widget _buildPendingFileItem(PendingFile file, int index) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isCompact = screenWidth < 400;
-
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 3),
-      padding: EdgeInsets.all(isCompact ? 10 : 12),
-      decoration: BoxDecoration(
-        color: file.isSelected ? Colors.grey[800] : Colors.grey[850],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: file.isSelected ? Colors.yellow[300]! : Colors.grey[700]!,
-          width: file.isSelected ? 2 : 1,
-        ),
-      ),
-      child: Row(
-        children: [
-          // Selection checkbox
-          Checkbox(
-            value: file.isSelected,
-            onChanged: (value) {
-              setState(() {
-                file.isSelected = value ?? false;
-              });
-            },
-            activeColor: Colors.yellow[300],
-            checkColor: Colors.black,
-          ),
-          const SizedBox(width: 8),
-
-          // File type icon
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.grey[700],
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(
-              _getFileTypeIcon(file.fileType),
-              color: Colors.yellow[300],
-              size: isCompact ? 20 : 24,
-            ),
-          ),
-          const SizedBox(width: 12),
-
-          // File info
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  file.name,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: isCompact ? 13 : 14,
-                    fontWeight: FontWeight.w500,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${_formatBytes(file.size)} • ${_formatTime(file.uploadedAt)}',
-                  style: TextStyle(
-                    color: Colors.grey[400],
-                    fontSize: isCompact ? 11 : 12,
-                  ),
+                Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  color: Colors.grey[600],
+                  size: 18,
                 ),
               ],
             ),
           ),
-
-          // Remove button
-          IconButton(
-            onPressed: () => _removePendingFile(index),
-            icon: Icon(Icons.delete_outline, color: Colors.red[400], size: 20),
-            tooltip: 'Remove file',
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Start downloading selected files - now triggers file transfer from browser
-  Future<void> _startSelectedDownloads() async {
-    final selectedFiles = _pendingFiles.where((f) => f.isSelected).toList();
-    if (selectedFiles.isEmpty) return;
-
-    await _ensureSaveFolder();
-
-    for (final pendingFile in selectedFiles) {
-      await _requestFileFromBrowser(pendingFile);
-    }
-  }
-
-  // Request actual file transfer from browser
-  Future<void> _requestFileFromBrowser(PendingFile pendingFile) async {
-    try {
-      setState(() {
-        // Add to ongoing downloads to show progress
-        _ongoingDownloads[pendingFile.id] = ReceivedFile(
-          name: pendingFile.name,
-          size: pendingFile.size,
-          path: 'requesting...',
-          receivedAt: DateTime.now(),
-          progress: 0.0,
-          status: 'Requesting file from browser...',
-          isUploading: true,
-        );
-      });
-
-      // Register file request - browser will poll and send file when detected
-      final requestData = jsonEncode({'fileName': pendingFile.name});
-      final response =
-          await HttpClient().postUrl(
-              Uri.parse('http://localhost:8090/request-file'),
-            )
-            ..headers.contentType = ContentType.json
-            ..write(requestData);
-
-      await response.close();
-
-      _showSnackBar('Requesting ${pendingFile.name} from browser...');
-    } catch (e) {
-      setState(() {
-        _ongoingDownloads.remove(pendingFile.id);
-      });
-      _showSnackBar('Failed to request ${pendingFile.name}: $e');
-    }
-  }
-
-  // Remove pending file
-  void _removePendingFile(int index) {
-    final file = _pendingFiles[index];
-
-    setState(() {
-      _pendingFiles.removeAt(index);
-    });
-
-    _showSnackBar('${file.name} removed');
-  }
-
-  // Received files content matching AndroidReceiveScreen style
-  Widget _buildReceivedFilesContent() {
-    // Combine ongoing downloads and received files
-    final allFiles = <ReceivedFile>[
-      ..._ongoingDownloads.values.toList(),
-      ..._receivedFiles,
-    ];
-
-    if (allFiles.isEmpty) {
-      return Container(
-        margin: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Colors.grey[900],
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.grey[800]!, width: 1),
         ),
-        child: _buildEmptyState(),
-      );
-    }
-
-    return Container(
-      margin: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey[800]!, width: 1),
-      ),
-      child: ListView.builder(
-        padding: const EdgeInsets.all(8),
-        itemCount: allFiles.length,
-        itemBuilder: (context, index) {
-          final file = allFiles[index];
-          return _buildReceivedFileItem(file);
-        },
       ),
     );
   }
 
-  // File item matching AndroidReceiveScreen style
-  Widget _buildReceivedFileItem(ReceivedFile file) {
+  Widget _buildFileItem(ReceivedFile file) {
     final fileType = _getFileType(file.name);
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isCompact = screenWidth < 400;
-
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 3),
-      padding: EdgeInsets.all(isCompact ? 10 : 12),
+      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: Colors.grey[800],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[700]!, width: 1),
+        color: const Color(0xFF1C1C1E),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
       ),
-      child: Row(
+      child: Column(
         children: [
-          // File icon
-          Container(
-            width: isCompact ? 32 : 36,
-            height: isCompact ? 32 : 36,
-            decoration: BoxDecoration(
-              color: Colors.yellow[300],
-              borderRadius: BorderRadius.circular(8),
+          ListTile(
+            contentPadding: const EdgeInsets.all(16),
+            leading: Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: _getFileTypeColor(fileType).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(
+                _getFileTypeIcon(fileType),
+                color: _getFileTypeColor(fileType),
+                size: 28,
+              ),
             ),
-            child: Icon(
-              _getFileTypeIcon(fileType),
-              color: Colors.black,
-              size: isCompact ? 18 : 20,
+            title: Text(
+              file.name,
+              style: GoogleFonts.outfit(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-          ),
-          SizedBox(width: isCompact ? 10 : 12),
-
-          // File info
-          Expanded(
-            child: Column(
+            subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  file.name,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: isCompact ? 15 : 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                // Show progress bar if uploading
+                const SizedBox(height: 6),
                 if (file.isUploading) ...[
-                  Container(
-                    height: 4,
-                    width: double.infinity,
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[700],
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                    child: Stack(
-                      children: [
-                        Container(
-                          height: 4,
-                          width: double.infinity,
-                          decoration: BoxDecoration(
-                            color: Colors.grey[700],
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                        FractionallySizedBox(
-                          widthFactor: file.progress,
-                          child: Container(
-                            height: 4,
-                            decoration: BoxDecoration(
-                              color: Colors.yellow[300],
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                   Row(
                     children: [
                       Text(
-                        file.status,
-                        style: TextStyle(
-                          color: Colors.yellow[300],
-                          fontSize: isCompact ? 11 : 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const Spacer(),
-                      Text(
                         '${(file.progress * 100).toInt()}%',
-                        style: TextStyle(
-                          color: Colors.yellow[300],
-                          fontSize: isCompact ? 11 : 12,
-                          fontWeight: FontWeight.w500,
+                        style: GoogleFonts.outfit(
+                          color: const Color(0xFFFFD600),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
+                      if (file.speedMbps > 0)
+                        Text(
+                          ' • ${file.speedMbps.toStringAsFixed(2)} Mbps',
+                          style: GoogleFonts.outfit(
+                            color: Colors.grey[400],
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
                     ],
                   ),
                 ] else ...[
-                  Row(
-                    children: [
-                      Text(
-                        _formatBytes(file.size),
-                        style: TextStyle(
-                          color: Colors.grey,
-                          fontSize: isCompact ? 12 : 13,
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
-                      Text(
-                        ' • ',
-                        style: TextStyle(
-                          color: Colors.grey[600],
-                          fontSize: isCompact ? 12 : 13,
-                        ),
-                      ),
-                      Text(
-                        _formatTime(file.receivedAt),
-                        style: TextStyle(
-                          color: Colors.grey,
-                          fontSize: isCompact ? 12 : 13,
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
-                    ],
+                  Text(
+                    _formatBytes(file.size),
+                    style: GoogleFonts.outfit(
+                      color: Colors.grey[400],
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ],
               ],
             ),
+            trailing:
+                file.isUploading
+                    ? SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        value: file.progress,
+                        strokeWidth: 3,
+                        valueColor: AlwaysStoppedAnimation(
+                          const Color(0xFFFFD600),
+                        ),
+                        backgroundColor: Colors.white.withOpacity(0.1),
+                      ),
+                    )
+                    : IconButton(
+                      icon: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFD600).withOpacity(0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.open_in_new_rounded,
+                          color: Color(0xFFFFD600),
+                          size: 20,
+                        ),
+                      ),
+                      onPressed: () => _openFile(file),
+                    ),
           ),
-
-          // Open button (only show for completed files)
-          if (!file.isUploading)
-            GestureDetector(
-              onTap: () => _openFile(file),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.yellow[300],
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  'Open',
-                  style: TextStyle(
-                    color: Colors.black,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          // Progress indicator for uploading files
           if (file.isUploading)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.grey[700],
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    Colors.yellow[300]!,
-                  ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: file.progress,
+                  backgroundColor: Colors.white.withOpacity(0.05),
+                  valueColor: AlwaysStoppedAnimation(const Color(0xFFFFD600)),
+                  minHeight: 8,
                 ),
               ),
             ),
         ],
       ),
     );
-  }
-
-  // Get file type category (matching AndroidReceiveScreen)
-  FileType _getFileType(String fileName) {
-    final ext = fileName.split('.').last.toLowerCase();
-
-    if ([
-      'jpg',
-      'jpeg',
-      'png',
-      'gif',
-      'bmp',
-      'webp',
-      'svg',
-      'ico',
-      'tiff',
-      'tif',
-      'heic',
-      'heif',
-      'avif',
-      'jxl',
-    ].contains(ext)) {
-      return FileType.image;
-    } else if ([
-      'mp4',
-      'mov',
-      'avi',
-      'mkv',
-      'wmv',
-      'flv',
-      'webm',
-      'm4v',
-      '3gp',
-    ].contains(ext)) {
-      return FileType.video;
-    } else if ([
-      'mp3',
-      'wav',
-      'flac',
-      'aac',
-      'ogg',
-      'm4a',
-      'wma',
-    ].contains(ext)) {
-      return FileType.audio;
-    } else if (['pdf'].contains(ext)) {
-      return FileType.pdf;
-    } else if (['doc', 'docx'].contains(ext)) {
-      return FileType.document;
-    } else if (['xls', 'xlsx'].contains(ext)) {
-      return FileType.spreadsheet;
-    } else if (['ppt', 'pptx'].contains(ext)) {
-      return FileType.presentation;
-    } else if (['zip', 'rar', '7z', 'tar', 'gz'].contains(ext)) {
-      return FileType.archive;
-    } else if (['txt', 'rtf', 'md'].contains(ext)) {
-      return FileType.text;
-    } else {
-      return FileType.other;
-    }
-  }
-
-  // Get file type icon (matching AndroidReceiveScreen)
-  IconData _getFileTypeIcon(FileType fileType) {
-    switch (fileType) {
-      case FileType.image:
-        return Icons.image_outlined;
-      case FileType.video:
-        return Icons.videocam_outlined;
-      case FileType.audio:
-        return Icons.audiotrack_outlined;
-      case FileType.pdf:
-        return Icons.picture_as_pdf_outlined;
-      case FileType.document:
-        return Icons.description_outlined;
-      case FileType.spreadsheet:
-        return Icons.table_chart_outlined;
-      case FileType.presentation:
-        return Icons.slideshow_outlined;
-      case FileType.archive:
-        return Icons.archive_outlined;
-      case FileType.text:
-        return Icons.text_snippet_outlined;
-      case FileType.other:
-        return Icons.insert_drive_file_outlined;
-    }
   }
 }

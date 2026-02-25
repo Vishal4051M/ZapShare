@@ -10,6 +10,10 @@
 
 #include "win32_window.h"
 
+// Forward declaration
+class MpvWindow;
+
+
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
  public:
@@ -39,6 +43,13 @@ class FlutterWindow : public Win32Window {
   void SendFilesToFlutter(const std::vector<std::string>& files);
   void SendDragEnterToFlutter();
   void SendDragLeaveToFlutter();
+
+  // MPV Overlay Window (The "Window 1")
+  std::unique_ptr<class MpvWindow> mpv_window_;
+  std::unique_ptr<class VideoPlugin> video_plugin_;
+
+ public: 
+  class MpvWindow* GetMpvWindow() { return mpv_window_.get(); }
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

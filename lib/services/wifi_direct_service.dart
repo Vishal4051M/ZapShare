@@ -276,13 +276,39 @@ class WiFiDirectService {
     }
   }
 
+  /// Create a Wi-Fi Direct Group (act as Hotspot/GO)
+  /// Uses automatic band selection for best compatibility across devices
+  Future<bool> createGroup() async {
+    if (!Platform.isAndroid) {
+      return false;
+    }
+
+    if (!_isInitialized) {
+      print('⚠️  Wi-Fi Direct not initialized');
+      return false;
+    }
+
+    try {
+      print('🌐 Creating Wi-Fi Direct Group (Auto Band)...');
+      final result = await _channel.invokeMethod<bool>('createGroup');
+      _isGroupCreated = result ?? false;
+      print('✅ Group creation initiated: $_isGroupCreated');
+      return _isGroupCreated;
+    } catch (e) {
+      print('❌ Error creating Wi-Fi Direct group: $e');
+      return false;
+    }
+  }
+
   /// Connect to a Wi-Fi Direct peer using non-persistent group
   ///
   /// [deviceAddress] - MAC address of the peer device
-  /// [isGroupOwner] - Whether this device should be the group owner (true = sender, false = receiver)
+  /// [isGroupOwner] - Whether this device should prefer being the group owner
+  ///   - false (default): Let Android auto-negotiate based on device capabilities
+  ///   - true: Strongly prefer this device as group owner
   Future<bool> connectToPeer(
     String deviceAddress, {
-    bool isGroupOwner = true,
+    bool isGroupOwner = false,
   }) async {
     if (!Platform.isAndroid) {
       return false;
@@ -466,10 +492,8 @@ class WiFiDirectService {
 
       _connectionInfoController.add(connectionInfo);
 
-      // If group is formed, request group info to get SSID/password
-      if (connectionInfo.groupFormed) {
-        requestGroupInfo();
-      }
+      // Don't request group info here - it causes a callback cascade
+      // Group info will be requested by the Kotlin side or explicitly when needed
     } catch (e) {
       print('❌ Error handling connection info: $e');
     }

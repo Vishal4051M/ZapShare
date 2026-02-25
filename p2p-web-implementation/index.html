@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZapShare P2P | Expert Turbo</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #FFD600;
+            --bg: #0A0A0A;
+            --surface: #1A1A1A;
+            --text: #FFFFFF;
+            --text-secondary: #B0B0B0;
+            --glass: rgba(255, 255, 255, 0.05);
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: radial-gradient(circle at top right, #1a1a00, #000);
+        }
+
+        .container {
+            width: 90%;
+            max-width: 480px;
+            background: var(--glass);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 32px;
+            padding: 40px;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 32px;
+            margin-bottom: 20px;
+        }
+
+        h1 span {
+            color: var(--primary);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 18px;
+            border-radius: 16px;
+            border: none;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.2s;
+            margin-top: 10px;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: #000;
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--glass-border);
+            color: #FFF;
+        }
+
+        input {
+            width: 100%;
+            padding: 16px;
+            border-radius: 16px;
+            border: 1px solid var(--glass-border);
+            background: var(--glass);
+            color: #FFF;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+
+        .progress-box {
+            margin-top: 30px;
+            display: none;
+        }
+
+        .bar-bg {
+            height: 10px;
+            background: #222;
+            border-radius: 5px;
+            overflow: hidden;
+            margin: 15px 0;
+        }
+
+        .bar-fill {
+            height: 100%;
+            background: var(--primary);
+            width: 0%;
+            box-shadow: 0 0 15px var(--primary);
+        }
+
+        .status {
+            font-size: 14px;
+            margin-top: 10px;
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container" id="app">
+        <h1>Zap<span>Share</span></h1>
+
+        <div id="join-ui">
+            <input type="text" id="code-input" placeholder="ENTER CODE" maxlength="8">
+            <button class="btn btn-primary" onclick="connect()">CONNECT & RECEIVE</button>
+            <div id="status" class="status">Ready</div>
+        </div>
+
+        <div id="save-ui" class="hidden">
+            <p>File Incoming!</p>
+            <button class="btn btn-primary" onclick="startStreamingReceiver()">PICK SAVE LOCATION</button>
+        </div>
+
+        <div id="progress-ui" class="progress-box">
+            <p id="filename-label">filename.zip</p>
+            <div class="bar-bg">
+                <div id="bar-fill" class="bar-fill"></div>
+            </div>
+            <div style="display:flex; justify-content: space-between; font-size: 12px; color: #aaa;">
+                <span id="speed-label">0 Mbps</span>
+                <span id="percent-label">0%</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SIGNAL_URL = "ws://192.168.1.8:3000";
+        const ACK_INTERVAL = 2 * 1024 * 1024; // ACK every 2MB to keep pipe tight
+
+        let pc, dc, socket, fileHandle, writable;
+        let receivedBytes = 0, lastAck = 0, startTime = 0, fileInfo = null;
+
+        async function connect() {
+            const btn = document.querySelector('button');
+            const code = document.getElementById('code-input').value.trim().toUpperCase();
+            if (!code) return;
+
+            btn.innerText = "Connecting...";
+            document.getElementById('status').innerText = "Joining room...";
+
+            socket = new WebSocket(SIGNAL_URL);
+            socket.onopen = () => {
+                document.getElementById('status').innerText = "Waiting for sender...";
+                socket.send(JSON.stringify({ type: 'join', code, role: 'receiver' }));
+            };
+            socket.onmessage = async (e) => {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'signal') handleSignal(msg.data);
+            };
+
+            pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+            pc.onicecandidate = (e) => e.candidate && socket.send(JSON.stringify({ type: 'signal', code, data: { ice: e.candidate } }));
+            pc.ondatachannel = (e) => {
+                dc = e.channel;
+                setupDC();
+            };
+        }
+
+        async function handleSignal(data) {
+            if (data.sdp) {
+                await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                socket.send(JSON.stringify({ type: 'signal', code: document.getElementById('code-input').value.toUpperCase(), data: { sdp: pc.localDescription } }));
+            } else if (data.ice) {
+                await pc.addIceCandidate(new RTCIceCandidate(data.ice));
+            }
+        }
+
+        function setupDC() {
+            dc.binaryType = 'arraybuffer';
+            dc.onmessage = async (e) => {
+                if (typeof e.data === 'string') {
+                    fileInfo = JSON.parse(e.data);
+                    document.getElementById('join-ui').classList.add('hidden');
+                    document.getElementById('save-ui').classList.remove('hidden');
+                    return;
+                }
+
+                // BUFFERING STRATEGY:
+                // Writing every 64KB chunk to disk is slow.
+                // We accumulate chunks in RAM and write in 16MB batches.
+                writeBuffer.push(e.data);
+                bufferSize += e.data.byteLength;
+                receivedBytes += e.data.byteLength;
+
+                // Flush to disk if buffer is full (16MB)
+                if (bufferSize >= 16 * 1024 * 1024) {
+                    await flushBuffer();
+                }
+
+                updateProgress();
+                if (receivedBytes >= fileInfo.size) finish();
+            };
+        }
+
+        let writeBuffer = [];
+        let bufferSize = 0;
+
+        async function flushBuffer() {
+            if (writeBuffer.length === 0) return;
+
+            // Create a Blob from the chunks (efficient memory handling)
+            const blob = new Blob(writeBuffer);
+            await writable.write(blob);
+
+            // Clear buffer
+            writeBuffer = [];
+            bufferSize = 0;
+        }
+
+
+        async function startStreamingReceiver() {
+            fileHandle = await window.showSaveFilePicker({ suggestedName: fileInfo.name });
+            writable = await fileHandle.createWritable();
+            document.getElementById('save-ui').classList.add('hidden');
+            document.getElementById('progress-ui').style.display = 'block';
+            document.getElementById('filename-label').innerText = fileInfo.name;
+            startTime = Date.now();
+            dc.send("READY"); // Signal sender to start firehose
+        }
+
+        function updateProgress() {
+            const p = (receivedBytes / fileInfo.size * 100).toFixed(1);
+            document.getElementById('bar-fill').style.width = p + "%";
+            document.getElementById('percent-label').innerText = p + "%";
+            const dur = (Date.now() - startTime) / 1000;
+            const mbps = dur > 0 ? (receivedBytes * 8 / 1024 / 1024 / dur).toFixed(2) : 0;
+            document.getElementById('speed-label').innerText = mbps + " Mbps";
+        }
+
+        async function finish() {
+            await flushBuffer(); // Write any remaining data
+            await writable.close();
+            document.getElementById('status').innerText = "TRANSFER COMPLETE!";
+        }
+    </script>
+</body>
+
+</html>
