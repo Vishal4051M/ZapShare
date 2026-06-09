@@ -1,0 +1,16 @@
+{
+  "name": "zapshare-signaling-server",
+  "version": "1.0.0",
+  "description": "Signaling server for ZapShare P2P",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

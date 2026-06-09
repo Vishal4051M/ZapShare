@@ -1,0 +1,15 @@
+
+[MPV-CRASH] Unhandled exception 0xC0000005 at address 00007FF97737CCE0
+[MPV-CRASH] Access violation: reading address 0x0000000000000010
+
+[MPV-CRASH] Unhandled exception 0xC0000005 at address 0000020A43F34D63
+[MPV-CRASH] Access violation: reading address 0x0000029D61927FD0
+
+[MPV-CRASH] Unhandled exception 0xC0000005 at address 0000027CFF98FED3
+[MPV-CRASH] Access violation: reading address 0x000001EE2A847E10
+
+[MPV-CRASH] Unhandled exception 0xC0000005 at address 00007FF9EDCACCE0
+[MPV-CRASH] Access violation: reading address 0x0000000000000010
+
+[MPV-CRASH] Unhandled exception 0xC0000005 at address 0000021DF9C53D33
+[MPV-CRASH] Access violation: reading address 0x0000020DF32F0B10

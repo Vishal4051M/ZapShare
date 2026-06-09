@@ -1,0 +1,16 @@
+{
+  "id": "com.zapshare.app",
+  "version": "1.0.0",
+  "vendor": "ZapShare",
+  "type": "web",
+  "main": "index.html",
+  "title": "ZapShare",
+  "icon": "icons/Icon-192.png",
+  "largeIcon": "icons/Icon-512.png",
+  "bgColor": "#000000",
+  "uiRevision": 2,
+  "resolution": "1920x1080",
+  "appDescription": "ZapShare - Fast File Transfer",
+  "handlesRelaunch": true,
+  "transparent": false
+}

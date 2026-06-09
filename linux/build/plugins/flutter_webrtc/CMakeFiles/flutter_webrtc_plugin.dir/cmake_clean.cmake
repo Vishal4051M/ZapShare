@@ -1,0 +1,40 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/flutter_webrtc_plugin.dir/link.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_common.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_common.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_data_channel.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_data_channel.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_frame_capturer.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_frame_capturer.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_frame_cryptor.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_frame_cryptor.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_media_stream.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_media_stream.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_peerconnection.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_peerconnection.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_screen_capture.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_screen_capture.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_video_renderer.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_video_renderer.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_webrtc.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_webrtc.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_webrtc_base.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/__/common/cpp/src/flutter_webrtc_base.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/flutter/core_implementations.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/flutter/core_implementations.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/flutter/plugin_registrar.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/flutter/plugin_registrar.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/flutter/standard_codec.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/flutter/standard_codec.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/flutter_webrtc_plugin.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/flutter_webrtc_plugin.cc.o.d"
+  "CMakeFiles/flutter_webrtc_plugin.dir/task_runner_linux.cc.o"
+  "CMakeFiles/flutter_webrtc_plugin.dir/task_runner_linux.cc.o.d"
+  "libflutter_webrtc_plugin.pdb"
+  "libflutter_webrtc_plugin.so"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang CXX)
+  include(CMakeFiles/flutter_webrtc_plugin.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

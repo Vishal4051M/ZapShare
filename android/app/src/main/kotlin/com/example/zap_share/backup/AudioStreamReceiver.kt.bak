@@ -1,0 +1,371 @@
+package com.example.zap_share
+
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
+import android.media.MediaCodec
+import android.media.MediaFormat
+import android.os.Build
+import android.util.Log
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.SocketTimeoutException
+import java.nio.ByteBuffer
+import java.util.TreeMap
+import java.util.concurrent.LinkedBlockingDeque
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
+
+class AudioStreamReceiver {
+
+    companion object {
+        @Volatile var instance: AudioStreamReceiver? = null
+            private set
+
+        fun start(port: Int = AudioStreamSenderService.PORT, cushionMs: Int = 20,
+                  isTvDevice: Boolean = false, onStopped: (() -> Unit)? = null) {
+            if (instance == null) instance = AudioStreamReceiver()
+            instance?.begin(port, cushionMs)
+        }
+
+        fun stop() { instance?.end(); instance = null }
+    }
+
+    private val TAG          = "ZapShare"
+    private val SAMPLE_RATE  = 48000
+    private val CHANNELS     = 2
+    private val FRAME_MS     = 10
+    private val FRAME_BYTES  = SAMPLE_RATE * CHANNELS * 2 * FRAME_MS / 1000  // 1920
+
+    @Volatile private var alive     = false
+    private var socket:     DatagramSocket? = null
+    private var audioTrack: AudioTrack?     = null
+    private var decoder:    MediaCodec?     = null
+
+    private val decoderLock = ReentrantLock()
+    @Volatile private var lastCsd:    ByteArray? = null
+    private val decoderOk = AtomicBoolean(false)
+
+    private var recvThread:   Thread? = null
+    private var decodeThread: Thread? = null
+    private var playThread:   Thread? = null
+
+    // ── Seq reorder buffer (lock protects both nextSeq and reorderBuf) ────────
+    private val seqLock      = ReentrantLock()
+    private val seqAvail     = seqLock.newCondition()
+    private val reorderBuf   = TreeMap<Int, ByteArray>()
+    @Volatile private var nextSeq = -1
+
+    // ── Decoded PCM: small queue, play thread drains it ───────────────────────
+    private val pcmQueue  = LinkedBlockingDeque<ByteArray>(8)
+    private val csdQueue  = LinkedBlockingQueue<ByteArray>(8)
+
+    private val silence     = ByteArray(FRAME_BYTES)
+    @Volatile private var lastGoodPcm: ByteArray? = null
+
+    // ─────────────────────────────────────────────────────────────────────────
+    fun begin(port: Int, cushionMs: Int) {
+        if (alive) return
+        alive = true
+        Log.i(TAG, "Receiver starting port=$port")
+        buildAudioTrack()
+        bindSocket(port)
+        if (alive) { launchRecv(); launchDecode(); launchPlay() }
+    }
+
+    // ── AudioTrack ────────────────────────────────────────────────────────────
+    private fun buildAudioTrack() {
+        val minBuf   = AudioTrack.getMinBufferSize(SAMPLE_RATE,
+            AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+        val trackBuf = maxOf(minBuf, FRAME_BYTES * 2)
+        fun make(sz: Int) = AudioTrack.Builder()
+            .setAudioAttributes(AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+            .setAudioFormat(AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(SAMPLE_RATE)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build())
+            .setBufferSizeInBytes(sz)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            .build()
+        audioTrack = make(trackBuf)
+        if (audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
+            audioTrack?.release(); audioTrack = make(minBuf)
+        }
+        audioTrack?.play()
+        Log.i(TAG, "AudioTrack ready buf=${trackBuf}B")
+    }
+
+    // ── Socket ────────────────────────────────────────────────────────────────
+    private fun bindSocket(port: Int) {
+        runCatching {
+            socket = DatagramSocket(null).apply {
+                reuseAddress = true; receiveBufferSize = 256 * 1024
+                trafficClass = 0xB8
+                bind(java.net.InetSocketAddress(port)); soTimeout = 1000
+            }
+        }.onFailure { alive = false; Log.e(TAG, "Socket bind failed: ${it.message}") }
+    }
+
+    // ── Thread 1 · Receive ────────────────────────────────────────────────────
+    private fun launchRecv() {
+        recvThread = Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+            val buf = ByteArray(4096)
+            Log.i(TAG, "Recv started")
+            while (alive) {
+                runCatching {
+                    val pkt = DatagramPacket(buf, buf.size)
+                    socket?.receive(pkt)
+                    val len = pkt.length; if (len < 11) return@runCatching
+                    val data = buf.copyOf(len)
+                    val type = data[0].toInt() and 0xFF
+                    val seq  = ((data[1].toInt() and 0xFF) shl 8) or (data[2].toInt() and 0xFF)
+                    when (type) {
+                        0x02 -> csdQueue.offer(data.copyOfRange(11, len))
+                        0x01 -> enqueue(seq, data.copyOfRange(11, len))
+                    }
+                }.onFailure { if (it !is SocketTimeoutException && alive) Log.e(TAG, "Recv: ${it.message}") }
+            }
+            Log.i(TAG, "Recv stopped")
+        }.also { it.start() }
+    }
+
+    private fun enqueue(seq: Int, payload: ByteArray) {
+        seqLock.withLock {
+            if (nextSeq < 0) { nextSeq = seq; Log.i(TAG, "First packet seq=$seq") }
+            val delta = seqDiff(seq, nextSeq)
+            if (delta < -16) return   // too old, discard
+            reorderBuf[seq] = payload
+            while (reorderBuf.size > 32) reorderBuf.pollFirstEntry()
+            seqAvail.signalAll()
+        }
+    }
+
+    // ── Thread 2 · Decode ─────────────────────────────────────────────────────
+    // FIXED: Does NOT hold seqLock while calling decoder. CSD is polled in a
+    // tight loop so the decoder initializes as fast as possible.
+    private fun launchDecode() {
+        decodeThread = Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+            val info = MediaCodec.BufferInfo()
+            Log.i(TAG, "Decode started")
+
+            while (alive) {
+                // Drain all pending CSD packets before decoding audio
+                var csd = csdQueue.poll()
+                while (csd != null) { initDecoder(csd); csd = csdQueue.poll() }
+
+                // Pull next in-sequence payload (blocks for at most FRAME_MS)
+                val payload = pullNext()
+                if (!alive) break
+
+                val d = decoderLock.withLock { decoder }
+                if (d == null || !decoderOk.get()) {
+                    // Decoder not ready — wait briefly for CSD then retry
+                    // Don't emit silence yet; just spin on CSD queue
+                    val pendingCsd = csdQueue.poll(FRAME_MS.toLong(), TimeUnit.MILLISECONDS)
+                    if (pendingCsd != null) initDecoder(pendingCsd)
+                    // Re-enqueue the payload so we don't lose it
+                    if (payload != null && nextSeq > 0) {
+                        seqLock.withLock {
+                            val lostSeq = (nextSeq - 1 + 65536) % 65536
+                            reorderBuf[lostSeq] = payload
+                            nextSeq = lostSeq
+                            seqAvail.signalAll()
+                        }
+                    }
+                    continue
+                }
+
+                if (payload == null) {
+                    // Lost packet — PLC
+                    pcmQueue.offer(plc(lastGoodPcm), FRAME_MS.toLong() * 3, TimeUnit.MILLISECONDS)
+                    continue
+                }
+
+                runCatching {
+                    val inIdx = d.dequeueInputBuffer(5_000)
+                    if (inIdx >= 0) {
+                        d.getInputBuffer(inIdx)?.run { clear(); put(payload) }
+                        d.queueInputBuffer(inIdx, 0, payload.size, 0L, 0)
+                    }
+                    var outIdx = d.dequeueOutputBuffer(info, 5_000)
+                    while (outIdx >= 0) {
+                        val ob = d.getOutputBuffer(outIdx)
+                        if (ob != null && info.size > 0) {
+                            val pcm = ByteArray(info.size).also { ob.get(it) }
+                            lastGoodPcm = pcm
+                            if (!pcmQueue.offer(pcm, FRAME_MS.toLong() * 2, TimeUnit.MILLISECONDS)) {
+                                pcmQueue.pollFirst(); pcmQueue.offerFirst(pcm)
+                            }
+                        }
+                        d.releaseOutputBuffer(outIdx, false)
+                        outIdx = d.dequeueOutputBuffer(info, 0)
+                    }
+                }.onFailure { Log.e(TAG, "Decode error: ${it.message}"); reinitFromLast() }
+            }
+            Log.i(TAG, "Decode stopped")
+        }.also { it.start() }
+    }
+
+    /**
+     * Pulls the next in-sequence packet from reorderBuf.
+     * Waits at most FRAME_MS for an out-of-order packet to arrive.
+     * Returns null only if the packet is confirmed lost (future packet exists).
+     * Does NOT hold seqLock while the caller processes the packet.
+     */
+    private fun pullNext(): ByteArray? {
+        seqLock.withLock {
+            // Wait until we have a seeded nextSeq
+            while (alive && nextSeq < 0) {
+                seqAvail.await(FRAME_MS.toLong(), TimeUnit.MILLISECONDS)
+            }
+            if (!alive) return null
+
+            val ns = nextSeq
+
+            // Packet already arrived?
+            reorderBuf.remove(ns)?.let {
+                nextSeq = (ns + 1) % 65536
+                return it
+            }
+
+            // Wait one frame for it to arrive
+            seqAvail.await(FRAME_MS.toLong(), TimeUnit.MILLISECONDS)
+
+            // Check again after wait
+            reorderBuf.remove(ns)?.let {
+                nextSeq = (ns + 1) % 65536
+                return it
+            }
+
+            // Packet lost if there is a future packet OR if reorderBuf is not empty
+            // (meaning packets are flowing but this one is genuinely missing).
+            // At startup with an empty buffer we keep waiting (no future → not lost yet).
+            val bufNotEmpty = reorderBuf.isNotEmpty()
+            return if (bufNotEmpty) {
+                nextSeq = (ns + 1) % 65536
+                null   // confirmed lost → caller does PLC
+            } else {
+                // Buffer is empty — no packets flowing yet, keep nextSeq and return null
+                // so caller can poll CSD queue and retry
+                null
+            }
+        }
+    }
+
+    // ── Thread 3 · Play ───────────────────────────────────────────────────────
+    private fun launchPlay() {
+        playThread = Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+            var silenceCount = 0
+            Log.i(TAG, "Play started")
+            while (alive) {
+                val pcm   = pcmQueue.pollFirst(FRAME_MS.toLong() * 2, TimeUnit.MILLISECONDS)
+                val track = audioTrack
+                if (track == null || track.state != AudioTrack.STATE_INITIALIZED) {
+                    Thread.sleep(5); continue
+                }
+                if (pcm != null) {
+                    silenceCount = 0
+                    track.write(pcm, 0, pcm.size)
+                } else {
+                    silenceCount++
+                    track.write(if (silenceCount <= 60) plc(lastGoodPcm) else silence, 0, FRAME_BYTES)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && track.underrunCount > 3)
+                    runCatching { track.pause(); track.flush(); track.play() }
+            }
+            Log.i(TAG, "Play stopped")
+        }.also { it.start() }
+    }
+
+    // ── Decoder ───────────────────────────────────────────────────────────────
+    private fun initDecoder(csd: ByteArray) {
+        decoderLock.withLock {
+            if (lastCsd?.contentEquals(csd) == true && decoderOk.get()) return
+            lastCsd = csd; releaseDecoderLocked()
+            runCatching {
+                val fmt = MediaFormat.createAudioFormat("audio/opus", SAMPLE_RATE, CHANNELS)
+                fmt.setByteBuffer("csd-0", ByteBuffer.wrap(csd))
+                val d = MediaCodec.createDecoderByType("audio/opus")
+                d.configure(fmt, null, null, 0); d.start()
+                decoder = d; decoderOk.set(true)
+                Log.i(TAG, "Decoder ready, CSD=${csd.size}B")
+            }.onFailure { Log.e(TAG, "Decoder init failed: ${it.message}"); decoderOk.set(false) }
+        }
+    }
+
+    private fun reinitFromLast() { lastCsd?.let { initDecoder(it) } }
+
+    private fun releaseDecoderLocked() {
+        runCatching { decoder?.stop() }; runCatching { decoder?.release() }
+        decoder = null; decoderOk.set(false)
+    }
+
+    // ── PLC ───────────────────────────────────────────────────────────────────
+    private fun plc(last: ByteArray?): ByteArray {
+        if (last == null || last.size < FRAME_BYTES) return silence.copyOf()
+        val step = 4; val minP = (SAMPLE_RATE * 0.002).toInt() * step
+        val maxP = minOf((SAMPLE_RATE * 0.015).toInt() * step, last.size / 2)
+        if (minP >= maxP) return last.copyOf(FRAME_BYTES)
+        var bestP = minP; var bestC = Double.NEGATIVE_INFINITY
+        var p = minP
+        while (p <= maxP) {
+            var c = 0.0; var i = 0
+            while (i + p + 1 < last.size && i + 1 < p) {
+                val s1 = (last[i].toInt() and 0xFF or (last[i+1].toInt() shl 8)).toShort()
+                val s2 = (last[i+p].toInt() and 0xFF or (last[i+p+1].toInt() shl 8)).toShort()
+                c += s1.toDouble() * s2.toDouble(); i += step
+            }
+            if (c > bestC) { bestC = c; bestP = p }; p += step
+        }
+        val out = ByteArray(FRAME_BYTES); var o = 0
+        while (o < out.size) {
+            val src = o % bestP
+            if (src + 1 < last.size) { out[o] = last[src]; out[o+1] = last[src+1] }
+            o += step
+        }
+        return out
+    }
+
+    private fun seqDiff(a: Int, b: Int): Int {
+        val d = (a - b + 65536) % 65536; return if (d > 32767) d - 65536 else d
+    }
+
+    // ── Stop ──────────────────────────────────────────────────────────────────
+    fun end() {
+        alive = false
+        seqLock.withLock { seqAvail.signalAll() }
+
+        recvThread?.interrupt()
+        decodeThread?.interrupt()
+        playThread?.interrupt()
+        runCatching { socket?.close() }
+
+        // Join threads BEFORE releasing any native resources
+        runCatching { recvThread?.join(600) }
+        runCatching { decodeThread?.join(600) }
+        runCatching { playThread?.join(600) }
+
+        decoderLock.withLock {
+            releaseDecoderLocked()
+            runCatching { audioTrack?.stop() }
+            runCatching { audioTrack?.release() }
+            audioTrack = null
+        }
+
+        seqLock.withLock { reorderBuf.clear() }
+        pcmQueue.clear(); csdQueue.clear()
+        lastGoodPcm = null; nextSeq = -1; lastCsd = null
+        Log.i(TAG, "Receiver stopped")
+    }
+
+    fun stopReceiver() = end()
+}

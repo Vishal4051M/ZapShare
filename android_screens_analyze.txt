@@ -1,0 +1,694 @@
+Analyzing android...                                            
+
+   info • The file name 'AndroidCastScreen.dart' isn't a lower_case_with_underscores identifier • lib/Screens/android/AndroidCastScreen.dart:1:1 • file_names
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:160:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:190:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:212:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:227:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:264:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:326:7 • avoid_print
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidCastScreen.dart:361:9 • curly_braces_in_flow_control_structures
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:372:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:389:11 • avoid_print
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidCastScreen.dart:401:9 • curly_braces_in_flow_control_structures
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:408:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:410:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:468:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:483:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:499:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:501:7 • avoid_print
+   info • Don't use 'BuildContext's across async gaps • lib/Screens/android/AndroidCastScreen.dart:622:28 • use_build_context_synchronously
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:685:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:686:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:689:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:690:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:691:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:696:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:702:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:704:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:708:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:713:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:715:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:720:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:726:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:732:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:734:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:765:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:774:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:779:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:787:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:793:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:800:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:803:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:809:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:815:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:820:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:822:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:828:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:866:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:868:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:888:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:889:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:901:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:903:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:923:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:926:7 • avoid_print
+   info • Don't use 'BuildContext's across async gaps • lib/Screens/android/AndroidCastScreen.dart:929:34 • use_build_context_synchronously
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:936:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:974:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:998:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidCastScreen.dart:1021:7 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1150:45 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1187:58 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1190:60 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1202:39 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1253:63 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1262:57 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1292:58 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1295:60 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1367:58 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1370:60 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1380:35 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1453:57 • deprecated_member_use
+   info • 'activeColor' is deprecated and shouldn't be used. Use activeThumbColor or activeTrackColor instead. This feature was deprecated after v3.31.0-2.0.pre • lib/Screens/android/AndroidCastScreen.dart:1510:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1600:49 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1603:53 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1637:61 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1726:64 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1731:37 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1762:45 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1892:57 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1937:69 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:1992:55 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:2042:53 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:2154:53 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:2181:62 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:2286:49 • deprecated_member_use
+   info • Unnecessary use of multiple underscores • lib/Screens/android/AndroidCastScreen.dart:2357:19 • unnecessary_underscores
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:2404:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:2420:25 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidCastScreen.dart:2425:60 • deprecated_member_use
+   info • The file name 'AndroidFileListScreen.dart' isn't a lower_case_with_underscores identifier • lib/Screens/android/AndroidFileListScreen.dart:1:1 • file_names
+warning • Unused import: '../../widgets/tv_widgets.dart' • lib/Screens/android/AndroidFileListScreen.dart:17:8 • unused_import
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen.dart:229:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen.dart:231:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen.dart:233:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen.dart:236:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen.dart:238:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen.dart:241:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen.dart:244:7 • curly_braces_in_flow_control_structures
+warning • The declaration '_getSectorColor' isn't referenced • lib/Screens/android/AndroidFileListScreen.dart:275:9 • unused_element
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen.dart:303:7 • curly_braces_in_flow_control_structures
+  error • The named parameter 'settings' is required, but there's no corresponding argument • lib/Screens/android/AndroidFileListScreen.dart:317:32 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 1 found • lib/Screens/android/AndroidFileListScreen.dart:317:43 • extra_positional_arguments_could_be_named
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen.dart:369:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen.dart:382:7 • avoid_print
+  error • The named parameter 'id' is required, but there's no corresponding argument • lib/Screens/android/AndroidFileListScreen.dart:411:32 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 4 found • lib/Screens/android/AndroidFileListScreen.dart:412:7 • extra_positional_arguments_could_be_named
+  error • The named parameter 'id' is required, but there's no corresponding argument • lib/Screens/android/AndroidFileListScreen.dart:421:32 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 1 found • lib/Screens/android/AndroidFileListScreen.dart:421:39 • extra_positional_arguments_could_be_named
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen.dart:445:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen.dart:455:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen.dart:492:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen.dart:519:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen.dart:616:17 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen.dart:733:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen.dart:746:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen.dart:757:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen.dart:765:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen.dart:799:9 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:896:56 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:936:38 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:937:37 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:940:69 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:974:56 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1193:27 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1203:40 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1205:37 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1206:44 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1212:52 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1229:62 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1234:64 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1252:68 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1264:40 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1409:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1416:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1460:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1494:60 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1506:49 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1565:54 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1566:65 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1655:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1656:36 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1667:38 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1668:31 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1678:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1679:36 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1689:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1689:62 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1699:31 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1726:42 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1728:38 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1757:32 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen.dart:1766:32 • deprecated_member_use
+   info • The file name 'AndroidFileListScreen_old.dart' isn't a lower_case_with_underscores identifier • lib/Screens/android/AndroidFileListScreen_old.dart:1:1 • file_names
+  error • The named parameter 'settings' is required, but there's no corresponding argument • lib/Screens/android/AndroidFileListScreen_old.dart:115:32 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 1 found • lib/Screens/android/AndroidFileListScreen_old.dart:115:43 • extra_positional_arguments_could_be_named
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:175:7 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:299:50 • deprecated_member_use
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen_old.dart:330:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen_old.dart:332:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen_old.dart:334:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen_old.dart:337:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen_old.dart:339:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen_old.dart:342:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen_old.dart:345:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidFileListScreen_old.dart:407:7 • curly_braces_in_flow_control_structures
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:476:9 • avoid_print
+   info • The 'if' statement could be replaced by a null-aware assignment • lib/Screens/android/AndroidFileListScreen_old.dart:498:7 • prefer_conditional_assignment
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:537:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:555:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:576:21 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:590:21 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:623:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:656:13 • avoid_print
+warning • The value of the local variable 'lastDataReceived' isn't used • lib/Screens/android/AndroidFileListScreen_old.dart:671:16 • unused_local_variable
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:726:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:738:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:751:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:755:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:764:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:775:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:826:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:853:7 • avoid_print
+  error • The named parameter 'id' is required, but there's no corresponding argument • lib/Screens/android/AndroidFileListScreen_old.dart:882:32 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 4 found • lib/Screens/android/AndroidFileListScreen_old.dart:883:7 • extra_positional_arguments_could_be_named
+  error • The named parameter 'id' is required, but there's no corresponding argument • lib/Screens/android/AndroidFileListScreen_old.dart:892:32 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 1 found • lib/Screens/android/AndroidFileListScreen_old.dart:892:39 • extra_positional_arguments_could_be_named
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidFileListScreen_old.dart:904:7 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:982:54 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1027:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1028:47 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1067:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1074:46 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1114:56 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1189:38 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1191:53 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1192:42 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1213:46 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1229:49 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1255:44 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1256:41 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1261:46 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1262:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1442:53 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidFileListScreen_old.dart:1473:60 • deprecated_member_use
+   info • The file name 'AndroidHomeScreen.dart' isn't a lower_case_with_underscores identifier • lib/Screens/android/AndroidHomeScreen.dart:1:1 • file_names
+   info • Invalid use of a private type in a public API • lib/Screens/android/AndroidHomeScreen.dart:21:3 • library_private_types_in_public_api
+warning • The declaration '_checkClipboardAndSync' isn't referenced • lib/Screens/android/AndroidHomeScreen.dart:199:16 • unused_element
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHomeScreen.dart:230:11 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:276:48 • deprecated_member_use
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHomeScreen.dart:318:11 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:417:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:543:52 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:609:47 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:631:47 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:660:47 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:681:47 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:800:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:807:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:810:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:867:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:894:42 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:896:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:914:48 • deprecated_member_use
+   info • Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check • lib/Screens/android/AndroidHomeScreen.dart:1049:58 • use_build_context_synchronously
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:1173:69 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:1281:47 • deprecated_member_use
+warning • The value of the field '_ringCount' isn't used • lib/Screens/android/AndroidHomeScreen.dart:1393:20 • unused_field
+   info • Unnecessary use of multiple underscores • lib/Screens/android/AndroidHomeScreen.dart:1418:19 • unnecessary_underscores
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:1466:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:1482:25 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHomeScreen.dart:1487:60 • deprecated_member_use
+   info • The file name 'AndroidHttpFileShareScreen.dart' isn't a lower_case_with_underscores identifier • lib/Screens/android/AndroidHttpFileShareScreen.dart:1:1 • file_names
+   info • Invalid use of a private type in a public API • lib/Screens/android/AndroidHttpFileShareScreen.dart:66:3 • library_private_types_in_public_api
+warning • The value of the field '_displayCode' isn't used • lib/Screens/android/AndroidHttpFileShareScreen.dart:158:11 • unused_field
+warning • The declaration '_buildStatusCapsule' isn't referenced • lib/Screens/android/AndroidHttpFileShareScreen.dart:225:10 • unused_element
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:228:34 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:232:41 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:235:41 • deprecated_member_use
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:727:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:730:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:759:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:761:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:765:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:771:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:779:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:781:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:803:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:815:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:835:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:839:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:850:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:853:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:859:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:869:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:886:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:890:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:894:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:907:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:912:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:925:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:928:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:932:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:937:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:950:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:952:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:956:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:960:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:966:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:974:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:982:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:984:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:987:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:994:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1008:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1009:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1010:5 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:1057:45 • deprecated_member_use
+  error • The named parameter 'settings' is required, but there's no corresponding argument • lib/Screens/android/AndroidHttpFileShareScreen.dart:1148:43 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 1 found • lib/Screens/android/AndroidHttpFileShareScreen.dart:1149:7 • extra_positional_arguments_could_be_named
+  error • The named parameter 'id' is required, but there's no corresponding argument • lib/Screens/android/AndroidHttpFileShareScreen.dart:1221:43 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 4 found • lib/Screens/android/AndroidHttpFileShareScreen.dart:1222:7 • extra_positional_arguments_could_be_named
+  error • The named parameter 'id' is required, but there's no corresponding argument • lib/Screens/android/AndroidHttpFileShareScreen.dart:1231:43 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 1 found • lib/Screens/android/AndroidHttpFileShareScreen.dart:1231:50 • extra_positional_arguments_could_be_named
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1248:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1257:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1323:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1330:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1378:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1383:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1389:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1410:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1428:15 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1474:17 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1495:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1501:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1515:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1565:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1569:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1572:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1609:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1613:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1615:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1617:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1629:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1729:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1740:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1760:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1780:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1782:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1795:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1798:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1800:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1860:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1944:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:1979:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2000:5 • avoid_print
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidHttpFileShareScreen.dart:2012:11 • curly_braces_in_flow_control_structures
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2026:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2041:15 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2043:15 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2062:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2065:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2081:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2089:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2103:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2168:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2245:19 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2259:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2332:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2362:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2381:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2393:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2421:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2423:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2429:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2511:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2542:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:2551:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3365:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3376:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3388:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3394:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3400:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3404:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3407:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3410:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3415:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3432:15 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3441:15 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3453:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3457:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3458:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3459:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3460:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3461:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3470:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3474:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3516:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3543:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3547:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3552:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3568:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3581:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3603:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3611:13 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3614:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3615:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3618:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3619:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3630:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3646:9 • avoid_print
+   info • Don't use 'BuildContext's across async gaps • lib/Screens/android/AndroidHttpFileShareScreen.dart:3650:11 • use_build_context_synchronously
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3729:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3737:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3741:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3743:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3752:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3778:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3782:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3798:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3814:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3829:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3850:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3861:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3871:5 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:3885:9 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:3943:44 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:3948:39 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:3968:52 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4107:60 • deprecated_member_use
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:4139:5 • avoid_print
+   info • 'setScreenBrightness' is deprecated and shouldn't be used. refactored to setApplicationScreenBrightness (will be remove after version 2.1.0) • lib/Screens/android/AndroidHttpFileShareScreen.dart:4151:34 • deprecated_member_use
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:4153:9 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4160:36 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4170:52 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4175:54 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4215:62 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4245:47 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4248:60 • deprecated_member_use
+   info • 'resetScreenBrightness' is deprecated and shouldn't be used. refactored to resetApplicationScreenBrightness (will be remove after version 2.1.0) • lib/Screens/android/AndroidHttpFileShareScreen.dart:4298:34 • deprecated_member_use
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:4300:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:4303:7 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4381:51 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4518:46 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4675:39 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4680:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4717:41 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4782:34 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4786:41 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4789:41 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4921:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4927:45 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:4933:41 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5004:39 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5111:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5152:63 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5158:61 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5176:63 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5191:61 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5197:59 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5222:59 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5235:61 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5238:63 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5250:67 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5258:69 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5297:37 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5374:52 • deprecated_member_use
+warning • The declaration '_buildEmptyDevicesState' isn't referenced • lib/Screens/android/AndroidHttpFileShareScreen.dart:5419:10 • unused_element
+warning • The declaration '_buildCompactDeviceList' isn't referenced • lib/Screens/android/AndroidHttpFileShareScreen.dart:5446:10 • unused_element
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5505:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5510:41 • deprecated_member_use
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:5522:23 • avoid_print
+   info • Unnecessary use of multiple underscores • lib/Screens/android/AndroidHttpFileShareScreen.dart:5539:37 • unnecessary_underscores
+   info • Unnecessary use of multiple underscores • lib/Screens/android/AndroidHttpFileShareScreen.dart:5539:41 • unnecessary_underscores
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5566:40 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5608:46 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5613:41 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5632:54 • deprecated_member_use
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidHttpFileShareScreen.dart:5639:23 • avoid_print
+   info • Unnecessary use of multiple underscores • lib/Screens/android/AndroidHttpFileShareScreen.dart:5651:43 • unnecessary_underscores
+   info • Unnecessary use of multiple underscores • lib/Screens/android/AndroidHttpFileShareScreen.dart:5651:47 • unnecessary_underscores
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5726:56 • deprecated_member_use
+warning • The declaration '_buildBeautifulDeviceCard' isn't referenced • lib/Screens/android/AndroidHttpFileShareScreen.dart:5796:10 • unused_element
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5817:45 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5818:45 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5831:47 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5832:40 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:5848:49 • deprecated_member_use
+   info • Unnecessary use of multiple underscores • lib/Screens/android/AndroidHttpFileShareScreen.dart:5869:39 • unnecessary_underscores
+   info • Unnecessary use of multiple underscores • lib/Screens/android/AndroidHttpFileShareScreen.dart:5869:43 • unnecessary_underscores
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6089:46 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6094:41 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6266:43 • deprecated_member_use
+warning • The declaration '_buildSwipeToDeleteFile' isn't referenced • lib/Screens/android/AndroidHttpFileShareScreen.dart:6429:10 • unused_element
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6599:42 • deprecated_member_use
+   info • 'scale' is deprecated and shouldn't be used. Use scaleByVector3, scaleByVector4, or scaleByDouble instead • lib/Screens/android/AndroidHttpFileShareScreen.dart:6722:44 • deprecated_member_use
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6722:62 • dead_code
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6729:24 • deprecated_member_use
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6729:48 • dead_code
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6730:43 • dead_code
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6731:49 • dead_code
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6736:37 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6745:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6746:46 • deprecated_member_use
+   info • 'scale' is deprecated and shouldn't be used. Use scaleByVector3, scaleByVector4, or scaleByDouble instead • lib/Screens/android/AndroidHttpFileShareScreen.dart:6778:44 • deprecated_member_use
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6778:62 • dead_code
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6784:41 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6785:44 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6789:45 • deprecated_member_use
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6789:69 • dead_code
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6792:47 • deprecated_member_use
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6793:37 • dead_code
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6799:43 • deprecated_member_use
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6799:67 • dead_code
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6800:49 • dead_code
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6801:55 • dead_code
+warning • The declaration '_buildPillActionButton' isn't referenced • lib/Screens/android/AndroidHttpFileShareScreen.dart:6835:10 • unused_element
+   info • 'scale' is deprecated and shouldn't be used. Use scaleByVector3, scaleByVector4, or scaleByDouble instead • lib/Screens/android/AndroidHttpFileShareScreen.dart:6854:44 • deprecated_member_use
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6854:62 • dead_code
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6860:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6861:46 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6869:38 • deprecated_member_use
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6869:62 • dead_code
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6870:49 • dead_code
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6871:55 • dead_code
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6875:45 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6882:43 • deprecated_member_use
+   info • 'scale' is deprecated and shouldn't be used. Use scaleByVector3, scaleByVector4, or scaleByDouble instead • lib/Screens/android/AndroidHttpFileShareScreen.dart:6938:44 • deprecated_member_use
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6938:62 • dead_code
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6944:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6945:46 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6974:64 • deprecated_member_use
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6975:57 • dead_code
+warning • Dead code • lib/Screens/android/AndroidHttpFileShareScreen.dart:6976:63 • dead_code
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6981:53 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:6987:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7122:36 • deprecated_member_use
+   info • Unnecessary use of multiple underscores • lib/Screens/android/AndroidHttpFileShareScreen.dart:7184:19 • unnecessary_underscores
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7232:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7249:25 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7254:60 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7312:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7414:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7419:41 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7430:47 • deprecated_member_use
+warning • A value for optional parameter 'step' isn't ever given • lib/Screens/android/AndroidHttpFileShareScreen.dart:7466:10 • unused_element_parameter
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7516:44 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7521:46 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7526:35 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7556:58 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7574:53 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7600:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7603:52 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7660:27 • deprecated_member_use
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidHttpFileShareScreen.dart:7768:7 • curly_braces_in_flow_control_structures
+warning • A value for optional parameter 'step' isn't ever given • lib/Screens/android/AndroidHttpFileShareScreen.dart:7903:10 • unused_element_parameter
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7993:36 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:7994:47 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:8001:38 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:8002:49 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:8007:35 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:8056:59 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:8107:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:8108:61 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:8113:52 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:8114:63 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:8198:29 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:8295:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidHttpFileShareScreen.dart:8313:37 • deprecated_member_use
+   info • The file name 'AndroidImagePreviewDialog.dart' isn't a lower_case_with_underscores identifier • lib/Screens/android/AndroidImagePreviewDialog.dart:1:1 • file_names
+   info • Parameter 'key' could be a super parameter • lib/Screens/android/AndroidImagePreviewDialog.dart:11:9 • use_super_parameters
+   info • Invalid use of a private type in a public API • lib/Screens/android/AndroidImagePreviewDialog.dart:19:3 • library_private_types_in_public_api
+   info • The private field _imageCache could be 'final' • lib/Screens/android/AndroidImagePreviewDialog.dart:25:27 • prefer_final_fields
+   info • Use a 'SizedBox' to add whitespace to a layout • lib/Screens/android/AndroidImagePreviewDialog.dart:99:26 • sized_box_for_whitespace
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidImagePreviewDialog.dart:117:62 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidImagePreviewDialog.dart:232:45 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidImagePreviewDialog.dart:259:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidImagePreviewDialog.dart:294:49 • deprecated_member_use
+   info • Use a 'SizedBox' to add whitespace to a layout • lib/Screens/android/AndroidImagePreviewDialog.dart:330:12 • sized_box_for_whitespace
+   info • The file name 'AndroidReceiveOptionsScreen.dart' isn't a lower_case_with_underscores identifier • lib/Screens/android/AndroidReceiveOptionsScreen.dart:1:1 • file_names
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:112:33 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:165:30 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:166:30 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:167:30 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:219:45 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:235:45 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:269:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:291:57 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:309:57 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:410:40 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:411:40 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:465:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:510:40 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:512:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:526:45 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:543:44 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveOptionsScreen.dart:600:52 • deprecated_member_use
+   info • The file name 'AndroidReceiveScreen.dart' isn't a lower_case_with_underscores identifier • lib/Screens/android/AndroidReceiveScreen.dart:1:1 • file_names
+   info • The private field _tasks could be 'final' • lib/Screens/android/AndroidReceiveScreen.dart:97:22 • prefer_final_fields
+   info • The private field _downloadedFiles could be 'final' • lib/Screens/android/AndroidReceiveScreen.dart:98:22 • prefer_final_fields
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:113:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:149:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:160:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:212:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:216:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:277:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:295:7 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:322:58 • deprecated_member_use
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:347:9 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:394:19 • avoid_print
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidReceiveScreen.dart:428:23 • curly_braces_in_flow_control_structures
+  error • The named parameter 'settings' is required, but there's no corresponding argument • lib/Screens/android/AndroidReceiveScreen.dart:460:43 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 1 found • lib/Screens/android/AndroidReceiveScreen.dart:461:7 • extra_positional_arguments_could_be_named
+  error • The named parameter 'id' is required, but there's no corresponding argument • lib/Screens/android/AndroidReceiveScreen.dart:511:43 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 4 found • lib/Screens/android/AndroidReceiveScreen.dart:512:7 • extra_positional_arguments_could_be_named
+  error • The named parameter 'id' is required, but there's no corresponding argument • lib/Screens/android/AndroidReceiveScreen.dart:521:43 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 1 found • lib/Screens/android/AndroidReceiveScreen.dart:521:50 • extra_positional_arguments_could_be_named
+   info • Don't use 'BuildContext's across async gaps • lib/Screens/android/AndroidReceiveScreen.dart:566:30 • use_build_context_synchronously
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:579:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:592:7 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:711:41 • deprecated_member_use
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:897:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/AndroidReceiveScreen.dart:914:13 • avoid_print
+   info • Don't use 'BuildContext's across async gaps • lib/Screens/android/AndroidReceiveScreen.dart:935:30 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps • lib/Screens/android/AndroidReceiveScreen.dart:946:28 • use_build_context_synchronously
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidReceiveScreen.dart:962:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidReceiveScreen.dart:969:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidReceiveScreen.dart:971:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidReceiveScreen.dart:973:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidReceiveScreen.dart:976:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidReceiveScreen.dart:978:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidReceiveScreen.dart:981:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/AndroidReceiveScreen.dart:984:7 • curly_braces_in_flow_control_structures
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1081:39 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1165:43 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1260:59 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1361:54 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1417:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1450:38 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1456:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1489:61 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1490:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1499:63 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1500:52 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1613:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1621:39 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1688:54 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1736:62 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1761:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1771:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1830:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1872:52 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1882:56 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:1976:62 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:2004:53 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:2080:60 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/AndroidReceiveScreen.dart:2083:33 • deprecated_member_use
+   info • The file name 'NearbyDevicesScreen.dart' isn't a lower_case_with_underscores identifier • lib/Screens/android/NearbyDevicesScreen.dart:1:1 • file_names
+   info • Empty catch block • lib/Screens/android/NearbyDevicesScreen.dart:98:21 • empty_catches
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/NearbyDevicesScreen.dart:293:25 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/NearbyDevicesScreen.dart:295:44 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/NearbyDevicesScreen.dart:388:42 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/NearbyDevicesScreen.dart:392:44 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/NearbyDevicesScreen.dart:410:42 • deprecated_member_use
+   info • The file name 'WebReceiveScreen.dart' isn't a lower_case_with_underscores identifier • lib/Screens/android/WebReceiveScreen.dart:1:1 • file_names
+   info • The private field _receivedFiles could be 'final' • lib/Screens/android/WebReceiveScreen.dart:72:22 • prefer_final_fields
+   info • The private field _ongoingDownloads could be 'final' • lib/Screens/android/WebReceiveScreen.dart:73:29 • prefer_final_fields
+  error • The named parameter 'settings' is required, but there's no corresponding argument • lib/Screens/android/WebReceiveScreen.dart:99:32 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 1 found • lib/Screens/android/WebReceiveScreen.dart:99:43 • extra_positional_arguments_could_be_named
+  error • The named parameter 'id' is required, but there's no corresponding argument • lib/Screens/android/WebReceiveScreen.dart:149:32 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 4 found • lib/Screens/android/WebReceiveScreen.dart:150:7 • extra_positional_arguments_could_be_named
+  error • The named parameter 'id' is required, but there's no corresponding argument • lib/Screens/android/WebReceiveScreen.dart:159:34 • missing_required_argument
+  error • Too many positional arguments: 0 expected, but 1 found • lib/Screens/android/WebReceiveScreen.dart:159:41 • extra_positional_arguments_could_be_named
+   info • Don't invoke 'print' in production code • lib/Screens/android/WebReceiveScreen.dart:190:7 • avoid_print
+   info • Don't use 'BuildContext's across async gaps • lib/Screens/android/WebReceiveScreen.dart:249:30 • use_build_context_synchronously
+   info • Don't invoke 'print' in production code • lib/Screens/android/WebReceiveScreen.dart:262:7 • avoid_print
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:310:45 • deprecated_member_use
+   info • Don't use 'BuildContext's across async gaps • lib/Screens/android/WebReceiveScreen.dart:378:28 • use_build_context_synchronously
+   info • Don't invoke 'print' in production code • lib/Screens/android/WebReceiveScreen.dart:471:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/WebReceiveScreen.dart:518:7 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/WebReceiveScreen.dart:878:15 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/WebReceiveScreen.dart:893:11 • avoid_print
+   info • Don't invoke 'print' in production code • lib/Screens/android/WebReceiveScreen.dart:913:9 • avoid_print
+   info • Don't use 'BuildContext's across async gaps • lib/Screens/android/WebReceiveScreen.dart:955:30 • use_build_context_synchronously
+   info • Don't use 'BuildContext's across async gaps • lib/Screens/android/WebReceiveScreen.dart:966:28 • use_build_context_synchronously
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceiveScreen.dart:981:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceiveScreen.dart:983:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceiveScreen.dart:985:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceiveScreen.dart:988:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceiveScreen.dart:990:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceiveScreen.dart:993:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceiveScreen.dart:996:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceiveScreen.dart:1058:7 • curly_braces_in_flow_control_structures
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1107:62 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1180:54 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1208:56 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1282:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1293:53 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1294:42 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1355:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1358:52 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1383:54 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1400:42 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1433:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1467:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1477:50 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1536:50 • deprecated_member_use
+warning • The value of the local variable 'totalFiles' isn't used • lib/Screens/android/WebReceiveScreen.dart:1551:11 • unused_local_variable
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1558:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1593:52 • deprecated_member_use
+warning • The declaration '_buildFileItem' isn't referenced • lib/Screens/android/WebReceiveScreen.dart:1641:10 • unused_element
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1648:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1658:52 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1726:55 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1733:58 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceiveScreen.dart:1752:49 • deprecated_member_use
+   info • The file name 'WebReceivedFilesScreen.dart' isn't a lower_case_with_underscores identifier • lib/Screens/android/WebReceivedFilesScreen.dart:1:1 • file_names
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceivedFilesScreen.dart:91:37 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceivedFilesScreen.dart:138:54 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceivedFilesScreen.dart:189:39 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceivedFilesScreen.dart:239:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceivedFilesScreen.dart:247:48 • deprecated_member_use
+   info • 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss • lib/Screens/android/WebReceivedFilesScreen.dart:281:46 • deprecated_member_use
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceivedFilesScreen.dart:328:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceivedFilesScreen.dart:330:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceivedFilesScreen.dart:332:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceivedFilesScreen.dart:335:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceivedFilesScreen.dart:337:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceivedFilesScreen.dart:340:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceivedFilesScreen.dart:343:7 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block • lib/Screens/android/WebReceivedFilesScreen.dart:405:7 • curly_braces_in_flow_control_structures
+
+690 issues found. (ran in 7.3s)
