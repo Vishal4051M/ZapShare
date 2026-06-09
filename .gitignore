@@ -50,3 +50,7 @@ app.*.map.json
 
 # Google OAuth secrets
 client_secret_*.json
+
+# Markdown and backup files
+*.md
+backup/
