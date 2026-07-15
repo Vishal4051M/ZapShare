@@ -149,7 +149,7 @@ class _FirstTimeSetupScreenState extends State<FirstTimeSetupScreen> {
     await prefs.setString('username', username);
     await prefs.setBool('first_run_complete', true);
 
-    // Sync with Supabase if logged in
+    // Sync with Firebase if logged in
     if (_currentUser != null) {
       try {
         final currentFirebaseUid = FirebaseService().firebaseUid;

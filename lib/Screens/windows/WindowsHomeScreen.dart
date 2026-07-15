@@ -30,7 +30,6 @@ class WindowsHomeScreen extends StatefulWidget {
 class _WindowsHomeScreenState extends State<WindowsHomeScreen>
     with WindowListener {
   final DeviceDiscoveryService _discoveryService = DeviceDiscoveryService();
-  bool _isSupabaseInitialized = false;
   String? _lastClipboardContent;
   Timer? _clipboardPollingTimer;
   StreamSubscription<AuthState>? _authStateSubscription;
@@ -53,8 +52,8 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
     _clipboardPageController = PageController();
     // Ensure discovery is active when we land on Home
     _ensureDiscoveryStarted();
-    _checkSupabaseInit();
     _initializeHome();
+    _checkClipboardAndSync();
 
     // Start local clipboard polling to detect copies made OUTSIDE the app (background)
     // This is efficient (local only) and necessary for "instant" background sync on Windows
@@ -81,7 +80,7 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
     final subscriptionTime = DateTime.now();
 
     // 1. Subscribe to the LIST (Base Stream)
-    // This connects the Supabase stream to our UI controller
+    // This connects the Firebase stream to our UI controller
     _cloudClipboardSubscription = service.getClipboardStream().listen((items) {
       if (!_uiStreamController.isClosed) {
         _uiStreamController.add(items);
@@ -138,7 +137,13 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
         print("📋 [Clipboard] Applying new content to system clipboard: '${content.substring(0, min(15, content.length))}'");
       }
       // Sync FROM Cloud TO Windows Clipboard (works in background if app is minimized)
-      await Clipboard.setData(ClipboardData(text: content));
+      try {
+        await Clipboard.setData(ClipboardData(text: content));
+      } catch (e) {
+        if (kDebugMode) {
+          print("⚠️ [Clipboard] Failed to write to system clipboard: $e");
+        }
+      }
 
       // Update our local tracker
       _lastClipboardContent = content;
@@ -163,13 +168,7 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
     }
   }
 
-  Future<void> _checkSupabaseInit() async {
-    // We assume init started in main.dart.
-    setState(() {
-      _isSupabaseInitialized = true;
-    });
-    _checkClipboardAndSync();
-  }
+  // Supabase initialization check removed (using Firebase)
 
   void _ensureDiscoveryStarted() async {
     try {
@@ -203,8 +202,8 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
   }
 
   Future<void> _checkClipboardAndSync() async {
-    // This method is called every 1 second by the timer
-    if (!_isSupabaseInitialized || _isInitializing) return;
+    // This method is called by the timer
+    if (_isInitializing) return;
 
     try {
       // 1. Get current System Clipboard
@@ -842,23 +841,6 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
   }
 
   Widget _buildClipboardSection() {
-    if (!_isSupabaseInitialized) {
-      return Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1C1C1E).withOpacity(0.4),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withOpacity(0.05)),
-        ),
-        child: Center(
-          child: Text(
-            "Service Unavailable",
-            style: GoogleFonts.outfit(color: Colors.white),
-          ),
-        ),
-      );
-    }
-
     final user = FirebaseService().currentUser;
     final themeColor = const Color(0xFFFFD600);
 

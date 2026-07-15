@@ -21,6 +21,7 @@ import 'package:zap_share/widgets/connection_request_dialog.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:zap_share/services/firebase_service.dart';
+import 'package:zap_share/services/EnvService.dart';
 import 'Screens/windows/WindowsFileShareScreen.dart';
 import 'Screens/windows/WindowsCastScreen.dart';
 import 'Screens/windows/WindowsReceiveScreen.dart';
@@ -98,6 +99,7 @@ Future<void> requestPermissions() async {
 void main(List<String> args) async {
   debugPrint('🏁 [Main] App starting with args: $args');
   WidgetsFlutterBinding.ensureInitialized();
+  await EnvService.init();
   if (Platform.isWindows ||
       Platform.isLinux ||
       Platform.isMacOS ||

@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'encryption_service.dart';
+import 'EnvService.dart';
 
 class User {
   final String id;
@@ -68,14 +69,13 @@ class FirebaseService {
     try {
       if (Firebase.apps.isEmpty) {
         await Firebase.initializeApp(
-          options: const FirebaseOptions(
-            apiKey: 'AIzaSyAXM2QUxDZ9a0cSo-hyNu-yla5sDBJ3YoE',
-            appId: '1:22061846776:android:f615a3240651251305eb0d',
-            messagingSenderId: '22061846776',
-            projectId: 'assistant-mark-2-bdd7e',
-            storageBucket: 'assistant-mark-2-bdd7e.firebasestorage.app',
-            databaseURL:
-                'https://assistant-mark-2-bdd7e-default-rtdb.asia-southeast1.firebasedatabase.app',
+          options: FirebaseOptions(
+            apiKey: EnvService.get('FIREBASE_API_KEY'),
+            appId: EnvService.get('FIREBASE_APP_ID'),
+            messagingSenderId: EnvService.get('FIREBASE_MESSAGING_SENDER_ID'),
+            projectId: EnvService.get('FIREBASE_PROJECT_ID'),
+            storageBucket: EnvService.get('FIREBASE_STORAGE_BUCKET'),
+            databaseURL: EnvService.get('FIREBASE_DATABASE_URL'),
           ),
         );
       }
@@ -220,23 +220,8 @@ class FirebaseService {
   }
 
   Future<bool> signInWithGoogleDesktop() async {
-    // ─── CONFIGURE YOUR DESKTOP CLIENT ID HERE ───────────────────────────────
-    // 1. Go to https://console.cloud.google.com/apis/credentials
-    // 2. Click "+ CREATE CREDENTIALS" → "OAuth client ID"
-    // 3. Choose Application type: "Desktop app" → Name it "ZapShare Windows"
-    // 4. Copy the Client ID and Client Secret below.
-    // Splitted to prevent GitHub push protection triggers
-    final String desktopClientId = [
-      '132834333952-',
-      '6bke9aa8k1u0lohi7fjh5no4lemtnnd7',
-      '.apps.googleusercontent.com'
-    ].join('');
-    final String desktopClientSecret = [
-      'GO',
-      'CSPX-',
-      'XRQb3K6dqyeJgB3NZySImMh30be0'
-    ].join('');
-    // ─────────────────────────────────────────────────────────────────────────
+    final String desktopClientId = EnvService.get('GOOGLE_DESKTOP_CLIENT_ID');
+    final String desktopClientSecret = EnvService.get('GOOGLE_DESKTOP_CLIENT_SECRET');
 
     if (desktopClientId.startsWith('YOUR_')) {
       if (kDebugMode) {

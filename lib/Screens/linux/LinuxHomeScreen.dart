@@ -26,7 +26,6 @@ class LinuxHomeScreen extends StatefulWidget {
 
 class _LinuxHomeScreenState extends State<LinuxHomeScreen> with WindowListener {
   final DeviceDiscoveryService _discoveryService = DeviceDiscoveryService();
-  bool _isSupabaseInitialized = false;
   String? _lastClipboardContent;
   Timer? _clipboardPollingTimer;
   StreamSubscription<AuthState>? _authStateSubscription;
@@ -39,7 +38,7 @@ class _LinuxHomeScreenState extends State<LinuxHomeScreen> with WindowListener {
     windowManager.addListener(this);
     // Ensure discovery is active when we land on Home
     _ensureDiscoveryStarted();
-    _checkSupabaseInit();
+    _checkClipboardAndSync();
 
     // Listen for auth state changes (e.g. login success)
     _authStateSubscription = FirebaseService().authStateChanges.listen((data) {
@@ -74,7 +73,7 @@ class _LinuxHomeScreenState extends State<LinuxHomeScreen> with WindowListener {
     if (service.currentUser == null) return;
 
     // 1. Subscribe to the LIST (Base Stream)
-    // This connects the Supabase stream to our UI controller
+    // This connects the Firebase stream to our UI controller
     _cloudClipboardSubscription = service.getClipboardStream().listen((items) {
       if (!_uiStreamController.isClosed) {
         _uiStreamController.add(items);
@@ -126,7 +125,13 @@ class _LinuxHomeScreenState extends State<LinuxHomeScreen> with WindowListener {
 
     if (content != _lastClipboardContent) {
       // Sync FROM Cloud TO Windows Clipboard (works in background if app is minimized)
-      await Clipboard.setData(ClipboardData(text: content));
+      try {
+        await Clipboard.setData(ClipboardData(text: content));
+      } catch (e) {
+        if (kDebugMode) {
+          print("⚠️ [Clipboard] Failed to write to system clipboard: $e");
+        }
+      }
 
       // Update our local tracker
       _lastClipboardContent = content;
@@ -148,13 +153,7 @@ class _LinuxHomeScreenState extends State<LinuxHomeScreen> with WindowListener {
     }
   }
 
-  Future<void> _checkSupabaseInit() async {
-    // We assume init started in main.dart.
-    setState(() {
-      _isSupabaseInitialized = true;
-    });
-    _checkClipboardAndSync();
-  }
+  // Supabase initialization check removed (using Firebase)
 
   void _ensureDiscoveryStarted() async {
     try {
@@ -185,8 +184,7 @@ class _LinuxHomeScreenState extends State<LinuxHomeScreen> with WindowListener {
   }
 
   Future<void> _checkClipboardAndSync() async {
-    // This method is called every 1 second by the timer
-    if (!_isSupabaseInitialized) return;
+    // This method is called by the timer
 
     try {
       // 1. Get current System Clipboard
@@ -795,23 +793,6 @@ class _LinuxHomeScreenState extends State<LinuxHomeScreen> with WindowListener {
   }
 
   Widget _buildClipboardSection() {
-    if (!_isSupabaseInitialized) {
-      return Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1C1C1E).withOpacity(0.4),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withOpacity(0.05)),
-        ),
-        child: Center(
-          child: Text(
-            "Service Unavailable",
-            style: GoogleFonts.outfit(color: Colors.white),
-          ),
-        ),
-      );
-    }
-
     final user = FirebaseService().currentUser;
     final themeColor = const Color(0xFFFFD600);
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -41,7 +42,6 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen>
     with WidgetsBindingObserver {
   static const MethodChannel _platform = MethodChannel('zapshare.saf');
   String? _lastClipboardContent;
-  bool _isSupabaseInitialized = false;
 
   StreamSubscription<List<Map<String, dynamic>>>? _cloudClipboardSubscription;
 
@@ -64,7 +64,6 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen>
     _clipboardPageController = PageController();
     WidgetsBinding.instance.addObserver(this);
     _listenForSharedFiles();
-    _checkSupabaseInit();
     _loadAnywhereMode();
 
     // Listen for auth state changes
@@ -804,7 +803,7 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen>
     final subscriptionTime = DateTime.now();
 
     // 1. Subscribe to the LIST (Base Stream)
-    // Connecting Supabase stream to our UI controller
+    // Connecting Firebase stream to our UI controller
     _cloudClipboardSubscription = FirebaseService().getClipboardStream().listen(
       (items) {
         if (!_uiStreamController.isClosed) {
@@ -854,7 +853,13 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen>
       _lastCloudContent = content;
 
       // Sync FROM Cloud TO Android Clipboard
-      await Clipboard.setData(ClipboardData(text: content));
+      try {
+        await Clipboard.setData(ClipboardData(text: content));
+      } catch (e) {
+        if (kDebugMode) {
+          print("⚠️ [Clipboard] Failed to write to system clipboard: $e");
+        }
+      }
 
       // Update our local tracker
       _lastClipboardContent = content;
@@ -870,16 +875,6 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen>
         );
       }
     }
-  }
-
-  Future<void> _checkSupabaseInit() async {
-    // We assume init started in main.dart. The service handles safe access.
-    // Setting true here ensures the UI shows up.
-
-    setState(() {
-      _isSupabaseInitialized = true;
-    });
-    // _checkClipboardAndSync(); // Removed auto-sync on open as requested
   }
 
   @override
@@ -957,7 +952,6 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen>
 
   Future<void> _checkClipboardAndSync() async {
     // Legacy auto-sync kept for reference but disabled by caller
-    if (!_isSupabaseInitialized) return;
 
     // 1. Get System Clipboard
     ClipboardData? data = await Clipboard.getData(Clipboard.kTextPlain);
@@ -1892,23 +1886,6 @@ class _AndroidHomeScreenState extends State<AndroidHomeScreen>
   }
 
   Widget _buildClipboardSection({bool enableScroll = false}) {
-    if (!_isSupabaseInitialized) {
-      return Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1C1C1E).withOpacity(0.4),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withOpacity(0.05)),
-        ),
-        child: Center(
-          child: Text(
-            "Service Unavailable",
-            style: GoogleFonts.outfit(color: Colors.white),
-          ),
-        ),
-      );
-    }
-
     final user = FirebaseService().currentUser;
 
     return Container(
