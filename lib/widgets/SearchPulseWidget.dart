@@ -5,12 +5,14 @@ class SearchPulseWidget extends StatefulWidget {
   final double size;
   final Color color;
   final Widget? child;
+  final bool showCenterDot;
 
   const SearchPulseWidget({
     super.key,
     this.size = 300,
     this.color = Colors.black,
     this.child,
+    this.showCenterDot = true,
   });
 
   @override
@@ -46,14 +48,16 @@ class _SearchPulseWidgetState extends State<SearchPulseWidget>
             height: widget.size,
             child: AnimatedBuilder(
               animation: _controller,
-              builder: (_, __) => CustomPaint(
-                painter: _SearchPulsePainter(
-                  progress: _controller.value,
-                  color: widget.color,
-                ),
-                isComplex: false,
-                willChange: true,
-              ),
+              builder:
+                  (_, __) => CustomPaint(
+                    painter: _SearchPulsePainter(
+                      progress: _controller.value,
+                      color: widget.color,
+                      showCenterDot: widget.showCenterDot,
+                    ),
+                    isComplex: false,
+                    willChange: true,
+                  ),
             ),
           ),
         ),
@@ -66,8 +70,13 @@ class _SearchPulseWidgetState extends State<SearchPulseWidget>
 class _SearchPulsePainter extends CustomPainter {
   final double progress;
   final Color color;
+  final bool showCenterDot;
 
-  const _SearchPulsePainter({required this.progress, required this.color});
+  const _SearchPulsePainter({
+    required this.progress,
+    required this.color,
+    required this.showCenterDot,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -87,28 +96,32 @@ class _SearchPulsePainter extends CustomPainter {
           center,
           radius,
           Paint()
-            ..color = color.withValues(alpha: opacity)
+            ..color = color.withOpacity(opacity)
             ..style = PaintingStyle.stroke
             ..strokeWidth = stroke,
         );
       }
     }
 
-    final breathe = (0.5 + 0.5 * sin(progress * 2 * 3.14159)).abs();
-    final dotR = size.width * 0.05 * (0.9 + breathe * 0.2);
+    if (showCenterDot) {
+      final breathe = (0.5 + 0.5 * sin(progress * 2 * 3.14159)).abs();
+      final dotR = size.width * 0.05 * (0.9 + breathe * 0.2);
 
-    canvas.drawCircle(
-      center,
-      dotR * 1.6,
-      Paint()
-        ..color = color.withValues(alpha: 0.12)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
-    );
+      canvas.drawCircle(
+        center,
+        dotR * 1.6,
+        Paint()
+          ..color = color.withOpacity(0.12)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+      );
 
-    canvas.drawCircle(center, dotR, Paint()..color = color.withValues(alpha: 0.3));
+      canvas.drawCircle(center, dotR, Paint()..color = color.withOpacity(0.3));
+    }
   }
 
   @override
   bool shouldRepaint(_SearchPulsePainter old) =>
-      old.progress != progress || old.color != color;
+      old.progress != progress ||
+      old.color != color ||
+      old.showCenterDot != showCenterDot;
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -9,9 +10,8 @@ import 'package:zap_share/blocs/navigation/smooth_page_route.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import '../../services/device_discovery_service.dart';
 import '../../Constants/FocusSurface.dart';
-import '../../Views/AudioSharePulseView.dart';
-import '../../Views/AudioShareDeviceList.dart';
-import '../../Views/AudioShareHeader.dart';
+import '../../widgets/CustomAvatarWidget.dart';
+import '../../widgets/SearchPulseWidget.dart';
 import '../../Views/AudioShareSourceToggle.dart';
 
 class AudioShareScreen extends StatefulWidget {
@@ -43,10 +43,10 @@ class _AudioShareScreenState extends State<AudioShareScreen>
   String? _customAvatar;
 
   Future<void> _loadAvatar() async {
-    final prefs = await SharedPreferences.getInstance();
+    final avatar = await CustomAvatarWidget.getEffectiveLocalAvatar();
     if (mounted) {
       setState(() {
-        _customAvatar = prefs.getString('custom_avatar');
+        _customAvatar = avatar;
       });
     }
   }
@@ -201,55 +201,8 @@ class _AudioShareScreenState extends State<AudioShareScreen>
     }
   }
 
-  Future<void> _startHttpSystemAudio() async {
-    bool granted = false;
-    try {
-      granted = await _channel.invokeMethod('requestScreenCapture');
-    } catch (e) {
-      print('Screen capture request failed: $e');
-    }
-    if (!granted) {
-      throw 'Screen capture permission denied – cannot capture device audio';
-    }
-
-    int port = 0;
-    String lastError = 'Server not ready';
-    for (int attempt = 0; attempt < 25; attempt++) {
-      await Future.delayed(const Duration(milliseconds: 300));
-      try {
-        final result = await _channel.invokeMethod('getScreenMirrorPort');
-        if (result is int && result > 0) {
-          port = result;
-          break;
-        }
-        if (result is int && result == -1)
-          lastError = 'Native mirror server error';
-      } catch (e) {
-        lastError = e.toString();
-      }
-    }
-
-    if (port <= 0) {
-      throw 'Audio capture failed: $lastError';
-    }
-
-    final ip = await _getLocalIp();
-    if (ip == null) {
-      throw 'Could not determine local IP for audio cast';
-    }
-
-    final audioUrl = 'http://$ip:$port/audio';
-    print('🎵 HTTP Audio server started at $audioUrl');
-
-    final ips = _selectedTargets.toList();
-    for (final targetIp in ips) {
-      await _discoveryService.sendHttpAudioOffer(targetIp, audioUrl);
-    }
-  }
-
   Future<String?> _getLocalIp() async {
     try {
-      // 1. Try to get the Wi-Fi IP from network_info_plus (ignores VPNs)
       String? ip = await _networkInfo.getWifiIP();
       if (ip != null &&
           ip.isNotEmpty &&
@@ -258,7 +211,6 @@ class _AudioShareScreenState extends State<AudioShareScreen>
         return ip;
       }
 
-      // 2. Fall back to scanning interfaces, but filter out loopback and VPN/Tailscale interfaces
       final interfaces = await NetworkInterface.list();
       for (var iface in interfaces) {
         final name = iface.name.toLowerCase();
@@ -277,13 +229,11 @@ class _AudioShareScreenState extends State<AudioShareScreen>
           if (addr.type == InternetAddressType.IPv4 &&
               !addr.isLoopback &&
               !addr.address.startsWith('100.')) {
-            // 100.x.x.x is CGNAT/Tailscale
             return addr.address;
           }
         }
       }
 
-      // 3. Last resort fallback to any valid IPv4 address
       for (var iface in interfaces) {
         for (var addr in iface.addresses) {
           if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
@@ -336,150 +286,219 @@ class _AudioShareScreenState extends State<AudioShareScreen>
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final media = MediaQuery.of(context);
-    final isLandscape = media.orientation == Orientation.landscape;
-    final isTvLayout = media.size.shortestSide >= 600;
-    final useTvLayout = isLandscape && isTvLayout;
+  String _getDeviceEmoji(String name, {String? platform}) {
+    if (platform != null) {
+      final p = platform.toLowerCase();
+      if (p.contains('ios') || p.contains('iphone') || p.contains('ipad')) {
+        return '📱';
+      } else if (p.contains('mac')) {
+        return '💻';
+      } else if (p.contains('android')) {
+        return '🤖';
+      } else if (p.contains('windows') || p.contains('pc')) {
+        return '💻';
+      }
+    }
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Hero(
-          tag: 'cast_audio_card',
-          createRectTween:
-              (begin, end) => SmoothRectTween(begin: begin, end: end),
-          child: Material(
-            color: Colors.black,
-            child: FocusTraversalGroup(
-              policy: ReadingOrderTraversalPolicy(),
-              child:
-                  useTvLayout
-                      ? _buildTvLandscapeLayout()
-                      : _buildDefaultLayout(),
-            ),
+    name = name.toLowerCase();
+    if (name.contains('iphone') ||
+        name.contains('ipad') ||
+        name.contains('ios')) {
+      return '📱';
+    } else if (name.contains('mac') || name.contains('apple')) {
+      return '💻';
+    } else if (name.contains('windows') ||
+        name.contains('pc') ||
+        name.contains('desktop')) {
+      return '💻';
+    } else if (name.contains('android') ||
+        name.contains('phone') ||
+        name.contains('pixel') ||
+        name.contains('samsung')) {
+      return '🤖';
+    }
+    return '🔌';
+  }
+
+  Widget _buildDeviceNode(DiscoveredDevice device) {
+    String name = device.deviceName;
+    String? platform = device.platform;
+    String? userName = device.userName;
+    String displayName = userName ?? name;
+    bool isSelected = _selectedTargets.contains(device.ipAddress);
+
+    String emoji = '📱';
+    if (device.avatarUrl != null) {
+      bool found = false;
+      for (final cat in CustomAvatarWidget.categories.values) {
+        for (final item in cat) {
+          if (item['id'] == device.avatarUrl) {
+            emoji = item['emoji'] as String;
+            found = true;
+            break;
+          }
+        }
+        if (found) break;
+      }
+      if (!found) {
+        emoji = device.avatarUrl!;
+      }
+    } else {
+      emoji = _getDeviceEmoji(name, platform: platform);
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          HapticFeedback.lightImpact();
+          setState(() {
+            if (_selectedTargets.contains(device.ipAddress)) {
+              _selectedTargets.remove(device.ipAddress);
+            } else {
+              _selectedTargets.add(device.ipAddress);
+            }
+          });
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(4.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1C1C1E),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.15),
+                      blurRadius: 8,
+                      offset: const Offset(0, 4),
+                    ),
+                    if (isSelected)
+                      const BoxShadow(
+                        color: Colors.greenAccent,
+                        blurRadius: 12,
+                        spreadRadius: 2,
+                      ),
+                  ],
+                  border: Border.all(
+                    color:
+                        isSelected
+                            ? Colors.greenAccent
+                            : Colors.white.withOpacity(0.15),
+                    width: 2.0,
+                  ),
+                ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    DefaultTextStyle(
+                      style: const TextStyle(),
+                      child: Text(
+                        emoji,
+                        style: const TextStyle(
+                          fontSize: 32,
+                          fontFamilyFallback: [
+                            'Apple Color Emoji',
+                            'Segoe UI Emoji',
+                            'Noto Color Emoji',
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (isSelected)
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: const BoxDecoration(
+                            color: Colors.greenAccent,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.check,
+                            color: Colors.black,
+                            size: 12,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 4),
+              Container(
+                constraints: const BoxConstraints(maxWidth: 70),
+                child: Text(
+                  displayName.length > 8
+                      ? '${displayName.substring(0, 8)}...'
+                      : displayName,
+                  style: GoogleFonts.outfit(
+                    color: Colors.black87,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildDefaultLayout() {
-    return Column(
-      children: [
-        AudioShareHeader(
-          isTvLayout: false,
-          isScanning: _isScanning,
-          onBackTap: () => Navigator.pop(context),
-          onRefreshTap: _startScanning,
-        ),
-        Expanded(
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            child: Column(
-              children: [
-                AudioSharePulseView(
-                  isTvLayout: false,
-                  isCasting: _isCasting,
-                  isPhoneMuted: _isPhoneMuted,
-                  onMuteToggle: () => _setPhoneMute(!_isPhoneMuted),
-                  pulseAnimation: _pulseAnimation,
-                  avatarId: _customAvatar,
-                ),
-                AudioShareSourceToggle(
-                  isTvLayout: false,
-                  isSystemAudio: _isSystemAudio,
-                  onSourceChanged:
-                      (val) => setState(() => _isSystemAudio = val),
-                ),
-                const SizedBox(height: 32),
-                AudioShareDeviceList(
-                  isTvLayout: false,
-                  devices: _devices,
-                  selectedTargets: _selectedTargets,
-                  onDeviceSelect: (ip) {
-                    HapticFeedback.lightImpact();
-                    setState(() {
-                      if (_selectedTargets.contains(ip)) {
-                        _selectedTargets.remove(ip);
-                      } else {
-                        _selectedTargets.add(ip);
-                      }
-                    });
-                  },
-                ),
-              ],
-            ),
-          ),
-        ),
-        _buildBottomAction(isTvLayout: false),
-      ],
-    );
-  }
+  Widget _buildDiscoveryStatusLabel(int deviceCount) {
+    String text;
+    IconData icon;
+    bool isLoading = false;
 
-  Widget _buildTvLandscapeLayout() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 24),
+    if (_isScanning && deviceCount == 0) {
+      text = 'Scanning...';
+      icon = Icons.radar_rounded;
+      isLoading = true;
+    } else if (deviceCount > 0) {
+      text = '$deviceCount device${deviceCount > 1 ? 's' : ''} nearby';
+      icon = Icons.check_circle_outline_rounded;
+    } else {
+      text = 'No devices nearby';
+      icon = Icons.device_unknown_rounded;
+    }
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.75),
+        borderRadius: BorderRadius.circular(14),
+      ),
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            flex: 5,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                AudioShareHeader(
-                  isTvLayout: true,
-                  isScanning: _isScanning,
-                  onBackTap: () => Navigator.pop(context),
-                  onRefreshTap: _startScanning,
-                ),
-                const SizedBox(height: 20),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      AudioSharePulseView(
-                        isTvLayout: true,
-                        isCasting: _isCasting,
-                        isPhoneMuted: _isPhoneMuted,
-                        onMuteToggle: () => _setPhoneMute(!_isPhoneMuted),
-                        pulseAnimation: _pulseAnimation,
-                        avatarId: _customAvatar,
-                      ),
-                      const SizedBox(height: 24),
-                      AudioShareSourceToggle(
-                        isTvLayout: true,
-                        isSystemAudio: _isSystemAudio,
-                        onSourceChanged:
-                            (val) => setState(() => _isSystemAudio = val),
-                      ),
-                      const SizedBox(height: 24),
-                      _buildBottomAction(isTvLayout: true),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 40),
-          Expanded(
-            flex: 6,
-            child: AudioShareDeviceList(
-              isTvLayout: true,
-              devices: _devices,
-              selectedTargets: _selectedTargets,
-              onDeviceSelect: (ip) {
-                HapticFeedback.lightImpact();
-                setState(() {
-                  if (_selectedTargets.contains(ip)) {
-                    _selectedTargets.remove(ip);
-                  } else {
-                    _selectedTargets.add(ip);
-                  }
-                });
-              },
+          if (isLoading)
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
+            )
+          else
+            Icon(icon, color: Colors.white, size: 14),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: GoogleFonts.outfit(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ],
@@ -487,7 +506,369 @@ class _AudioShareScreenState extends State<AudioShareScreen>
     );
   }
 
-  Widget _buildBottomAction({required bool isTvLayout}) {
+  Widget _buildHeader(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      child: Row(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.black.withOpacity(0.12)),
+            ),
+            child: IconButton(
+              icon: const Icon(
+                Icons.arrow_back_ios_new_rounded,
+                color: Colors.black,
+                size: 20,
+              ),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              'Audio Share',
+              style: GoogleFonts.outfit(
+                color: Colors.black,
+                fontSize: 24,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.5,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.black.withOpacity(0.12)),
+            ),
+            child: IconButton(
+              icon: Icon(
+                _isScanning ? Icons.sync_rounded : Icons.refresh_rounded,
+                color: Colors.black,
+                size: 20,
+              ),
+              onPressed: _startScanning,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Helper widget to paint the radar with orbiting emojis
+  Widget _buildRadarArea({required double width, required double height}) {
+    final double pulseSize = min(width, height) * 0.82;
+    final double clampedPulseSize = pulseSize.clamp(200.0, 360.0);
+
+    final List<Widget> deviceNodes = [];
+    final int totalCount = _devices.length;
+    final int maxVisibleDevices = 8;
+    final int visibleCount = totalCount.clamp(0, maxVisibleDevices);
+
+    final double deviceScale =
+        totalCount <= 4 ? 1.0 : (totalCount <= 6 ? 0.9 : 0.8);
+    final double deviceNodeSize = 56.0 * deviceScale;
+
+    final double pulseRadius = clampedPulseSize / 2;
+    final double orbitPadding = 12.0;
+    final double orbitRadius =
+        pulseRadius - (deviceNodeSize / 2) - orbitPadding;
+    final double startAngle = -3.14159 / 2;
+
+    for (int i = 0; i < visibleCount; i++) {
+      final double angle = startAngle + (2 * 3.14159 * i / visibleCount);
+      final double offsetX = orbitRadius * cos(angle);
+      final double offsetY = orbitRadius * sin(angle);
+
+      deviceNodes.add(
+        Transform.translate(
+          offset: Offset(offsetX, offsetY),
+          child: Transform.scale(
+            scale: deviceScale,
+            child: _buildDeviceNode(_devices[i]),
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Pulse Waves only (no duplicate center dot)
+          SearchPulseWidget(
+            key: const ValueKey('pulse_effect_audio'),
+            size: clampedPulseSize,
+            color: Colors.black,
+            showCenterDot: false,
+          ),
+          // User Avatar in the Center
+          CustomAvatarWidget(
+            avatarId: _customAvatar,
+            size: 60,
+            useBackground: true,
+            showBorder: true,
+            borderColor: Colors.black.withOpacity(0.3),
+          ),
+          // Orbiting Device Nodes
+          ...deviceNodes,
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFFFFD84D), Color(0xFFF5C400)],
+          ),
+        ),
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final width = constraints.maxWidth;
+              final height = constraints.maxHeight;
+              final isLandscape = width > height;
+
+              return Column(
+                children: [
+                  // Header (fixed height)
+                  _buildHeader(context),
+
+                  // Main body area
+                  Expanded(
+                    child:
+                        _isCasting
+                            ? Center(
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 24.0,
+                                ),
+                                child: Container(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 400,
+                                  ),
+                                  padding: const EdgeInsets.all(24),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF1E1E1E),
+                                    borderRadius: BorderRadius.circular(24),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.25),
+                                        blurRadius: 15,
+                                        offset: const Offset(0, 10),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          const Icon(
+                                            Icons.radio_button_checked,
+                                            color: Colors.red,
+                                            size: 20,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            'Audio Share Active',
+                                            style: GoogleFonts.outfit(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 18,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        'Casting audio to ${_selectedTargets.length} device(s)',
+                                        style: GoogleFonts.outfit(
+                                          color: Colors.white70,
+                                          fontSize: 14,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                      if (Platform.isAndroid) ...[
+                                        const SizedBox(height: 16),
+                                        GestureDetector(
+                                          onTap:
+                                              () =>
+                                                  _setPhoneMute(!_isPhoneMuted),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 14,
+                                              vertical: 8,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color:
+                                                  _isPhoneMuted
+                                                      ? const Color(0xFFE11D48)
+                                                      : Colors.white12,
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(
+                                                  _isPhoneMuted
+                                                      ? Icons.volume_off_rounded
+                                                      : Icons.volume_up_rounded,
+                                                  color: Colors.white,
+                                                  size: 16,
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Text(
+                                                  _isPhoneMuted
+                                                      ? 'Phone Muted'
+                                                      : 'Mute Phone',
+                                                  style: GoogleFonts.outfit(
+                                                    color: Colors.white,
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                      const SizedBox(height: 24),
+                                      SizedBox(
+                                        width: double.infinity,
+                                        height: 50,
+                                        child: ElevatedButton(
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: Colors.red,
+                                            foregroundColor: Colors.white,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(16),
+                                            ),
+                                            elevation: 0,
+                                          ),
+                                          onPressed: _stopCasting,
+                                          child: Text(
+                                            'Stop Audio Share',
+                                            style: GoogleFonts.outfit(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 16,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            )
+                            : isLandscape
+                            ? Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                // Radar on the left
+                                Expanded(
+                                  flex: 5,
+                                  child: _buildRadarArea(
+                                    width: width * 5 / 9,
+                                    height: height - 80,
+                                  ),
+                                ),
+                                // Controls on the right
+                                Expanded(
+                                  flex: 4,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16.0,
+                                    ),
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        _buildDiscoveryStatusLabel(
+                                          _devices.length,
+                                        ),
+                                        const SizedBox(height: 24),
+                                        AudioShareSourceToggle(
+                                          isTvLayout: false,
+                                          isSystemAudio: _isSystemAudio,
+                                          onSourceChanged:
+                                              (val) => setState(
+                                                () => _isSystemAudio = val,
+                                              ),
+                                        ),
+                                        const SizedBox(height: 12),
+                                        _buildBottomAction(),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            )
+                            : Column(
+                              children: [
+                                // Radar in the center
+                                Expanded(
+                                  child: _buildRadarArea(
+                                    width: width,
+                                    height: height - 240,
+                                  ),
+                                ),
+                                // Bottom controls
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 16.0),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      _buildDiscoveryStatusLabel(
+                                        _devices.length,
+                                      ),
+                                      const SizedBox(height: 12),
+                                      AudioShareSourceToggle(
+                                        isTvLayout: false,
+                                        isSystemAudio: _isSystemAudio,
+                                        onSourceChanged:
+                                            (val) => setState(
+                                              () => _isSystemAudio = val,
+                                            ),
+                                      ),
+                                      _buildBottomAction(),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomAction() {
     return FocusSurface(
       onTap: () {
         HapticFeedback.mediumImpact();
@@ -495,29 +876,23 @@ class _AudioShareScreenState extends State<AudioShareScreen>
       },
       builder: (isFocused) {
         return Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: isTvLayout ? 0 : 24,
-            vertical: 24,
-          ),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(22),
               border: Border.all(
-                color: isFocused ? const Color(0xFFFFD600) : Colors.transparent,
+                color: isFocused ? Colors.black : Colors.transparent,
                 width: isFocused ? 2 : 0,
               ),
             ),
             child: SizedBox(
               width: double.infinity,
-              height: isTvLayout ? 72 : 64,
+              height: 56,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                      _isCasting
-                          ? const Color(0xFFE11D48)
-                          : const Color(0xFFFFD600),
-                  foregroundColor: _isCasting ? Colors.white : Colors.black,
+                  backgroundColor: Colors.black,
+                  foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(20),
                   ),
@@ -530,7 +905,7 @@ class _AudioShareScreenState extends State<AudioShareScreen>
                 child: Text(
                   _isCasting ? 'STOP SHARING' : 'START AUDIO SHARE',
                   style: GoogleFonts.outfit(
-                    fontSize: isTvLayout ? 18 : 16,
+                    fontSize: 15,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 1,
                   ),

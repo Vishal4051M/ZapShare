@@ -342,6 +342,8 @@ void WasapiPlayerThread() {
 
         int expectedSeq = -1;
         std::vector<int16_t> pcmOut(5760 * CHANNELS); 
+        std::vector<int16_t> lastGoodPcm(FRAME_SIZE * CHANNELS, 0);
+        float plcFadeLevel = 1.0f;
 
         auto WritePcm = [&](int framesDecoded) {
             if (framesDecoded <= 0) return;
@@ -383,6 +385,17 @@ void WasapiPlayerThread() {
                     int plcCount = (dist < 50) ? dist : 50;
                     for (int i = 0; i < plcCount; ++i) {
                         int plcFrames = opus_decode(decoder, nullptr, 0, pcmOut.data(), 5760, 0);
+                        if (plcFrames <= 0) {
+                            plcFrames = FRAME_SIZE;
+                            plcFadeLevel *= 0.65f;
+                            if (plcFadeLevel > 0.05f) {
+                                for (int s = 0; s < FRAME_SIZE * CHANNELS; ++s) {
+                                    pcmOut[s] = static_cast<int16_t>(lastGoodPcm[s] * plcFadeLevel);
+                                }
+                            } else {
+                                memset(pcmOut.data(), 0, FRAME_SIZE * CHANNELS * sizeof(int16_t));
+                            }
+                        }
                         WritePcm(plcFrames);
                     }
                 }
@@ -398,6 +411,12 @@ void WasapiPlayerThread() {
                 } else {
                     continue;
                 }
+            }
+
+            if (framesDecoded > 0) {
+                int copySamples = (framesDecoded < FRAME_SIZE) ? framesDecoded : FRAME_SIZE;
+                memcpy(lastGoodPcm.data(), pcmOut.data(), copySamples * CHANNELS * sizeof(int16_t));
+                plcFadeLevel = 1.0f;
             }
 
             WritePcm(framesDecoded);

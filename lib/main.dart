@@ -3,12 +3,14 @@ import 'dart:io';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'Screens/shared/audio_receiver_screen.dart';
 import 'blocs/navigation/smooth_page_route.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:zap_share/modules/remote_p2p/services/RemoteTransferService.dart';
+import 'package:zap_share/modules/remote_p2p/services/TransferResumeStore.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:zap_share/Screens/android/AndroidHomeScreen.dart';
@@ -18,7 +20,7 @@ import 'package:zap_share/services/device_discovery_service.dart';
 import 'package:zap_share/widgets/connection_request_dialog.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:zap_share/services/supabase_service.dart';
+import 'package:zap_share/services/firebase_service.dart';
 import 'Screens/windows/WindowsFileShareScreen.dart';
 import 'Screens/windows/WindowsCastScreen.dart';
 import 'Screens/windows/WindowsReceiveScreen.dart';
@@ -31,7 +33,6 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:app_links/app_links.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -39,8 +40,21 @@ import 'package:zap_share/Screens/shared/FirstTimeSetupScreen.dart';
 import 'package:zap_share/Screens/shared/VideoPlayerScreen.dart';
 import 'package:zap_share/Screens/shared/NativeVideoPlayerScreen.dart';
 import 'package:zap_share/Screens/shared/ScreenMirrorViewerScreen.dart';
+import 'package:zap_share/widgets/tv_widgets.dart';
+import 'package:zap_share/Views/TV/TvHomeScreen.dart';
+import 'package:zap_share/Views/TV/TvReceiveScreen.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:zap_share/modules/remote_p2p/views/RemoteSendView.dart';
+import 'package:zap_share/Screens/android/AndroidCastScreen.dart';
 
 const Color kAccentYellow = Color(0xFFFFD600);
+
+@pragma('vm:entry-point')
+Future<void> zapShareBackgroundMessageHandler(RemoteMessage message) async {
+  // Android displays FCM notification payloads while the app is closed. The
+  // pending transfer remains in Realtime Database for approval after launch.
+  await FirebaseService().initialize();
+}
 
 Future<void> clearAppCache() async {
   final cacheDir = await getTemporaryDirectory();
@@ -89,92 +103,120 @@ void main(List<String> args) async {
       Platform.isMacOS ||
       Platform.isAndroid) {
     MediaKit.ensureInitialized();
-  }
-  try {
-    await dotenv.load(fileName: ".env");
-  } catch (e) {
-    print("Warning: .env file not found or invalid. Using defaults.");
-  }
-  if (Platform.isAndroid) {
-    // requestPermissions(); // Moved to AppState for sequential execution
-    clearAppCache();
-    FlutterForegroundTask.init(
-      androidNotificationOptions: AndroidNotificationOptions(
-        channelId: 'zapshare_transfer_channel_v2',
-        channelName: 'ZapShare Transfer',
-        channelDescription: 'File transfer is running in the background',
-        channelImportance: NotificationChannelImportance.HIGH,
-        priority: NotificationPriority.HIGH,
-      ),
-      iosNotificationOptions: const IOSNotificationOptions(
-        showNotification: false,
-        playSound: false,
-      ),
-      foregroundTaskOptions: ForegroundTaskOptions(
-        autoRunOnBoot: true,
-        allowWakeLock: true,
-        allowWifiLock: true,
-        eventAction: ForegroundTaskEventAction.once(),
-      ),
-    );
-    await FlutterDisplayMode.setHighRefreshRate();
-  }
-
-  if (Platform.isWindows || Platform.isLinux) {
-    await windowManager.ensureInitialized();
-    bool isMirror = args.contains('--mirror');
-    WindowOptions windowOptions = WindowOptions(
-      size: isMirror ? const Size(400, 800) : const Size(900, 650),
-      minimumSize: isMirror ? const Size(200, 400) : const Size(800, 600),
-      center: true,
-      backgroundColor: Colors.transparent,
-      skipTaskbar: false,
-      titleBarStyle: isMirror ? TitleBarStyle.hidden : TitleBarStyle.normal,
-    );
-    windowManager.waitUntilReadyToShow(windowOptions, () async {
-      if (isMirror) {
-        await windowManager.setResizable(false);
-      }
-      await windowManager.show();
-      await windowManager.focus();
-    });
-  }
-
-  // Initialize Supabase
-  try {
-    await SupabaseService().initialize();
-    print('✅ Supabase Initialized');
-  } catch (e) {
-    print('❌ Failed to initialize Supabase: $e');
-  }
-
-  // Pre-fetch initial shared files for seamless cold start
-  List<Map>? initialShareFiles;
-  if (Platform.isAndroid) {
-    try {
-      const platform = MethodChannel('zapshare.saf');
-      final String? jsonStr = await platform.invokeMethod<String>(
-        'getInitialSharedFiles',
+    if (Platform.isAndroid) {
+      // requestPermissions(); // Moved to AppState for sequential execution
+      clearAppCache();
+      FlutterForegroundTask.init(
+        androidNotificationOptions: AndroidNotificationOptions(
+          channelId: 'zapshare_transfer_channel_v2',
+          channelName: 'ZapShare Transfer',
+          channelDescription: 'File transfer is running in the background',
+          channelImportance: NotificationChannelImportance.HIGH,
+          priority: NotificationPriority.HIGH,
+        ),
+        iosNotificationOptions: const IOSNotificationOptions(
+          showNotification: false,
+          playSound: false,
+        ),
+        foregroundTaskOptions: ForegroundTaskOptions(
+          autoRunOnBoot: true,
+          allowWakeLock: true,
+          allowWifiLock: true,
+          eventAction: ForegroundTaskEventAction.once(),
+        ),
       );
-      if (jsonStr != null && jsonStr.isNotEmpty) {
-        final List<dynamic> decoded = json.decode(jsonStr);
-        initialShareFiles = decoded.cast<Map>();
-        print(
-          '📂 [Main] Cold start with ${initialShareFiles.length} shared files',
-        );
-      }
-    } catch (e) {
-      print('⚠️ Failed to pre-fetch share files: $e');
+      await FlutterDisplayMode.setHighRefreshRate();
     }
-  }
 
-  runApp(DataRushApp(launchArgs: args, initialShareFiles: initialShareFiles));
+    if (Platform.isWindows || Platform.isLinux) {
+      await windowManager.ensureInitialized();
+      bool isMirror = args.contains('--mirror');
+      WindowOptions windowOptions = WindowOptions(
+        size: isMirror ? const Size(400, 800) : const Size(900, 650),
+        minimumSize: isMirror ? const Size(200, 400) : const Size(800, 600),
+        center: true,
+        backgroundColor: Colors.transparent,
+        skipTaskbar: false,
+        titleBarStyle: isMirror ? TitleBarStyle.hidden : TitleBarStyle.normal,
+      );
+      windowManager.waitUntilReadyToShow(windowOptions, () async {
+        if (isMirror) {
+          await windowManager.setResizable(false);
+        }
+        await windowManager.show();
+        await windowManager.focus();
+      });
+    }
+
+    // Initialize Firebase
+    try {
+      await FirebaseService().initialize();
+      print('✅ Firebase Initialized');
+      // Clean up orphaned partial files
+      unawaited(TransferResumeStore.cleanupOrphanedFiles());
+    } catch (e) {
+      print('❌ Failed to initialize Firebase: $e');
+    }
+
+    if (Platform.isAndroid) {
+      FirebaseMessaging.onBackgroundMessage(zapShareBackgroundMessageHandler);
+      // Configure foreground task for remote transfer progress notifications
+      RemoteTransferService.configure();
+    }
+
+    // Pre-fetch initial shared files for seamless cold start
+    List<Map>? initialShareFiles;
+    String? initialShareMode;
+    if (Platform.isAndroid) {
+      try {
+        const platform = MethodChannel('zapshare.saf');
+
+        // Accurate TV detection from native UiModeManager
+        try {
+          final bool? isTv = await platform.invokeMethod<bool>('isTvDevice');
+          if (isTv != null) {
+            TVHelper.setTV(isTv);
+            debugPrint('📺 [Main] Native TV detection: $isTv');
+          }
+        } catch (e) {
+          debugPrint('⚠️ Failed to check native TV status: $e');
+        }
+
+        final String? jsonStr = await platform.invokeMethod<String>(
+          'getInitialSharedFiles',
+        );
+        if (jsonStr != null && jsonStr.isNotEmpty) {
+          final Map<String, dynamic> decoded = json.decode(jsonStr);
+          final List<dynamic> decodedFiles = decoded['files'] as List<dynamic>;
+          initialShareFiles = decodedFiles.cast<Map>();
+          initialShareMode = decoded['mode'] as String?;
+          print(
+            '📂 [Main] Cold start with ${initialShareFiles.length} shared files, mode: $initialShareMode',
+          );
+        }
+      } catch (e) {
+        print('⚠️ Failed to pre-fetch share files: $e');
+      }
+    }
+
+    runApp(DataRushApp(
+      launchArgs: args,
+      initialShareFiles: initialShareFiles,
+      initialShareMode: initialShareMode,
+    ));
+  }
 }
 
 class DataRushApp extends StatefulWidget {
   final List<String>? launchArgs;
   final List<Map>? initialShareFiles;
-  const DataRushApp({super.key, this.launchArgs, this.initialShareFiles});
+  final String? initialShareMode;
+  const DataRushApp({
+    super.key,
+    this.launchArgs,
+    this.initialShareFiles,
+    this.initialShareMode,
+  });
 
   @override
   State<DataRushApp> createState() => _DataRushAppState();
@@ -270,29 +312,6 @@ class _DataRushAppState extends State<DataRushApp>
     print("   Fragment: ${uri.fragment}");
     print("   Query: ${uri.query}");
     print("   Full URL: ${uri.toString()}");
-
-    if (uri.scheme == 'io.supabase.zapshare' && uri.host == 'login-callback') {
-      try {
-        // Let Supabase handle the OAuth callback
-        // The full URI needs to be passed including fragment/query params
-        print("🔄 Processing Supabase OAuth callback...");
-        await Supabase.instance.client.auth.getSessionFromUrl(uri);
-        print("✅ Supabase Auth callback processed successfully");
-
-        // Check if we have a session now
-        final session = Supabase.instance.client.auth.currentSession;
-        if (session != null) {
-          print("✅ User is now logged in: ${session.user.email}");
-        } else {
-          print("⚠️ No session found after processing callback");
-        }
-      } catch (e) {
-        print("❌ Error handling deep link session: $e");
-        print("   Stack trace: ${StackTrace.current}");
-      }
-    } else {
-      print("⚠️ Deep link does not match expected pattern");
-    }
   }
 
   // Track processed share intents to avoid duplicates between cold/warm start
@@ -306,9 +325,12 @@ class _DataRushAppState extends State<DataRushApp>
     platform.setMethodCallHandler((call) async {
       print('🚀 [Global Channel] Received platform call: ${call.method}');
       if (call.method == 'sharedFiles') {
-        final List<dynamic> decoded = call.arguments as List<dynamic>;
+        final Map<dynamic, dynamic> payload = call.arguments as Map<dynamic, dynamic>;
+        final List<dynamic> decoded = payload['files'] as List<dynamic>;
+        final String shareMode = payload['mode'] as String? ?? 'select';
+        
         print(
-          '📁 [Global] Received ${decoded.length} shared files from MethodChannel',
+          '📁 [Global] Received ${decoded.length} shared files from MethodChannel, mode: $shareMode',
         );
         final files = decoded.cast<Map>();
 
@@ -320,16 +342,16 @@ class _DataRushAppState extends State<DataRushApp>
 
         if (newFiles.isNotEmpty) {
           newFiles.forEach((f) => _processedShareUris.add(f['uri'].toString()));
-          _navigateToShareScreen(newFiles);
+          _navigateToShareScreen(newFiles, shareMode);
         }
       }
       return null;
     });
   }
 
-  void _navigateToShareScreen(List<Map> sharedFiles) async {
+  void _navigateToShareScreen(List<Map> sharedFiles, String shareMode) async {
     print(
-      '🚀 [Global] Requesting navigation to share screen (${sharedFiles.length} files)',
+      '🚀 [Global] Requesting navigation to share screen (${sharedFiles.length} files), mode: $shareMode',
     );
 
     // Safety check: wait for navigator state if app is still starting up
@@ -342,11 +364,30 @@ class _DataRushAppState extends State<DataRushApp>
 
     if (navigatorKey.currentState != null) {
       print("✅ Navigating now!");
+      Widget targetScreen;
+      if (shareMode == 'local') {
+        targetScreen = AndroidHttpFileShareScreen(initialSharedFiles: sharedFiles);
+      } else if (shareMode == 'remote') {
+        final platformFiles = sharedFiles.map((f) => PlatformFile(
+          path: f['uri'] as String,
+          name: f['name'] as String,
+          size: f['size'] as int? ?? 0,
+        )).toList();
+        targetScreen = RemoteSendView(initialFiles: platformFiles);
+      } else if (shareMode == 'cast') {
+        final firstVideo = sharedFiles.first;
+        targetScreen = AndroidCastScreen(
+          initialMode: CastMode.video,
+          initialVideoUri: firstVideo['uri'] as String,
+          initialVideoName: firstVideo['name'] as String,
+        );
+      } else {
+        targetScreen = AndroidHttpFileShareScreen(initialSharedFiles: sharedFiles);
+      }
+
       navigatorKey.currentState!.pushAndRemoveUntil(
         MaterialPageRoute(
-          builder:
-              (context) =>
-                  AndroidHttpFileShareScreen(initialSharedFiles: sharedFiles),
+          builder: (context) => targetScreen,
         ),
         (route) => route.isFirst,
       );
@@ -491,11 +532,24 @@ class _DataRushAppState extends State<DataRushApp>
       '🔔 [Global] Screen mirror subscription ACTIVE - listening for incoming requests',
     );
 
-    // FIX: Listen for incoming control commands and forward to native Android
+    // FIX: Listen for incoming control commands and forward to native OS
     _discoveryService.screenMirrorControlStream.listen((control) {
       if (Platform.isAndroid) {
         print('📱 [Global] Forwarding control to native: ${control.action}');
         const MethodChannel('zapshare.saf').invokeMethod('mirrorControl', {
+          'action': control.action,
+          'tapX': control.tapX,
+          'tapY': control.tapY,
+          'endX': control.endX,
+          'endY': control.endY,
+          'text': control.text,
+          'scrollDelta': control.scrollDelta,
+          'duration': control.duration,
+        });
+      } else if (Platform.isWindows) {
+        const MethodChannel(
+          'zapshare/desktop_capture',
+        ).invokeMethod('injectControl', {
           'action': control.action,
           'tapX': control.tapX,
           'tapY': control.tapY,
@@ -605,21 +659,32 @@ class _DataRushAppState extends State<DataRushApp>
 
             // Navigate to receive screen
             if (Platform.isAndroid) {
-              // Navigate to AndroidReceiveScreen with the sender's code
+              // Navigate to AndroidReceiveScreen or TvReceiveScreen with the sender's code
               final senderCode = _ipToCode(
                 request.ipAddress,
                 port: request.port,
               );
-              navigatorKey.currentState?.pushReplacement(
-                MaterialPageRoute(
-                  builder:
-                      (context) => AndroidReceiveScreen(
-                        autoConnectCode: senderCode,
-                        useTcp:
-                            true, // Always use TCP for app-to-app dialog accept
-                      ),
-                ),
-              );
+
+              if (TVHelper.isTV(context)) {
+                navigatorKey.currentState?.pushReplacement(
+                  MaterialPageRoute(
+                    builder:
+                        (context) =>
+                            TvReceiveScreen(autoConnectCode: senderCode),
+                  ),
+                );
+              } else {
+                navigatorKey.currentState?.pushReplacement(
+                  MaterialPageRoute(
+                    builder:
+                        (context) => AndroidReceiveScreen(
+                          autoConnectCode: senderCode,
+                          useTcp:
+                              true, // Always use TCP for app-to-app dialog accept
+                        ),
+                  ),
+                );
+              }
             } else if (Platform.isWindows) {
               // For Windows, we are likely inside WindowsHomeScreen which manages screens.
               // However, since this is a global dialog, we need to push the Receive Screen
@@ -841,7 +906,10 @@ class _DataRushAppState extends State<DataRushApp>
                       }
                     }
                   } else if (isHttpAudio) {
-                    audioUrl = offer.sdp.replaceFirst('HTTP_AUDIO_STREAM_URL:', '');
+                    audioUrl = offer.sdp.replaceFirst(
+                      'HTTP_AUDIO_STREAM_URL:',
+                      '',
+                    );
                   } else {
                     _discoveryService.processIncomingAudioOffer(offer);
                   }
@@ -1286,6 +1354,9 @@ class _DataRushAppState extends State<DataRushApp>
   }
 
   String _ipToCode(String ipAddress, {int port = 8080}) {
+    if (ipAddress.startsWith('::ffff:')) {
+      ipAddress = ipAddress.substring(7);
+    }
     final parts = ipAddress.split('.');
     if (parts.length != 4) return '';
     final n =
@@ -1419,6 +1490,29 @@ class _DataRushAppState extends State<DataRushApp>
     } else if (menuItem.key == 'exit_app') {
       exit(0);
     }
+  }
+
+  List<PlatformFile> _convertAndroidShareFiles(List<Map> files) {
+    return files.map((f) => PlatformFile(
+      path: f['uri'] as String,
+      name: f['name'] as String,
+      size: f['size'] as int? ?? 0,
+    )).toList();
+  }
+
+  List<PlatformFile> _getWindowsFilesFromArgs(List<String> args) {
+    final files = <PlatformFile>[];
+    for (final arg in args) {
+      if (!arg.startsWith('--')) {
+        final f = File(arg);
+        if (f.existsSync()) {
+          final name = f.path.split(Platform.pathSeparator).last;
+          final size = f.lengthSync();
+          files.add(PlatformFile(path: f.path, name: name, size: size));
+        }
+      }
+    }
+    return files;
   }
 
   @override
@@ -1560,9 +1654,19 @@ class _DataRushAppState extends State<DataRushApp>
               )
               : (widget.initialShareFiles != null &&
                   widget.initialShareFiles!.isNotEmpty)
-              ? AndroidHttpFileShareScreen(
-                initialSharedFiles: widget.initialShareFiles,
-              )
+              ? (widget.initialShareMode == 'local')
+                  ? AndroidHttpFileShareScreen(initialSharedFiles: widget.initialShareFiles)
+                  : (widget.initialShareMode == 'remote')
+                      ? RemoteSendView(initialFiles: _convertAndroidShareFiles(widget.initialShareFiles!))
+                      : (widget.initialShareMode == 'cast')
+                          ? AndroidCastScreen(
+                              initialMode: CastMode.video,
+                              initialVideoUri: widget.initialShareFiles!.first['uri'] as String,
+                              initialVideoName: widget.initialShareFiles!.first['name'] as String,
+                            )
+                          : AndroidHttpFileShareScreen(initialSharedFiles: widget.initialShareFiles)
+              : TVHelper.isTV(context)
+              ? const TvHomeScreen()
               : Platform.isAndroid
               ? const AndroidHomeScreen()
               : Platform.isWindows
@@ -1571,9 +1675,13 @@ class _DataRushAppState extends State<DataRushApp>
                   : (widget.launchArgs != null &&
                       widget.launchArgs!.isNotEmpty &&
                       File(widget.launchArgs!.first).existsSync())
-                  ? WindowsCastScreen(
-                    initialFile: File(widget.launchArgs!.first),
-                  )
+                  ? (widget.launchArgs!.contains('--local'))
+                      ? WindowsFileShareScreen(initialFiles: _getWindowsFilesFromArgs(widget.launchArgs!))
+                      : (widget.launchArgs!.contains('--remote'))
+                          ? RemoteSendView(initialFiles: _getWindowsFilesFromArgs(widget.launchArgs!))
+                          : (widget.launchArgs!.contains('--cast'))
+                              ? WindowsVideoCastScreen(initialFile: File(_getWindowsFilesFromArgs(widget.launchArgs!).first.path!))
+                              : WindowsFileShareScreen(initialFiles: _getWindowsFilesFromArgs(widget.launchArgs!))
                   : const WindowsHomeScreen()
               : Platform.isLinux
               ? const LinuxHomeScreen()

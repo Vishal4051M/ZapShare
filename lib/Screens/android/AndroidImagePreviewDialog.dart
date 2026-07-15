@@ -16,7 +16,8 @@ class AndroidImagePreviewDialog extends StatefulWidget {
   }) : super(key: key);
 
   @override
-  _AndroidImagePreviewDialogState createState() => _AndroidImagePreviewDialogState();
+  _AndroidImagePreviewDialogState createState() =>
+      _AndroidImagePreviewDialogState();
 }
 
 class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
@@ -31,7 +32,7 @@ class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
     _currentIndex = widget.initialIndex;
     _pageController = PageController(initialPage: widget.initialIndex);
     _preloadImages();
-    
+
     // Hide swipe hint after 1 second
     Future.delayed(const Duration(seconds: 1), () {
       if (mounted) {
@@ -94,7 +95,7 @@ class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
                 final task = widget.imageTasks[index];
                 final imageData = _imageCache[task.url];
                 final isSelected = task.isSelected;
-                
+
                 return Center(
                   child: Container(
                     width: MediaQuery.of(context).size.width * 0.9,
@@ -109,49 +110,65 @@ class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
                               color: Colors.grey[900],
                               borderRadius: BorderRadius.circular(16),
                               border: Border.all(
-                                color: isSelected ? Colors.yellow[300]! : Colors.grey[800]!,
+                                color:
+                                    isSelected
+                                        ? Colors.yellow[300]!
+                                        : Colors.grey[800]!,
                                 width: isSelected ? 2 : 1,
                               ),
-                              boxShadow: isSelected ? [
-                                BoxShadow(
-                                  color: Colors.yellow[300]!.withOpacity(0.3),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ] : null,
+                              boxShadow:
+                                  isSelected
+                                      ? [
+                                        BoxShadow(
+                                          color: Colors.yellow[300]!
+                                              .withOpacity(0.3),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ]
+                                      : null,
                             ),
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(16),
-                              child: imageData != null
-                                  ? Image.memory(
-                                      imageData,
-                                      fit: BoxFit.contain,
-                                      width: double.infinity,
-                                      height: double.infinity,
-                                    )
-                                  : _buildLoadingPlaceholder(task),
+                              child:
+                                  imageData != null
+                                      ? Image.memory(
+                                        imageData,
+                                        fit: BoxFit.contain,
+                                        width: double.infinity,
+                                        height: double.infinity,
+                                      )
+                                      : _buildLoadingPlaceholder(task),
                             ),
                           ),
                         ),
-                        
+
                         const SizedBox(height: 16),
-                        
+
                         // File info and selection
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
                           decoration: BoxDecoration(
                             color: Colors.grey[900],
                             borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: Colors.grey[800]!, width: 1),
+                            border: Border.all(
+                              color: Colors.grey[800]!,
+                              width: 1,
+                            ),
                           ),
                           child: Column(
                             children: [
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Text(
                                           task.fileName,
@@ -181,26 +198,36 @@ class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
                                       setState(() {
                                         task.isSelected = !task.isSelected;
                                       });
-                                      widget.onSelectionChanged?.call(index, task.isSelected);
+                                      widget.onSelectionChanged?.call(
+                                        index,
+                                        task.isSelected,
+                                      );
                                     },
                                     child: Container(
                                       width: 32,
                                       height: 32,
                                       decoration: BoxDecoration(
-                                        color: isSelected ? Colors.yellow[300] : Colors.transparent,
+                                        color:
+                                            isSelected
+                                                ? Colors.yellow[300]
+                                                : Colors.transparent,
                                         borderRadius: BorderRadius.circular(8),
                                         border: Border.all(
-                                          color: isSelected ? Colors.yellow[300]! : Colors.grey[600]!,
+                                          color:
+                                              isSelected
+                                                  ? Colors.yellow[300]!
+                                                  : Colors.grey[600]!,
                                           width: 2,
                                         ),
                                       ),
-                                      child: isSelected
-                                          ? const Icon(
-                                              Icons.check,
-                                              color: Colors.black,
-                                              size: 18,
-                                            )
-                                          : null,
+                                      child:
+                                          isSelected
+                                              ? const Icon(
+                                                Icons.check,
+                                                color: Colors.black,
+                                                size: 18,
+                                              )
+                                              : null,
                                     ),
                                   ),
                                 ],
@@ -214,7 +241,7 @@ class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
                 );
               },
             ),
-            
+
             // Close button
             Positioned(
               top: 50,
@@ -235,21 +262,20 @@ class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
                       ),
                     ],
                   ),
-                  child: const Icon(
-                    Icons.close,
-                    color: Colors.white,
-                    size: 20,
-                  ),
+                  child: const Icon(Icons.close, color: Colors.white, size: 20),
                 ),
               ),
             ),
-            
+
             // Image counter
             Positioned(
               top: 50,
               left: 20,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.grey[900],
                   borderRadius: BorderRadius.circular(12),
@@ -272,7 +298,7 @@ class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
                 ),
               ),
             ),
-            
+
             // Swipe indicator - shows for 1 second only
             if (widget.imageTasks.length > 1 && _showSwipeHint)
               Positioned(
@@ -284,7 +310,10 @@ class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
                     opacity: _showSwipeHint ? 1.0 : 0.0,
                     duration: const Duration(milliseconds: 300),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.grey[900],
                         borderRadius: BorderRadius.circular(12),
@@ -333,10 +362,7 @@ class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          CircularProgressIndicator(
-            color: Colors.yellow[300],
-            strokeWidth: 3,
-          ),
+          CircularProgressIndicator(color: Colors.yellow[300], strokeWidth: 3),
           const SizedBox(height: 16),
           Text(
             'Loading image...',
@@ -349,10 +375,7 @@ class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
           const SizedBox(height: 8),
           Text(
             task.fileName,
-            style: const TextStyle(
-              color: Colors.grey,
-              fontSize: 14,
-            ),
+            style: const TextStyle(color: Colors.grey, fontSize: 14),
             textAlign: TextAlign.center,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
@@ -365,7 +388,8 @@ class _AndroidImagePreviewDialogState extends State<AndroidImagePreviewDialog> {
   String _formatBytes(int bytes) {
     if (bytes < 1024) return "$bytes B";
     if (bytes < 1024 * 1024) return "${(bytes / 1024).toStringAsFixed(1)} KB";
-    if (bytes < 1024 * 1024 * 1024) return "${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB";
+    if (bytes < 1024 * 1024 * 1024)
+      return "${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB";
     return "${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB";
   }
 }

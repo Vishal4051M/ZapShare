@@ -138,6 +138,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   String? _errorMessage;
   int _retryCount = 0;
   static const _maxRetries = 3;
+  String _audioOutput = 'default';
 
   // Keyboard focus
   final FocusNode _keyboardFocusNode = FocusNode();
@@ -435,7 +436,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
             _sendStatusNow(discoveryService, controllerIp);
             break;
           case 'setAudioTrack':
-            if (control.trackIndex != null && control.trackIndex! < _audioTracks.length) {
+            if (control.trackIndex != null &&
+                control.trackIndex! < _audioTracks.length) {
               _player.setAudioTrack(_audioTracks[control.trackIndex!]);
             }
             break;
@@ -448,17 +450,42 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
               }
             }
             break;
+          case 'setAudioOutput':
+            if (control.propertyValue != null) {
+              final val = control.propertyValue.toString();
+              setState(() {
+                _audioOutput = val;
+              });
+              if (val == 'remote') {
+                _player.setVolume(0);
+              } else {
+                _player.setVolume(_volume * 100);
+              }
+            }
+            break;
           case 'setProperty':
             if (control.propertyKey != null && control.propertyValue != null) {
-              if (control.propertyKey == 'audio-device' && control.propertyValue == 'remote') {
-                // Mute remote machine for local phone listening
-                _player.setVolume(0); 
+              if (control.propertyKey == 'audio-device' &&
+                  control.propertyValue == 'remote') {
+                setState(() {
+                  _audioOutput = 'remote';
+                });
+                _player.setVolume(0);
               } else if (control.propertyKey == 'sub-color') {
                 // Apply color to both primary and secondary for maximum compatibility
-                _player.setProperty('sub-color', control.propertyValue.toString());
-                _player.setProperty('secondary-sub-color', control.propertyValue.toString());
+                _player.setProperty(
+                  'sub-color',
+                  control.propertyValue.toString(),
+                );
+                _player.setProperty(
+                  'secondary-sub-color',
+                  control.propertyValue.toString(),
+                );
               } else {
-                _player.setProperty(control.propertyKey!, control.propertyValue.toString());
+                _player.setProperty(
+                  control.propertyKey!,
+                  control.propertyValue.toString(),
+                );
               }
             }
             break;
@@ -485,23 +512,30 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     String controllerIp,
   ) {
     // Build track labels
-    final audioLabels = _audioTracks.map((t) {
-      return t.title ?? t.language ?? 'Track ${t.id}';
-    }).toList();
-    final subtitleLabels = _subtitleTracks
-        .where((t) => t.id != 'auto' && t.id != 'no')
-        .map((t) => t.title ?? t.language ?? 'Track ${t.id}')
-        .toList();
+    final audioLabels =
+        _audioTracks.map((t) {
+          return t.title ?? t.language ?? 'Track ${t.id}';
+        }).toList();
+    final subtitleLabels =
+        _subtitleTracks
+            .where((t) => t.id != 'auto' && t.id != 'no')
+            .map((t) => t.title ?? t.language ?? 'Track ${t.id}')
+            .toList();
 
     int? activeAudioIdx;
     if (_activeAudioTrack != null) {
-      activeAudioIdx = _audioTracks.indexWhere((t) => t.id == _activeAudioTrack!.id);
+      activeAudioIdx = _audioTracks.indexWhere(
+        (t) => t.id == _activeAudioTrack!.id,
+      );
       if (activeAudioIdx < 0) activeAudioIdx = null;
     }
     int? activeSubIdx;
     if (_subtitlesEnabled && _activeSubtitleTrack != null) {
-      final realSubs = _subtitleTracks.where((t) => t.id != 'auto' && t.id != 'no').toList();
-      activeSubIdx = realSubs.indexWhere((t) => t.id == _activeSubtitleTrack!.id);
+      final realSubs =
+          _subtitleTracks.where((t) => t.id != 'auto' && t.id != 'no').toList();
+      activeSubIdx = realSubs.indexWhere(
+        (t) => t.id == _activeSubtitleTrack!.id,
+      );
       if (activeSubIdx < 0) activeSubIdx = null;
     }
 
@@ -517,8 +551,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       audioTracks: audioLabels.isNotEmpty ? audioLabels : null,
       subtitleTracks: subtitleLabels.isNotEmpty ? subtitleLabels : null,
       activeAudioTrack: activeAudioIdx,
-      activeAudioTrackLabel: _activeAudioTrack?.title ?? _activeAudioTrack?.language,
+      activeAudioTrackLabel:
+          _activeAudioTrack?.title ?? _activeAudioTrack?.language,
       activeSubtitleTrack: activeSubIdx,
+      audioOutput: _audioOutput,
     );
   }
 
@@ -536,9 +572,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         _hasError = false;
         _errorMessage = null;
         _retryCount = 0;
-        // Dismiss initializing overlay immediately after successful open command
-        // This is crucial if IPC position updates are delayed or unavailable
-        _isInitializing = false;
+      });
+
+      // Fallback timer to dismiss initializing screen after 4 seconds if no position update is received
+      Timer(const Duration(seconds: 4), () {
+        if (mounted && _isInitializing) {
+          setState(() => _isInitializing = false);
+        }
       });
     } catch (e) {
       debugPrint('Failed to open media: $e');
@@ -567,6 +607,24 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _actionIndicatorTimer?.cancel();
     _swipeOverlayTimer?.cancel();
     _keyboardFocusNode.dispose();
+
+    // Notify cast controller that receiver is disconnecting
+    if (widget.castControllerIp != null) {
+      try {
+        DeviceDiscoveryService().sendCastStatus(
+          widget.castControllerIp!,
+          position: _position.inMilliseconds / 1000.0,
+          duration: _duration.inMilliseconds / 1000.0,
+          buffered: _buffered.inMilliseconds / 1000.0,
+          isPlaying: false,
+          isBuffering: false,
+          volume: _volume,
+          fileName: widget.title,
+          active: false,
+        );
+      } catch (_) {}
+    }
+
     _player.dispose();
     // Reset brightness to system default on exit
     try {
@@ -715,21 +773,29 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       if (_currentSubMenu != null) {
         if (key == LogicalKeyboardKey.arrowUp) {
           setState(() {
-            _selectedSubMenuIndex = (_selectedSubMenuIndex - 1).clamp(0, _getSubMenuItems().length - 1);
+            _selectedSubMenuIndex = (_selectedSubMenuIndex - 1).clamp(
+              0,
+              _getSubMenuItems().length - 1,
+            );
           });
           return KeyEventResult.handled;
         }
         if (key == LogicalKeyboardKey.arrowDown) {
           setState(() {
-            _selectedSubMenuIndex = (_selectedSubMenuIndex + 1).clamp(0, _getSubMenuItems().length - 1);
+            _selectedSubMenuIndex = (_selectedSubMenuIndex + 1).clamp(
+              0,
+              _getSubMenuItems().length - 1,
+            );
           });
           return KeyEventResult.handled;
         }
-        if (key == LogicalKeyboardKey.select || key == LogicalKeyboardKey.enter) {
+        if (key == LogicalKeyboardKey.select ||
+            key == LogicalKeyboardKey.enter) {
           _activateSubMenuItem(_selectedSubMenuIndex);
           return KeyEventResult.handled;
         }
-        if (key == LogicalKeyboardKey.goBack || key == LogicalKeyboardKey.arrowLeft) {
+        if (key == LogicalKeyboardKey.goBack ||
+            key == LogicalKeyboardKey.arrowLeft) {
           setState(() {
             _currentSubMenu = null;
             _selectedSubMenuIndex = 0;
@@ -740,21 +806,30 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         // In main menu
         if (key == LogicalKeyboardKey.arrowUp) {
           setState(() {
-            _selectedMenuIndex = (_selectedMenuIndex - 1).clamp(0, _getMainMenuItems().length - 1);
+            _selectedMenuIndex = (_selectedMenuIndex - 1).clamp(
+              0,
+              _getMainMenuItems().length - 1,
+            );
           });
           return KeyEventResult.handled;
         }
         if (key == LogicalKeyboardKey.arrowDown) {
           setState(() {
-            _selectedMenuIndex = (_selectedMenuIndex + 1).clamp(0, _getMainMenuItems().length - 1);
+            _selectedMenuIndex = (_selectedMenuIndex + 1).clamp(
+              0,
+              _getMainMenuItems().length - 1,
+            );
           });
           return KeyEventResult.handled;
         }
-        if (key == LogicalKeyboardKey.select || key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.arrowRight) {
+        if (key == LogicalKeyboardKey.select ||
+            key == LogicalKeyboardKey.enter ||
+            key == LogicalKeyboardKey.arrowRight) {
           _activateMenuItem(_selectedMenuIndex);
           return KeyEventResult.handled;
         }
-        if (key == LogicalKeyboardKey.goBack || key == LogicalKeyboardKey.escape) {
+        if (key == LogicalKeyboardKey.goBack ||
+            key == LogicalKeyboardKey.escape) {
           setState(() => _showSettingsMenu = false);
           return KeyEventResult.handled;
         }
@@ -1186,10 +1261,26 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   // D-pad Settings Menu System
   List<Map<String, dynamic>> _getMainMenuItems() {
     return [
-      {'icon': Icons.audiotrack_rounded, 'title': 'Audio Track', 'action': 'audio'},
-      {'icon': Icons.subtitles_rounded, 'title': 'Subtitles', 'action': 'subtitle'},
-      {'icon': Icons.aspect_ratio_rounded, 'title': 'Aspect Ratio', 'action': 'aspect'},
-      {'icon': Icons.speed_rounded, 'title': 'Playback Speed', 'action': 'speed'},
+      {
+        'icon': Icons.audiotrack_rounded,
+        'title': 'Audio Track',
+        'action': 'audio',
+      },
+      {
+        'icon': Icons.subtitles_rounded,
+        'title': 'Subtitles',
+        'action': 'subtitle',
+      },
+      {
+        'icon': Icons.aspect_ratio_rounded,
+        'title': 'Aspect Ratio',
+        'action': 'aspect',
+      },
+      {
+        'icon': Icons.speed_rounded,
+        'title': 'Playback Speed',
+        'action': 'speed',
+      },
     ];
   }
 
@@ -1205,20 +1296,29 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       }).toList();
     } else if (_currentSubMenu == 'subtitle') {
       final noTrack = SubtitleTrackInfo.none;
-      final allOptions = [noTrack, ..._subtitleTracks.where((t) => t.id != 'no')];
+      final allOptions = [
+        noTrack,
+        ..._subtitleTracks.where((t) => t.id != 'no'),
+      ];
       return allOptions.map((track) {
-        final isActive = track.id == 'no' 
-            ? (_activeSubtitleTrack == null || _activeSubtitleTrack!.id == 'no')
-            : _activeSubtitleTrack?.id == track.id;
+        final isActive =
+            track.id == 'no'
+                ? (_activeSubtitleTrack == null ||
+                    _activeSubtitleTrack!.id == 'no')
+                : _activeSubtitleTrack?.id == track.id;
         return {
-          'title': track.id == 'no' ? 'Off' : (track.title ?? track.language ?? 'Track ${track.id}'),
+          'title':
+              track.id == 'no'
+                  ? 'Off'
+                  : (track.title ?? track.language ?? 'Track ${track.id}'),
           'isActive': isActive,
           'track': track,
         };
       }).toList();
     } else if (_currentSubMenu == 'aspect') {
       return _aspectRatios.map((ar) {
-        final isActive = _aspectRatios[_currentAspectRatioIndex]['name'] == ar['name'];
+        final isActive =
+            _aspectRatios[_currentAspectRatioIndex]['name'] == ar['name'];
         return {
           'title': ar['name'] as String,
           'isActive': isActive,
@@ -1259,7 +1359,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       final track = item['track'] as AudioTrackInfo;
       _player.setAudioTrack(track);
       setState(() => _showSettingsMenu = false);
-      _showActionIndicator(Icons.audiotrack_rounded, 'Audio', track.title ?? track.language ?? 'Track ${track.id}');
+      _showActionIndicator(
+        Icons.audiotrack_rounded,
+        'Audio',
+        track.title ?? track.language ?? 'Track ${track.id}',
+      );
     } else if (_currentSubMenu == 'subtitle') {
       final track = item['track'] as SubtitleTrackInfo;
       _player.setSubtitleTrack(track);
@@ -1267,7 +1371,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       if (track.id == 'no') {
         _showActionIndicator(Icons.subtitles_off_rounded, 'Subtitles Off');
       } else {
-        _showActionIndicator(Icons.subtitles_rounded, 'Subtitle', track.title ?? track.language ?? 'Track ${track.id}');
+        _showActionIndicator(
+          Icons.subtitles_rounded,
+          'Subtitle',
+          track.title ?? track.language ?? 'Track ${track.id}',
+        );
       }
     } else if (_currentSubMenu == 'aspect') {
       final aspectRatio = item['aspectRatio'] as Map<String, dynamic>;
@@ -1598,7 +1706,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                     }
 
                     return videoWidget;
-                  }
+                  },
                 ),
               ),
             ),
@@ -2245,16 +2353,28 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
               const SizedBox(width: 36),
               // Play / Pause
               _buildCircleButton(
-                icon:
-                    _isCompleted
-                        ? Icons.replay_rounded
-                        : (_isPlaying
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded),
                 size: 72,
-                iconSize: 44,
                 filled: true,
                 onTap: _togglePlayPause,
+                child:
+                    _duration == Duration.zero
+                        ? const SizedBox(
+                          width: 32,
+                          height: 32,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3,
+                            color: Colors.black,
+                          ),
+                        )
+                        : Icon(
+                          _isCompleted
+                              ? Icons.replay_rounded
+                              : (_isPlaying
+                                  ? Icons.pause_rounded
+                                  : Icons.play_arrow_rounded),
+                          color: Colors.black,
+                          size: 44,
+                        ),
               ),
               const SizedBox(width: 36),
               // Forward 10s
@@ -2579,7 +2699,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                 decoration: BoxDecoration(
                   color: const Color(0xE6141416),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: _accentColor.withOpacity(0.3), width: 2),
+                  border: Border.all(
+                    color: _accentColor.withOpacity(0.3),
+                    width: 2,
+                  ),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withOpacity(0.7),
@@ -2603,10 +2726,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.settings_rounded, color: _accentColor, size: 24),
+                          const Icon(
+                            Icons.settings_rounded,
+                            color: _accentColor,
+                            size: 24,
+                          ),
                           const SizedBox(width: 12),
                           Text(
-                            _currentSubMenu == null ? 'Settings' : _getSubMenuTitle(),
+                            _currentSubMenu == null
+                                ? 'Settings'
+                                : _getSubMenuTitle(),
                             style: GoogleFonts.outfit(
                               color: Colors.white,
                               fontSize: 20,
@@ -2630,9 +2759,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                     // Menu items
                     Flexible(
                       child: SingleChildScrollView(
-                        child: _currentSubMenu == null
-                            ? _buildMainMenu()
-                            : _buildSubMenu(),
+                        child:
+                            _currentSubMenu == null
+                                ? _buildMainMenu()
+                                : _buildSubMenu(),
                       ),
                     ),
                   ],
@@ -2664,43 +2794,47 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     final items = _getMainMenuItems();
     return Column(
       mainAxisSize: MainAxisSize.min,
-      children: items.asMap().entries.map((entry) {
-        final i = entry.key;
-        final item = entry.value;
-        final isFocused = i == _selectedMenuIndex;
+      children:
+          items.asMap().entries.map((entry) {
+            final i = entry.key;
+            final item = entry.value;
+            final isFocused = i == _selectedMenuIndex;
 
-        return Container(
-          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: BoxDecoration(
-            color: isFocused ? _accentColor.withOpacity(0.15) : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isFocused ? _accentColor : Colors.transparent,
-              width: 2,
-            ),
-          ),
-          child: ListTile(
-            leading: Icon(
-              item['icon'] as IconData,
-              color: isFocused ? _accentColor : Colors.white70,
-              size: 24,
-            ),
-            title: Text(
-              item['title'] as String,
-              style: GoogleFonts.outfit(
-                color: isFocused ? _accentColor : Colors.white,
-                fontSize: 16,
-                fontWeight: isFocused ? FontWeight.w700 : FontWeight.w500,
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color:
+                    isFocused
+                        ? _accentColor.withOpacity(0.15)
+                        : Colors.transparent,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isFocused ? _accentColor : Colors.transparent,
+                  width: 2,
+                ),
               ),
-            ),
-            trailing: Icon(
-              Icons.arrow_forward_ios_rounded,
-              color: isFocused ? _accentColor : Colors.grey[600],
-              size: 16,
-            ),
-          ),
-        );
-      }).toList(),
+              child: ListTile(
+                leading: Icon(
+                  item['icon'] as IconData,
+                  color: isFocused ? _accentColor : Colors.white70,
+                  size: 24,
+                ),
+                title: Text(
+                  item['title'] as String,
+                  style: GoogleFonts.outfit(
+                    color: isFocused ? _accentColor : Colors.white,
+                    fontSize: 16,
+                    fontWeight: isFocused ? FontWeight.w700 : FontWeight.w500,
+                  ),
+                ),
+                trailing: Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  color: isFocused ? _accentColor : Colors.grey[600],
+                  size: 16,
+                ),
+              ),
+            );
+          }).toList(),
     );
   }
 
@@ -2708,41 +2842,52 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     final items = _getSubMenuItems();
     return Column(
       mainAxisSize: MainAxisSize.min,
-      children: items.asMap().entries.map((entry) {
-        final i = entry.key;
-        final item = entry.value;
-        final isFocused = i == _selectedSubMenuIndex;
-        final isActive = item['isActive'] as bool;
+      children:
+          items.asMap().entries.map((entry) {
+            final i = entry.key;
+            final item = entry.value;
+            final isFocused = i == _selectedSubMenuIndex;
+            final isActive = item['isActive'] as bool;
 
-        return Container(
-          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: BoxDecoration(
-            color: isFocused ? _accentColor.withOpacity(0.15) : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isFocused ? _accentColor : Colors.transparent,
-              width: 2,
-            ),
-          ),
-          child: ListTile(
-            title: Text(
-              item['title'] as String,
-              style: GoogleFonts.outfit(
-                color: isFocused ? _accentColor : (isActive ? _accentColor : Colors.white),
-                fontSize: 16,
-                fontWeight: isFocused || isActive ? FontWeight.w700 : FontWeight.w500,
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color:
+                    isFocused
+                        ? _accentColor.withOpacity(0.15)
+                        : Colors.transparent,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isFocused ? _accentColor : Colors.transparent,
+                  width: 2,
+                ),
               ),
-            ),
-            trailing: isActive
-                ? Icon(
-                    Icons.check_circle_rounded,
-                    color: _accentColor,
-                    size: 20,
-                  )
-                : null,
-          ),
-        );
-      }).toList(),
+              child: ListTile(
+                title: Text(
+                  item['title'] as String,
+                  style: GoogleFonts.outfit(
+                    color:
+                        isFocused
+                            ? _accentColor
+                            : (isActive ? _accentColor : Colors.white),
+                    fontSize: 16,
+                    fontWeight:
+                        isFocused || isActive
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                  ),
+                ),
+                trailing:
+                    isActive
+                        ? Icon(
+                          Icons.check_circle_rounded,
+                          color: _accentColor,
+                          size: 20,
+                        )
+                        : null,
+              ),
+            );
+          }).toList(),
     );
   }
 
@@ -3383,11 +3528,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   // ─── Reusable widgets ────────────────────────────────────
 
   Widget _buildCircleButton({
-    required IconData icon,
+    IconData? icon,
     required double size,
-    required double iconSize,
+    double? iconSize,
     required VoidCallback onTap,
     bool filled = false,
+    Widget? child,
   }) {
     return GestureDetector(
       onTap: onTap,
@@ -3405,10 +3551,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                     width: 1.5,
                   ),
         ),
-        child: Icon(
-          icon,
-          color: filled ? Colors.black : Colors.white,
-          size: iconSize,
+        child: Center(
+          child:
+              child ??
+              (icon != null
+                  ? Icon(
+                    icon,
+                    color: filled ? Colors.black : Colors.white,
+                    size: iconSize ?? 24,
+                  )
+                  : const SizedBox.shrink()),
         ),
       ),
     );
@@ -3425,15 +3577,17 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       child: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: color ??
+          color:
+              color ??
               (active
                   ? _accentColor.withOpacity(0.15)
                   : Colors.black.withOpacity(0.35)),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: active
-                ? _accentColor.withOpacity(0.4)
-                : Colors.white.withOpacity(0.1),
+            color:
+                active
+                    ? _accentColor.withOpacity(0.4)
+                    : Colors.white.withOpacity(0.1),
           ),
         ),
         child: Icon(

@@ -148,7 +148,7 @@ class _TVCodeInputState extends State<TVCodeInput> {
                               : _code[index].isNotEmpty
                               ? const Color(0xFFFFD600).withOpacity(0.3)
                               : Colors.white.withOpacity(0.1),
-                      width: _currentIndex == index ? 3 : 1,
+                      width: 3.0,
                     ),
                     boxShadow:
                         _currentIndex == index

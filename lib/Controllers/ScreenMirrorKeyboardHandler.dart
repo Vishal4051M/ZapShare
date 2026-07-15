@@ -8,6 +8,11 @@ class ScreenMirrorKeyboardHandler {
   Timer? typeBufferTimer;
   bool remoteInputEnabled = true;
 
+  // Deduplication state
+  LogicalKeyboardKey? _lastKey;
+  String? _lastChar;
+  int _lastKeyTime = 0;
+
   ScreenMirrorKeyboardHandler({required this.sendControl});
 
   KeyEventResult handleKeyEvent(
@@ -18,10 +23,20 @@ class ScreenMirrorKeyboardHandler {
     if (event is! KeyDownEvent || !remoteInputEnabled) {
       return KeyEventResult.ignored;
     }
-    if (ModalRoute.of(context)?.isCurrent != true) return KeyEventResult.ignored;
+    if (ModalRoute.of(context)?.isCurrent != true)
+      return KeyEventResult.ignored;
 
     final key = event.logicalKey;
     final char = event.character;
+
+    // Deduplicate rapid double key-down firings (Windows/Flutter bug)
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (key == _lastKey && char == _lastChar && (now - _lastKeyTime) < 50) {
+      return KeyEventResult.handled;
+    }
+    _lastKey = key;
+    _lastChar = char;
+    _lastKeyTime = now;
     final isCtrl =
         HardwareKeyboard.instance.isControlPressed ||
         HardwareKeyboard.instance.isMetaPressed;

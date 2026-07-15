@@ -4,7 +4,7 @@ import 'AppStyles.dart';
 
 class AudioPulseIndicator extends StatelessWidget {
   final Animation<double> animation;
-  
+
   const AudioPulseIndicator({super.key, required this.animation});
 
   @override
@@ -23,7 +23,9 @@ class AudioPulseIndicator extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: AppColors.primary.withOpacity(0.3 * (2.0 - animation.value)),
+                    color: AppColors.primary.withOpacity(
+                      0.3 * (2.0 - animation.value),
+                    ),
                     width: 2,
                   ),
                 ),
@@ -98,11 +100,18 @@ class StabilityControl extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.speed_rounded, color: AppColors.primary, size: 18),
+              const Icon(
+                Icons.speed_rounded,
+                color: AppColors.primary,
+                size: 18,
+              ),
               const SizedBox(width: 8),
               Text(
                 'Stability Mode',
-                style: AppStyles.subtitle.copyWith(color: AppColors.textPrimary, fontWeight: FontWeight.bold),
+                style: AppStyles.subtitle.copyWith(
+                  color: AppColors.textPrimary,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ],
           ),
@@ -130,7 +139,8 @@ class StabilityControl extends StatelessWidget {
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            color: isSelected ? AppColors.primary : Colors.white.withOpacity(0.05),
+            color:
+                isSelected ? AppColors.primary : Colors.white.withOpacity(0.05),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Center(

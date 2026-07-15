@@ -325,20 +325,64 @@ class ExoPlayerVideoPlayer implements PlatformVideoPlayer {
   Stream<String> get captionStream => _captionController.stream;
 
   @override
-  Stream<List<SubtitleTrackInfo>> get subtitleTracksStream =>
-      _subtitleTracksController.stream;
+  Stream<List<SubtitleTrackInfo>> get subtitleTracksStream {
+    final controller = StreamController<List<SubtitleTrackInfo>>.broadcast();
+    controller.onListen = () {
+      controller.add(_subtitleTracks);
+    };
+    final sub = _subtitleTracksController.stream.listen(
+      controller.add,
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    controller.onCancel = () => sub.cancel();
+    return controller.stream;
+  }
 
   @override
-  Stream<List<AudioTrackInfo>> get audioTracksStream =>
-      _audioTracksController.stream;
+  Stream<List<AudioTrackInfo>> get audioTracksStream {
+    final controller = StreamController<List<AudioTrackInfo>>.broadcast();
+    controller.onListen = () {
+      controller.add(_audioTracks);
+    };
+    final sub = _audioTracksController.stream.listen(
+      controller.add,
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    controller.onCancel = () => sub.cancel();
+    return controller.stream;
+  }
 
   @override
-  Stream<SubtitleTrackInfo?> get activeSubtitleTrackStream =>
-      _activeSubtitleController.stream;
+  Stream<SubtitleTrackInfo?> get activeSubtitleTrackStream {
+    final controller = StreamController<SubtitleTrackInfo?>.broadcast();
+    controller.onListen = () {
+      controller.add(_activeSubtitle);
+    };
+    final sub = _activeSubtitleController.stream.listen(
+      controller.add,
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    controller.onCancel = () => sub.cancel();
+    return controller.stream;
+  }
 
   @override
-  Stream<AudioTrackInfo?> get activeAudioTrackStream =>
-      _activeAudioController.stream;
+  Stream<AudioTrackInfo?> get activeAudioTrackStream {
+    final controller = StreamController<AudioTrackInfo?>.broadcast();
+    controller.onListen = () {
+      controller.add(_activeAudio);
+    };
+    final sub = _activeAudioController.stream.listen(
+      controller.add,
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    controller.onCancel = () => sub.cancel();
+    return controller.stream;
+  }
 
   // ─── Video Widget ─────────────────────────────────────────
 

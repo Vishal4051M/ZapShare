@@ -25,6 +25,11 @@ class MpvVideoPlayer implements PlatformVideoPlayer {
   final StreamController<AudioTrackInfo?> _activeAudioController =
       StreamController<AudioTrackInfo?>.broadcast();
 
+  List<SubtitleTrackInfo> _cachedSubtitles = [];
+  List<AudioTrackInfo> _cachedAudio = [];
+  SubtitleTrackInfo? _cachedActiveSubtitle;
+  AudioTrackInfo? _cachedActiveAudio;
+
   MpvVideoPlayer() {
     final isAndroid = Platform.isAndroid;
     _player = Player(
@@ -53,47 +58,46 @@ class MpvVideoPlayer implements PlatformVideoPlayer {
 
     // Listen to track changes and convert to common format
     _player.stream.tracks.listen((tracks) {
-      _subtitleTracksController.add(
-        tracks.subtitle
-            .map(
-              (t) => SubtitleTrackInfo(
-                id: t.id,
-                title: t.title,
-                language: t.language,
-              ),
-            )
-            .toList(),
-      );
-      _audioTracksController.add(
-        tracks.audio
-            .map(
-              (t) => AudioTrackInfo(
-                id: t.id,
-                title: t.title,
-                language: t.language,
-              ),
-            )
-            .toList(),
-      );
+      _cachedSubtitles =
+          tracks.subtitle
+              .map(
+                (t) => SubtitleTrackInfo(
+                  id: t.id,
+                  title: t.title,
+                  language: t.language,
+                ),
+              )
+              .toList();
+      _cachedAudio =
+          tracks.audio
+              .map(
+                (t) => AudioTrackInfo(
+                  id: t.id,
+                  title: t.title,
+                  language: t.language,
+                ),
+              )
+              .toList();
+      _subtitleTracksController.add(_cachedSubtitles);
+      _audioTracksController.add(_cachedAudio);
     });
 
     _player.stream.track.listen((track) {
-      _activeSubtitleController.add(
-        track.subtitle.id == 'no'
-            ? null
-            : SubtitleTrackInfo(
-              id: track.subtitle.id,
-              title: track.subtitle.title,
-              language: track.subtitle.language,
-            ),
+      _cachedActiveSubtitle =
+          track.subtitle.id == 'no'
+              ? null
+              : SubtitleTrackInfo(
+                id: track.subtitle.id,
+                title: track.subtitle.title,
+                language: track.subtitle.language,
+              );
+      _cachedActiveAudio = AudioTrackInfo(
+        id: track.audio.id,
+        title: track.audio.title,
+        language: track.audio.language,
       );
-      _activeAudioController.add(
-        AudioTrackInfo(
-          id: track.audio.id,
-          title: track.audio.title,
-          language: track.audio.language,
-        ),
-      );
+      _activeSubtitleController.add(_cachedActiveSubtitle);
+      _activeAudioController.add(_cachedActiveAudio);
     });
 
     // Listen for codec errors and auto-retry with next hwdec mode
@@ -415,20 +419,64 @@ class MpvVideoPlayer implements PlatformVideoPlayer {
       _player.stream.subtitle.map((list) => list.join('\n'));
 
   @override
-  Stream<List<SubtitleTrackInfo>> get subtitleTracksStream =>
-      _subtitleTracksController.stream;
+  Stream<List<SubtitleTrackInfo>> get subtitleTracksStream {
+    final controller = StreamController<List<SubtitleTrackInfo>>.broadcast();
+    controller.onListen = () {
+      controller.add(_cachedSubtitles);
+    };
+    final sub = _subtitleTracksController.stream.listen(
+      controller.add,
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    controller.onCancel = () => sub.cancel();
+    return controller.stream;
+  }
 
   @override
-  Stream<List<AudioTrackInfo>> get audioTracksStream =>
-      _audioTracksController.stream;
+  Stream<List<AudioTrackInfo>> get audioTracksStream {
+    final controller = StreamController<List<AudioTrackInfo>>.broadcast();
+    controller.onListen = () {
+      controller.add(_cachedAudio);
+    };
+    final sub = _audioTracksController.stream.listen(
+      controller.add,
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    controller.onCancel = () => sub.cancel();
+    return controller.stream;
+  }
 
   @override
-  Stream<SubtitleTrackInfo?> get activeSubtitleTrackStream =>
-      _activeSubtitleController.stream;
+  Stream<SubtitleTrackInfo?> get activeSubtitleTrackStream {
+    final controller = StreamController<SubtitleTrackInfo?>.broadcast();
+    controller.onListen = () {
+      controller.add(_cachedActiveSubtitle);
+    };
+    final sub = _activeSubtitleController.stream.listen(
+      controller.add,
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    controller.onCancel = () => sub.cancel();
+    return controller.stream;
+  }
 
   @override
-  Stream<AudioTrackInfo?> get activeAudioTrackStream =>
-      _activeAudioController.stream;
+  Stream<AudioTrackInfo?> get activeAudioTrackStream {
+    final controller = StreamController<AudioTrackInfo?>.broadcast();
+    controller.onListen = () {
+      controller.add(_cachedActiveAudio);
+    };
+    final sub = _activeAudioController.stream.listen(
+      controller.add,
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    controller.onCancel = () => sub.cancel();
+    return controller.stream;
+  }
 
   @override
   Widget buildVideoWidget({
@@ -438,13 +486,13 @@ class MpvVideoPlayer implements PlatformVideoPlayer {
   }) {
     // Lazy initialize controller for Linux if not ready
     if (Platform.isLinux && !_isControllerInitialized) {
-       _controller = VideoController(
-         _player,
-         configuration: const VideoControllerConfiguration(
-           enableHardwareAcceleration: true,
-         ),
-       );
-       _isControllerInitialized = true;
+      _controller = VideoController(
+        _player,
+        configuration: const VideoControllerConfiguration(
+          enableHardwareAcceleration: true,
+        ),
+      );
+      _isControllerInitialized = true;
     }
 
     // Safety check for controller

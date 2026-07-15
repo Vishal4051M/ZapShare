@@ -43,17 +43,18 @@ class AudioSharePulseView extends StatelessWidget {
                 shape: BoxShape.circle,
                 color: Color(0xFFFFD600),
               ),
-              child: avatarId != null
-                  ? CustomAvatarWidget(
-                      avatarId: avatarId,
-                      size: centerSize,
-                      useBackground: false,
-                    )
-                  : Icon(
-                      isCasting ? Icons.waves_rounded : Icons.mic_rounded,
-                      size: isTvLayout ? 48 : 40,
-                      color: Colors.black,
-                    ),
+              child:
+                  avatarId != null
+                      ? CustomAvatarWidget(
+                        avatarId: avatarId,
+                        size: centerSize,
+                        useBackground: false,
+                      )
+                      : Icon(
+                        isCasting ? Icons.waves_rounded : Icons.mic_rounded,
+                        size: isTvLayout ? 48 : 40,
+                        color: Colors.black,
+                      ),
             ),
           ),
           Positioned(
@@ -74,16 +75,21 @@ class AudioSharePulseView extends StatelessWidget {
                     onTap: onMuteToggle,
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
-                        color: isPhoneMuted
-                            ? const Color(0xFFE11D48)
-                            : Colors.white.withOpacity(0.1),
+                        color:
+                            isPhoneMuted
+                                ? const Color(0xFFE11D48)
+                                : Colors.white.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
-                          color: isPhoneMuted
-                              ? const Color(0xFFE11D48)
-                              : Colors.white24,
+                          color:
+                              isPhoneMuted
+                                  ? const Color(0xFFE11D48)
+                                  : Colors.white24,
                         ),
                       ),
                       child: Row(

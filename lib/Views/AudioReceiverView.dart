@@ -44,7 +44,7 @@ class _AudioReceiverViewState extends State<AudioReceiverView>
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     )..repeat(reverse: true);
-    
+
     _pulseAnimation = Tween<double>(begin: 1.0, end: 1.5).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
@@ -168,7 +168,8 @@ class _AudioReceiverViewState extends State<AudioReceiverView>
                   onChanged: _controller.setCushion,
                 ),
                 const SizedBox(height: 28),
-                if (Platform.isLinux || Platform.isWindows) _buildControlsOverlay(),
+                if (Platform.isLinux || Platform.isWindows)
+                  _buildControlsOverlay(),
                 const Spacer(),
                 _buildStopButton(),
               ],
@@ -195,7 +196,10 @@ class _AudioReceiverViewState extends State<AudioReceiverView>
     );
   }
 
-  Widget _buildHeaderButton({required IconData icon, required VoidCallback onTap}) {
+  Widget _buildHeaderButton({
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
     return _FocusSurface(
       onTap: onTap,
       builder: (isFocused) {
@@ -235,7 +239,10 @@ class _AudioReceiverViewState extends State<AudioReceiverView>
       child: Row(
         children: [
           _buildControlButton(
-            icon: _controller.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+            icon:
+                _controller.isPlaying
+                    ? Icons.pause_rounded
+                    : Icons.play_arrow_rounded,
             onTap: _controller.togglePlay,
             color: AppColors.primary,
             iconColor: Colors.black,
@@ -255,12 +262,20 @@ class _AudioReceiverViewState extends State<AudioReceiverView>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Icon(Icons.volume_down_rounded, color: AppColors.textMuted, size: 16),
+              const Icon(
+                Icons.volume_down_rounded,
+                color: AppColors.textMuted,
+                size: 16,
+              ),
               Text(
                 '${_controller.volume.toInt()}%',
                 style: AppStyles.badge.copyWith(letterSpacing: 0),
               ),
-              const Icon(Icons.volume_up_rounded, color: AppColors.textMuted, size: 16),
+              const Icon(
+                Icons.volume_up_rounded,
+                color: AppColors.textMuted,
+                size: 16,
+              ),
             ],
           ),
           SliderTheme(
@@ -272,7 +287,8 @@ class _AudioReceiverViewState extends State<AudioReceiverView>
             ),
             child: Slider(
               value: _controller.volume,
-              min: 0, max: 100,
+              min: 0,
+              max: 100,
               onChanged: _controller.setVolume,
             ),
           ),
@@ -281,7 +297,12 @@ class _AudioReceiverViewState extends State<AudioReceiverView>
     );
   }
 
-  Widget _buildControlButton({required IconData icon, required VoidCallback onTap, required Color color, required Color iconColor}) {
+  Widget _buildControlButton({
+    required IconData icon,
+    required VoidCallback onTap,
+    required Color color,
+    required Color iconColor,
+  }) {
     return _FocusSurface(
       onTap: onTap,
       builder: (isFocused) {
@@ -294,10 +315,7 @@ class _AudioReceiverViewState extends State<AudioReceiverView>
               color: color,
               shape: BoxShape.circle,
               border: Border.all(
-                color:
-                    isFocused
-                        ? Colors.white
-                        : Colors.transparent,
+                color: isFocused ? Colors.white : Colors.transparent,
                 width: isFocused ? 2 : 0,
               ),
             ),
@@ -317,10 +335,7 @@ class _AudioReceiverViewState extends State<AudioReceiverView>
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(22),
             border: Border.all(
-              color:
-                  isFocused
-                      ? AppColors.primary
-                      : Colors.transparent,
+              color: isFocused ? AppColors.primary : Colors.transparent,
               width: isFocused ? 2 : 0,
             ),
           ),
@@ -350,10 +365,7 @@ class _FocusSurface extends StatefulWidget {
   final Widget Function(bool isFocused) builder;
   final VoidCallback? onTap;
 
-  const _FocusSurface({
-    required this.builder,
-    required this.onTap,
-  });
+  const _FocusSurface({required this.builder, required this.onTap});
 
   @override
   State<_FocusSurface> createState() => _FocusSurfaceState();

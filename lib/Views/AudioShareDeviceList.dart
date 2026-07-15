@@ -21,7 +21,10 @@ class AudioShareDeviceList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final header = Padding(
-      padding: EdgeInsets.symmetric(horizontal: isTvLayout ? 0 : 24, vertical: 8),
+      padding: EdgeInsets.symmetric(
+        horizontal: isTvLayout ? 0 : 24,
+        vertical: 8,
+      ),
       child: Text(
         'DEVICES NEARBY',
         style: GoogleFonts.outfit(
@@ -42,7 +45,10 @@ class AudioShareDeviceList extends StatelessWidget {
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 60),
               child: Center(
-                child: CircularProgressIndicator(color: Color(0xFFFFD600), strokeWidth: 2),
+                child: CircularProgressIndicator(
+                  color: Color(0xFFFFD600),
+                  strokeWidth: 2,
+                ),
               ),
             )
           else
@@ -56,18 +62,22 @@ class AudioShareDeviceList extends StatelessWidget {
       children: [
         header,
         Expanded(
-          child: devices.isEmpty
-              ? const Center(
-                  child: CircularProgressIndicator(color: Color(0xFFFFD600), strokeWidth: 2),
-                )
-              : ListView.separated(
-                  physics: const BouncingScrollPhysics(),
-                  itemCount: devices.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
-                  itemBuilder: (context, index) {
-                    return _buildDeviceCard(devices[index], true);
-                  },
-                ),
+          child:
+              devices.isEmpty
+                  ? const Center(
+                    child: CircularProgressIndicator(
+                      color: Color(0xFFFFD600),
+                      strokeWidth: 2,
+                    ),
+                  )
+                  : ListView.separated(
+                    physics: const BouncingScrollPhysics(),
+                    itemCount: devices.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (context, index) {
+                      return _buildDeviceCard(devices[index], true);
+                    },
+                  ),
         ),
       ],
     );
@@ -88,22 +98,24 @@ class AudioShareDeviceList extends StatelessWidget {
             color: const Color(0xFF1C1C1E),
             borderRadius: BorderRadius.circular(24),
             border: Border.all(
-              color: isFocused
-                  ? const Color(0xFFFFD600)
-                  : isSelected
+              color:
+                  isFocused
+                      ? const Color(0xFFFFD600)
+                      : isSelected
                       ? const Color(0xFFFFD600)
                       : Colors.white.withOpacity(0.05),
               width: isFocused || isSelected ? 2 : 1,
             ),
-            boxShadow: isFocused
-                ? [
-                    BoxShadow(
-                      color: const Color(0xFFFFD600).withOpacity(0.3),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
-                    ),
-                  ]
-                : null,
+            boxShadow:
+                isFocused
+                    ? [
+                      BoxShadow(
+                        color: const Color(0xFFFFD600).withOpacity(0.3),
+                        blurRadius: 12,
+                        offset: const Offset(0, 6),
+                      ),
+                    ]
+                    : null,
           ),
           child: ListTile(
             contentPadding: EdgeInsets.symmetric(
@@ -134,7 +146,10 @@ class AudioShareDeviceList extends StatelessWidget {
             ),
             subtitle: Text(
               device.ipAddress,
-              style: GoogleFonts.outfit(color: Colors.white12, fontSize: isTvLayout ? 14 : 13),
+              style: GoogleFonts.outfit(
+                color: Colors.white12,
+                fontSize: isTvLayout ? 14 : 13,
+              ),
             ),
             trailing: Container(
               width: isTvLayout ? 28 : 24,
@@ -145,9 +160,13 @@ class AudioShareDeviceList extends StatelessWidget {
                   color: isSelected ? const Color(0xFFFFD600) : Colors.white10,
                   width: 2,
                 ),
-                color: isSelected ? const Color(0xFFFFD600) : Colors.transparent,
+                color:
+                    isSelected ? const Color(0xFFFFD600) : Colors.transparent,
               ),
-              child: isSelected ? const Icon(Icons.check, size: 14, color: Colors.black) : null,
+              child:
+                  isSelected
+                      ? const Icon(Icons.check, size: 14, color: Colors.black)
+                      : null,
             ),
           ),
         );

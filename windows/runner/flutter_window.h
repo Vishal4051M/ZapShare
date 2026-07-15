@@ -3,6 +3,8 @@
 
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
+#include <flutter/standard_method_codec.h>
 
 #include <memory>
 #include <vector>
@@ -47,6 +49,8 @@ class FlutterWindow : public Win32Window {
   // MPV Overlay Window (The "Window 1")
   std::unique_ptr<class MpvWindow> mpv_window_;
   std::unique_ptr<class VideoPlugin> video_plugin_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> capture_channel_;
+  unsigned long long gdiplusToken_ = 0;
 
  public: 
   class MpvWindow* GetMpvWindow() { return mpv_window_.get(); }

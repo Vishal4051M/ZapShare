@@ -8,11 +8,13 @@ class ScreenMirrorControlBar extends StatelessWidget {
   final bool remoteInputEnabled;
   final String? inputStatusText;
   final String? senderIp;
+  final bool isAndroidViewingWindows;
   final VoidCallback onDisconnect;
   final VoidCallback onToggleControls;
   final VoidCallback onTextInputDialog;
   final VoidCallback onToggleRemoteInput;
   final Function(String) onSendControl;
+  final VoidCallback? onShowTouchpad;
   final Color accentColor;
 
   const ScreenMirrorControlBar({
@@ -28,6 +30,8 @@ class ScreenMirrorControlBar extends StatelessWidget {
     required this.onToggleRemoteInput,
     required this.onSendControl,
     required this.accentColor,
+    this.isAndroidViewingWindows = false,
+    this.onShowTouchpad,
   });
 
   @override
@@ -51,13 +55,28 @@ class ScreenMirrorControlBar extends StatelessWidget {
                   )
                 else
                   const SizedBox.shrink(),
-                _buildGlassBtn(
-                  icon: showControls
-                      ? Icons.grid_view_rounded
-                      : Icons.grid_view_outlined,
-                  onTap: onToggleControls,
-                  highlight: showControls,
-                  tooltip: 'Controls',
+                Row(
+                  children: [
+                    // Touchpad button (Android viewing Windows only)
+                    if (isAndroidViewingWindows && onShowTouchpad != null) ...[
+                      _buildGlassBtn(
+                        icon: Icons.mouse_rounded,
+                        onTap: onShowTouchpad!,
+                        tooltip: 'Touchpad',
+                        highlight: false,
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    _buildGlassBtn(
+                      icon:
+                          showControls
+                              ? Icons.grid_view_rounded
+                              : Icons.grid_view_outlined,
+                      onTap: onToggleControls,
+                      highlight: showControls,
+                      tooltip: 'Controls',
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -102,7 +121,7 @@ class ScreenMirrorControlBar extends StatelessWidget {
                 ],
               ),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 300),
+                constraints: const BoxConstraints(maxWidth: 340),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -133,6 +152,15 @@ class ScreenMirrorControlBar extends StatelessWidget {
                         highlight: remoteInputEnabled,
                       ),
                     ),
+                    // Touchpad shortcut in nav bar for Android-viewing-Windows
+                    if (isAndroidViewingWindows && onShowTouchpad != null)
+                      Expanded(
+                        child: _buildNavBtn(
+                          Icons.mouse_rounded,
+                          onShowTouchpad!,
+                          highlight: false,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -211,14 +239,16 @@ class ScreenMirrorControlBar extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: highlight
-                  ? accentColor.withOpacity(0.2)
-                  : Colors.white.withOpacity(0.12),
+              color:
+                  highlight
+                      ? accentColor.withOpacity(0.2)
+                      : Colors.white.withOpacity(0.12),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color: highlight
-                    ? accentColor.withOpacity(0.4)
-                    : Colors.white.withOpacity(0.2),
+                color:
+                    highlight
+                        ? accentColor.withOpacity(0.4)
+                        : Colors.white.withOpacity(0.2),
               ),
             ),
             child: Icon(

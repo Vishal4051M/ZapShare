@@ -10,9 +10,7 @@ import 'package:zap_share/blocs/navigation/smooth_page_route.dart';
 import 'dart:math';
 
 import '../../services/device_discovery_service.dart';
-
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:zap_share/services/supabase_service.dart';
+import 'package:zap_share/services/firebase_service.dart';
 import 'package:zap_share/Screens/auth/LoginScreen.dart';
 import 'package:zap_share/Screens/shared/cast_selection_screen.dart';
 import 'package:zap_share/Screens/shared/audio_share_screen.dart';
@@ -26,8 +24,7 @@ class LinuxHomeScreen extends StatefulWidget {
   _LinuxHomeScreenState createState() => _LinuxHomeScreenState();
 }
 
-class _LinuxHomeScreenState extends State<LinuxHomeScreen>
-    with WindowListener {
+class _LinuxHomeScreenState extends State<LinuxHomeScreen> with WindowListener {
   final DeviceDiscoveryService _discoveryService = DeviceDiscoveryService();
   bool _isSupabaseInitialized = false;
   String? _lastClipboardContent;
@@ -45,7 +42,7 @@ class _LinuxHomeScreenState extends State<LinuxHomeScreen>
     _checkSupabaseInit();
 
     // Listen for auth state changes (e.g. login success)
-    _authStateSubscription = SupabaseService().authStateChanges.listen((data) {
+    _authStateSubscription = FirebaseService().authStateChanges.listen((data) {
       if (mounted) {
         setState(() {});
         _subscribeToCloudClipboard();
@@ -73,7 +70,7 @@ class _LinuxHomeScreenState extends State<LinuxHomeScreen>
     _clipboardInsertSubscription?.cancel();
 
     // Only subscribe if we are logged in
-    final service = SupabaseService();
+    final service = FirebaseService();
     if (service.currentUser == null) return;
 
     // 1. Subscribe to the LIST (Base Stream)
@@ -219,10 +216,10 @@ class _LinuxHomeScreenState extends State<LinuxHomeScreen>
           }
 
           // Sync to Cloud
-          final user = SupabaseService().currentUser;
+          final user = FirebaseService().currentUser;
           if (user != null) {
             try {
-              await SupabaseService().addClipboardItem(currentText);
+              await FirebaseService().addClipboardItem(currentText);
               // Mark this as known cloud content immediately so we don't process the echo
               _lastCloudContent = currentText;
 
@@ -475,8 +472,8 @@ class _LinuxHomeScreenState extends State<LinuxHomeScreen>
               Expanded(
                 child: Hero(
                   tag: 'receive_card_container',
-                  createRectTween: (begin, end) =>
-                      SmoothRectTween(begin: begin, end: end),
+                  createRectTween:
+                      (begin, end) => SmoothRectTween(begin: begin, end: end),
                   child: _buildCard(
                     title: "Receive",
                     subtitle: "Get Files",
@@ -815,7 +812,7 @@ class _LinuxHomeScreenState extends State<LinuxHomeScreen>
       );
     }
 
-    final user = SupabaseService().currentUser;
+    final user = FirebaseService().currentUser;
     final themeColor = const Color(0xFFFFD600);
 
     return Container(
@@ -889,7 +886,7 @@ class _LinuxHomeScreenState extends State<LinuxHomeScreen>
                     onTap: () async {
                       HapticFeedback.lightImpact();
                       // Force refresh
-                      final service = SupabaseService();
+                      final service = FirebaseService();
                       if (service.currentUser != null) {
                         try {
                           final history = await service.fetchClipboardHistory();

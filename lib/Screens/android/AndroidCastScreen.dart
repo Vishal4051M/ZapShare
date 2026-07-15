@@ -12,18 +12,21 @@ import '../../services/device_discovery_service.dart';
 import '../../widgets/cast_remote_control.dart';
 import '../../widgets/SearchPulseWidget.dart';
 import '../../widgets/CustomAvatarWidget.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 enum CastMode { video, screenMirror, audio }
 
 class AndroidCastScreen extends StatefulWidget {
   final CastMode initialMode;
   final String? heroTag;
+  final String? initialVideoUri;
+  final String? initialVideoName;
 
   const AndroidCastScreen({
     super.key,
     this.initialMode = CastMode.video,
     this.heroTag,
+    this.initialVideoUri,
+    this.initialVideoName,
   });
 
   @override
@@ -46,6 +49,8 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
   // File details (video cast)
   String? _selectedUri;
   String? _selectedFileName;
+  String? _selectedSubtitleUri;
+  String? _selectedSubtitleName;
 
   String? _serverUrl;
   bool _isServerRunning = false;
@@ -78,10 +83,10 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
   String? _customAvatar;
 
   Future<void> _loadAvatar() async {
-    final prefs = await SharedPreferences.getInstance();
+    final avatar = await CustomAvatarWidget.getEffectiveLocalAvatar();
     if (mounted) {
       setState(() {
-        _customAvatar = prefs.getString('custom_avatar');
+        _customAvatar = avatar;
       });
     }
   }
@@ -94,6 +99,13 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
         widget.initialMode == CastMode.audio
             ? CastMode.video
             : widget.initialMode;
+    if (widget.initialVideoUri != null) {
+      _selectedUri = widget.initialVideoUri;
+      _selectedFileName = widget.initialVideoName ?? widget.initialVideoUri!.split('/').last;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _startServer();
+      });
+    }
     _initDiscovery();
   }
 
@@ -127,7 +139,9 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
 
   Future<void> _refreshAccessibilityStatus() async {
     try {
-      final enabled = await _channel.invokeMethod<bool>('isAccessibilityEnabled');
+      final enabled = await _channel.invokeMethod<bool>(
+        'isAccessibilityEnabled',
+      );
       if (mounted && enabled != null) {
         setState(() => _isAccessibilityEnabled = enabled);
       }
@@ -172,7 +186,8 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
       if (result != null && result.isNotEmpty) {
         final docFile = result.first;
 
-        // Stop previous server if any
+        // Stop previous server and session if any
+        _discoveryService.stopCastSession();
         await _stopServer();
 
         setState(() {
@@ -196,6 +211,45 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
     }
   }
 
+  Future<void> _pickSubtitle() async {
+    try {
+      final result = await _safUtil.pickFiles(
+        multiple: false,
+        mimeTypes: ['*/*'],
+      );
+
+      if (result != null && result.isNotEmpty) {
+        final docFile = result.first;
+        final name = docFile.name.toLowerCase();
+        if (name.endsWith('.srt') ||
+            name.endsWith('.vtt') ||
+            name.endsWith('.ass') ||
+            name.endsWith('.ssa') ||
+            name.endsWith('.sub')) {
+          setState(() {
+            _selectedSubtitleUri = docFile.uri;
+            _selectedSubtitleName = docFile.name;
+          });
+          // Restart server to include the subtitle file
+          await _startServer();
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Please select a valid subtitle file (.srt, .vtt, .ass, .ssa)',
+                ),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      print('Error picking subtitle: $e');
+    }
+  }
+
   Future<void> _pickAudio() async {
     try {
       final result = await _safUtil.pickFiles(
@@ -206,6 +260,7 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
       if (result != null && result.isNotEmpty) {
         final docFile = result.first;
 
+        _discoveryService.stopCastSession();
         await _stopAudioServer();
         setState(() {
           _selectedAudioUri = docFile.uri;
@@ -279,7 +334,9 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
   }
 
   Future<bool> _startSystemAudioCast() async {
-    if (_isAudioServerRunning && _audioCastUsingMirror && _audioServerUrl != null) {
+    if (_isAudioServerRunning &&
+        _audioCastUsingMirror &&
+        _audioServerUrl != null) {
       return true;
     }
     try {
@@ -294,7 +351,9 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Screen capture permission denied – cannot capture device audio'),
+              content: Text(
+                'Screen capture permission denied – cannot capture device audio',
+              ),
               backgroundColor: Colors.red,
             ),
           );
@@ -313,7 +372,8 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
             port = result;
             break;
           }
-          if (result is int && result == -1) lastError = 'Native mirror server error';
+          if (result is int && result == -1)
+            lastError = 'Native mirror server error';
         } catch (e) {
           lastError = e.toString();
         }
@@ -405,10 +465,17 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
       String lastError = 'Unknown error';
       for (int attempt = 0; attempt < 3; attempt++) {
         try {
+          final filesList = [
+            {'uri': _selectedUri!, 'name': _selectedFileName ?? 'video.mp4'},
+          ];
+          if (_selectedSubtitleUri != null) {
+            filesList.add({
+              'uri': _selectedSubtitleUri!,
+              'name': _selectedSubtitleName ?? 'subtitle.srt',
+            });
+          }
           port = await _channel.invokeMethod<int>('startVideoServer', {
-            'files': [
-              {'uri': _selectedUri!, 'name': _selectedFileName ?? 'video.mp4'},
-            ],
+            'files': filesList,
           });
           if (port != null && port > 0) break;
         } catch (e) {
@@ -501,7 +568,10 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
         try {
           port = await _channel.invokeMethod<int>('startVideoServer', {
             'files': [
-              {'uri': _selectedAudioUri!, 'name': _selectedAudioName ?? 'audio.mp3'},
+              {
+                'uri': _selectedAudioUri!,
+                'name': _selectedAudioName ?? 'audio.mp3',
+              },
             ],
           });
           if (port != null && port > 0) break;
@@ -517,7 +587,8 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
         }
       }
 
-      if (port == null || port <= 0) throw Exception('Audio server failed: $lastError');
+      if (port == null || port <= 0)
+        throw Exception('Audio server failed: $lastError');
 
       _audioServerUrl = 'http://$ip:$port/video/0';
       _isAudioServerRunning = true;
@@ -564,11 +635,27 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
     }
 
     try {
+      String? subtitleUrl;
+      if (_selectedSubtitleUri != null && _selectedSubtitleName != null) {
+        subtitleUrl = _serverUrl!.replaceAll(
+          '/video/0',
+          '/video/1/$_selectedSubtitleName',
+        );
+      }
+
       // Send Cast URL to the device via Discovery Service
       await _discoveryService.sendCastUrl(
         device.ipAddress,
         _serverUrl!,
         fileName: _selectedFileName,
+        subtitleUrl: subtitleUrl,
+      );
+
+      // Start persistent background cast session
+      _discoveryService.startCastSession(
+        device.ipAddress,
+        device.deviceName,
+        _selectedFileName ?? 'Video',
       );
 
       if (!mounted) return;
@@ -639,7 +726,9 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
     // Legacy path: start MediaProjection-backed HTTP audio if needed
     if (useLegacyPath) {
       await _discoveryService.stopWebRtcAudio();
-      if (!_isAudioServerRunning || _audioServerUrl == null || !_audioCastUsingMirror) {
+      if (!_isAudioServerRunning ||
+          _audioServerUrl == null ||
+          !_audioCastUsingMirror) {
         final ok = await _startSystemAudioCast();
         if (!ok || _audioServerUrl == null) return;
       }
@@ -1074,6 +1163,7 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
 
   @override
   void dispose() {
+    _discoveryService.stopCastSession();
     _stopServer();
     _stopAudioServer();
     if (_isMirroring) {
@@ -1106,7 +1196,11 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 16, color: active ? Colors.white : Colors.grey[600]),
+              Icon(
+                icon,
+                size: 16,
+                color: active ? Colors.white : Colors.grey[600],
+              ),
               const SizedBox(width: 6),
               Text(
                 label,
@@ -1126,80 +1220,47 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
   @override
   Widget build(BuildContext context) {
     final heroTag = widget.heroTag ?? 'cast_card_container';
-    return Hero(
-      tag: heroTag,
-      createRectTween:
-          (begin, end) => SmoothRectTween(begin: begin, end: end),
-      child: Material(
-        color: const Color(0xFFEDEDED),
-        child: Scaffold(
-          backgroundColor: const Color(0xFFEDEDED),
-          appBar: AppBar(
-            title: Text(
-              'Cast',
-              style: GoogleFonts.outfit(
-                color: const Color(0xFF2C2C2E),
-                fontWeight: FontWeight.w700,
-                fontSize: 20,
-              ),
-            ),
-            centerTitle: true,
-            backgroundColor: const Color(0xFFEDEDED),
-            elevation: 0,
-            leading: IconButton(
-              icon: const Icon(
-                Icons.arrow_back_ios_new_rounded,
-                color: Color(0xFF2C2C2E),
-              ),
-              onPressed: () => Navigator.pop(context),
-            ),
-            actions: [
-              IconButton(
-                icon: Icon(
-                  _isScanning
-                      ? Icons.stop_circle_outlined
-                      : Icons.refresh_rounded,
-                  color:
-                      _isScanning ? Colors.redAccent : const Color(0xFF2C2C2E),
-                ),
-                tooltip: _isScanning ? 'Stop Scanning' : 'Refresh Devices',
-                onPressed: _isScanning ? _stopScanning : _startScanning,
-              ),
-            ],
+    return Scaffold(
+      backgroundColor: const Color(0xFFEDEDED),
+      appBar: AppBar(
+        title: Text(
+          'Cast',
+          style: GoogleFonts.outfit(
+            color: const Color(0xFF2C2C2E),
+            fontWeight: FontWeight.w700,
+            fontSize: 20,
           ),
-          body: SafeArea(
+        ),
+        centerTitle: true,
+        backgroundColor: const Color(0xFFEDEDED),
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(
+            Icons.arrow_back_ios_new_rounded,
+            color: Color(0xFF2C2C2E),
+          ),
+          onPressed: () => Navigator.pop(context),
+        ),
+        actions: [
+          IconButton(
+            icon: Icon(
+              _isScanning ? Icons.stop_circle_outlined : Icons.refresh_rounded,
+              color: _isScanning ? Colors.redAccent : const Color(0xFF2C2C2E),
+            ),
+            tooltip: _isScanning ? 'Stop Scanning' : 'Refresh Devices',
+            onPressed: _isScanning ? _stopScanning : _startScanning,
+          ),
+        ],
+      ),
+      body: Hero(
+        tag: heroTag,
+        createRectTween:
+            (begin, end) => SmoothRectTween(begin: begin, end: end),
+        child: Material(
+          color: const Color(0xFFEDEDED),
+          child: SafeArea(
             child: CustomScrollView(
               slivers: [
-                // Mode Toggle
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 8, 24, 4),
-                    child: Container(
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.06),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Row(
-                        children: [
-                          _buildModeChip(
-                            label: 'Cast Video',
-                            icon: Icons.cast_rounded,
-                            active: _mode == CastMode.video,
-                            onTap: () => setState(() => _mode = CastMode.video),
-                          ),
-                          _buildModeChip(
-                            label: 'Phone Cast',
-                            icon: Icons.smartphone_rounded,
-                            active: _mode == CastMode.screenMirror,
-                            onTap: () => setState(() => _mode = CastMode.screenMirror),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
                 // Screen Mirror Mode: Active mirroring card
                 if (_mode == CastMode.screenMirror && _isMirroring)
                   SliverToBoxAdapter(
@@ -1811,256 +1872,74 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
                     ),
                   ),
 
-                // 3. Device List
-                if (_devices.isEmpty)
-                  SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (_isScanning)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 20),
-                              child: SearchPulseWidget(
-                                size: 140,
-                                color: const Color(0xFFFFD600),
-                                child: _customAvatar != null
-                                    ? CustomAvatarWidget(
-                                        avatarId: _customAvatar,
-                                        size: 60,
-                                        useBackground: true,
-                                      )
-                                    : const Icon(
-                                        Icons.search_rounded,
-                                        color: Colors.black,
-                                        size: 28,
-                                      ),
-                              ),
-                            )
-                          else
-                            Icon(
-                              Icons.search_off_rounded,
-                              size: 64,
-                              color: Colors.grey[300],
-                            ),
-                          const SizedBox(height: 24),
-                          Text(
-                            _isScanning
-                                ? 'Scanning for devices...'
-                                : 'No devices found',
-                            style: GoogleFonts.outfit(
-                              color: Colors.grey[500],
-                              fontSize: 16,
-                              fontWeight: FontWeight.w500,
+                // 3. Device List (Radar / Orbiting UI)
+                SliverToBoxAdapter(
+                  child: Container(
+                    height: 380,
+                    margin: const EdgeInsets.only(bottom: 40),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        // Pulse Effect
+                        Center(
+                          child: SizedBox(
+                            width: 280,
+                            height: 280,
+                            child: SearchPulseWidget(
+                              key: const ValueKey('pulse_effect_cast'),
+                              size: 280,
+                              color: Colors.black,
                             ),
                           ),
-                          if (!_isScanning)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 16),
-                              child: TextButton.icon(
-                                onPressed: _startScanning,
-                                icon: const Icon(
-                                  Icons.refresh_rounded,
-                                  color: Color(0xFF2C2C2E),
-                                ),
-                                label: Text(
-                                  'Try Again',
-                                  style: GoogleFonts.outfit(
-                                    color: const Color(0xFF2C2C2E),
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  )
-                else
-                  SliverPadding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 8,
-                    ),
-                    sliver: SliverList(
-                      delegate: SliverChildBuilderDelegate((context, index) {
-                        final device = _devices[index];
-                        // Determine icon based on platform
-                        IconData platformIcon = Icons.devices_other_rounded;
-                        Color platformColor = const Color(0xFF2C2C2E);
+                        ),
+                        // Center Avatar
+                        Center(
+                          child: CustomAvatarWidget(
+                            avatarId: _customAvatar,
+                            size: 60,
+                            useBackground: true,
+                            showBorder: true,
+                            borderColor: Colors.black.withOpacity(0.3),
+                          ),
+                        ),
+                        // Orbiting Device Nodes
+                        ...List.generate(_devices.length.clamp(0, 8), (index) {
+                          final device = _devices[index];
+                          final int totalCount = _devices.length.clamp(0, 8);
+                          final double deviceScale =
+                              totalCount <= 4
+                                  ? 1.0
+                                  : (totalCount <= 6 ? 0.9 : 0.8);
+                          final double deviceNodeSize = 60.0 * deviceScale;
 
-                        switch (device.platform.toLowerCase()) {
-                          case 'android':
-                            platformIcon = Icons.phone_android_rounded;
-                            platformColor = Colors.green;
-                            break;
-                          case 'windows':
-                            platformIcon = Icons.desktop_windows_rounded;
-                            platformColor = Colors.blue;
-                            break;
-                          case 'ios':
-                          case 'macos':
-                            platformIcon = Icons.apple;
-                            platformColor = Colors.grey;
-                            break;
-                          default:
-                            platformIcon = Icons.laptop;
-                        }
+                          final double pulseRadius = 280.0 / 2;
+                          final double orbitPadding = 20.0;
+                          final double orbitRadius =
+                              pulseRadius - (deviceNodeSize / 2) - orbitPadding;
+                          final double startAngle = -3.14159 / 2;
 
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: Colors.grey[200]!),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.03),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              borderRadius: BorderRadius.circular(20),
-                              onTap: () {
-                                if (_mode == CastMode.video) {
-                                  _castToDevice(device);
-                                } else {
-                                  _startScreenMirror(device);
-                                }
-                              },
-                              child: Padding(
-                                padding: const EdgeInsets.all(16),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 48,
-                                      height: 48,
-                                      decoration: BoxDecoration(
-                                        color: platformColor.withOpacity(0.1),
-                                        borderRadius: BorderRadius.circular(14),
-                                      ),
-                                      child: Icon(
-                                        platformIcon,
-                                        color: platformColor,
-                                        size: 24,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 16),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            device.deviceName,
-                                            style: GoogleFonts.outfit(
-                                              color: Colors.black,
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Row(
-                                            children: [
-                                              Text(
-                                                device.ipAddress,
-                                                style: GoogleFonts.outfit(
-                                                  color: Colors.grey[500],
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              if (device.isOnline)
-                                                Container(
-                                                  width: 6,
-                                                  height: 6,
-                                                  decoration:
-                                                      const BoxDecoration(
-                                                        color: Colors.green,
-                                                        shape: BoxShape.circle,
-                                                      ),
-                                                ),
-                                            ],
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    if (_isMirrorRequesting &&
-                                        _mode == CastMode.screenMirror)
-                                      const SizedBox(
-                                        width: 24,
-                                        height: 24,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Color(0xFFFFD600),
-                                        ),
-                                      )
-                                    else if (_mirrorTargetIp ==
-                                            device.ipAddress &&
-                                        _mode == CastMode.screenMirror)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 14,
-                                          vertical: 8,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFFFD600),
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                        ),
-                                        child: const Icon(
-                                          Icons.cast_connected_rounded,
-                                          color: Colors.black,
-                                          size: 20,
-                                        ),
-                                      )
-                                    else
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 14,
-                                          vertical: 8,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF2C2C2E),
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: const Color(
-                                                0xFF2C2C2E,
-                                              ).withOpacity(0.2),
-                                              blurRadius: 8,
-                                              offset: const Offset(0, 2),
-                                            ),
-                                          ],
-                                        ),
-                                        child: Icon(
-                                          _mode == CastMode.video
-                                              ? Icons.cast_connected_rounded
-                                              : Icons.screen_share_rounded,
-                                          color: Colors.white,
-                                          size: 20,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
+                          final double angle =
+                              startAngle + (2 * 3.14159 * index / totalCount);
+                          final double offsetX = orbitRadius * cos(angle);
+                          final double offsetY = orbitRadius * sin(angle);
+
+                          return Transform.translate(
+                            offset: Offset(offsetX, offsetY),
+                            child: Transform.scale(
+                              scale: deviceScale,
+                              child: _buildOrbitDeviceNode(device),
                             ),
-                          ),
-                        );
-                      }, childCount: _devices.length),
+                          );
+                        }),
+                        // Status Text below
+                        Positioned(
+                          bottom: 10,
+                          child: _buildDiscoveryStatusLabel(_devices.length),
+                        ),
+                      ],
                     ),
                   ),
+                ),
               ],
             ),
           ),
@@ -2068,6 +1947,232 @@ class _AndroidCastScreenState extends State<AndroidCastScreen>
       ),
     );
   }
+
+  IconData _getDeviceIcon(String name, {String? platform}) {
+    if (platform != null) {
+      final p = platform.toLowerCase();
+      if (p.contains('ios') || p.contains('iphone') || p.contains('ipad')) {
+        return Icons.phone_iphone_rounded;
+      } else if (p.contains('mac')) {
+        return Icons.laptop_mac_rounded;
+      } else if (p.contains('android')) {
+        return Icons.phone_android_rounded;
+      } else if (p.contains('windows') || p.contains('pc')) {
+        return Icons.desktop_windows_rounded;
+      }
+    }
+
+    name = name.toLowerCase();
+    if (name.contains('iphone') ||
+        name.contains('ipad') ||
+        name.contains('ios')) {
+      return Icons.phone_iphone_rounded;
+    } else if (name.contains('mac') || name.contains('apple')) {
+      return Icons.laptop_mac_rounded;
+    } else if (name.contains('windows') ||
+        name.contains('pc') ||
+        name.contains('desktop')) {
+      return Icons.desktop_windows_rounded;
+    } else if (name.contains('android') ||
+        name.contains('phone') ||
+        name.contains('pixel') ||
+        name.contains('samsung')) {
+      return Icons.phone_android_rounded;
+    }
+    return Icons.devices_other_rounded;
+  }
+
+  Widget _buildOrbitDeviceNode(DiscoveredDevice device) {
+    String name = device.deviceName;
+    String? platform = device.platform;
+    String? avatarUrl = device.avatarUrl;
+    String? userName = device.userName;
+
+    String displayName = userName ?? name;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          if (_mode == CastMode.video) {
+            _castToDevice(device);
+          } else {
+            _startScreenMirror(device);
+          }
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  color:
+                      avatarUrl == null
+                          ? const Color(0xFF1C1C1E)
+                          : Colors.transparent,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.15),
+                      blurRadius: 8,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                  border: Border.all(
+                    color:
+                        avatarUrl == null
+                            ? Colors.white.withValues(alpha: 0.15)
+                            : const Color(0xFFFFD600).withValues(alpha: 0.35),
+                    width: 1.5,
+                  ),
+                ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    if (avatarUrl != null)
+                      Builder(
+                        builder: (context) {
+                          bool isUrl =
+                              avatarUrl.startsWith('http') ||
+                              avatarUrl.startsWith('https');
+                          bool isCustomAvatar = CustomAvatarWidget.avatars.any(
+                            (a) => a['id'] == avatarUrl,
+                          );
+
+                          if (isUrl) {
+                            return ClipOval(
+                              child: Image.network(
+                                avatarUrl,
+                                width: 60,
+                                height: 60,
+                                fit: BoxFit.cover,
+                                errorBuilder:
+                                    (c, e, s) => Icon(
+                                      _getDeviceIcon(name, platform: platform),
+                                      color: Colors.white,
+                                      size: 28,
+                                    ),
+                              ),
+                            );
+                          } else if (isCustomAvatar) {
+                            return CustomAvatarWidget(
+                              avatarId: avatarUrl,
+                              size: 60,
+                              useBackground: false,
+                            );
+                          } else {
+                            return Center(
+                              child: DefaultTextStyle(
+                                style: const TextStyle(),
+                                child: Text(
+                                  avatarUrl,
+                                  style: const TextStyle(
+                                    fontSize: 34,
+                                    fontFamilyFallback: [
+                                      'Apple Color Emoji',
+                                      'Segoe UI Emoji',
+                                      'Noto Color Emoji',
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                      )
+                    else
+                      Icon(
+                        _getDeviceIcon(name, platform: platform),
+                        color: Colors.white,
+                        size: 28,
+                      ),
+                    if (_isMirrorRequesting &&
+                        _mirrorTargetIp == device.ipAddress)
+                      const Positioned.fill(
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Color(0xFFFFD600),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                displayName.length > 8
+                    ? '${displayName.substring(0, 8)}...'
+                    : displayName,
+                style: GoogleFonts.outfit(
+                  color: Colors.black87,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDiscoveryStatusLabel(int deviceCount) {
+    String text;
+    IconData icon;
+    bool isLoading = false;
+
+    if (_isScanning && deviceCount == 0) {
+      text = 'Scanning...';
+      icon = Icons.radar_rounded;
+      isLoading = true;
+    } else if (deviceCount > 0) {
+      text = '$deviceCount device${deviceCount > 1 ? 's' : ''} nearby';
+      icon = Icons.check_circle_outline_rounded;
+    } else {
+      text = 'No devices nearby';
+      icon = Icons.device_unknown_rounded;
+    }
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isLoading)
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
+            )
+          else
+            Icon(icon, color: Colors.white, size: 14),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: GoogleFonts.outfit(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
-
-

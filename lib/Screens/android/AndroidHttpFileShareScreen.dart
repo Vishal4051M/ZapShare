@@ -162,10 +162,10 @@ class _AndroidHttpFileShareScreenState
 
   Future<void> _loadAvatar() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
+      final avatar = await CustomAvatarWidget.getEffectiveLocalAvatar();
       if (mounted) {
         setState(() {
-          _customAvatar = prefs.getString('custom_avatar');
+          _customAvatar = avatar;
         });
       }
     } catch (_) {}
@@ -1235,8 +1235,9 @@ class _AndroidHttpFileShareScreenState
     );
     await flutterLocalNotificationsPlugin.show(
       id: 1000 + fileIndex,
-      title: paused ? '⏸ Transfer Paused' : '📤 Sending File',
-      body: '$fileName • $percent% • $speedText${!paused && speedMbps > 0 ? ' • $timeRemaining' : ''}',
+      title: paused ? 'Transfer Paused' : 'Sending File',
+      body:
+          '$fileName • $percent% • $speedText${!paused && speedMbps > 0 ? ' • $timeRemaining' : ''}',
       notificationDetails: platformChannelSpecifics,
       payload: 'progress',
     );
@@ -1332,7 +1333,8 @@ class _AndroidHttpFileShareScreenState
         _rangeBytesSentPerRequest[fileIndex]?.remove(rangeKey);
 
         // Only mark as complete if we've actually sent everything
-        final overallProgress = (_totalBytesSentPerFile[fileIndex]! / fileSize).clamp(0.0, 1.0);
+        final overallProgress = (_totalBytesSentPerFile[fileIndex]! / fileSize)
+            .clamp(0.0, 1.0);
         if (overallProgress >= 0.999) {
           _progressList[fileIndex].value = 1.0;
           _completedFiles[fileIndex] = true;
@@ -2029,7 +2031,9 @@ class _AndroidHttpFileShareScreenState
           try {
             final msg = utf8.decode(chunk).trim();
             if (msg.contains('ACK')) {
-              print('🛰️ [TCP] Received ACK confirmation for file $currentFileIndex');
+              print(
+                '🛰️ [TCP] Received ACK confirmation for file $currentFileIndex',
+              );
               requestProcessed = true;
               break; // Success! Exit loop to cleanup
             }
@@ -2091,13 +2095,17 @@ class _AndroidHttpFileShareScreenState
           waitingForAck = true;
           currentFileIndex = fileIndex;
           buffer.clear(); // Clear used index bytes
-          
+
           // CRITICAL: Set a timeout for the ACK. If the receiver is dead/buggy,
           // we don't want the sender stuck at 99% (waiting for ACK) forever.
           Future.delayed(const Duration(seconds: 10), () {
             if (waitingForAck && _activeTcpClients.contains(client)) {
-               print('⚠️ TCP: ACK Timeout for file $currentFileIndex. Closing connection.');
-               try { client.destroy(); } catch (_) {}
+              print(
+                '⚠️ TCP: ACK Timeout for file $currentFileIndex. Closing connection.',
+              );
+              try {
+                client.destroy();
+              } catch (_) {}
             }
           });
         }
@@ -2106,15 +2114,17 @@ class _AndroidHttpFileShareScreenState
       print('❌ TCP: Error handling client: $e');
     } finally {
       _activeTcpClients.remove(client);
-      
+
       // Ensure socket is closed after processing, ACK, or error
       try {
         await client.flush();
         await client.close();
       } catch (_) {
-        try { client.destroy(); } catch (_) {}
+        try {
+          client.destroy();
+        } catch (_) {}
       }
-      
+
       print('🔌 TCP: Client disconnected: $clientAddress');
       _checkAndAutoStopSharing();
     }
@@ -2209,7 +2219,7 @@ class _AndroidHttpFileShareScreenState
               done = true;
             } else {
               client.add(chunk);
-              
+
               // Ensure we flush and update progress only after data is in flight
               await client.flush();
               bytesSent += chunk.length;
@@ -2282,7 +2292,7 @@ class _AndroidHttpFileShareScreenState
               }
 
               client.add(chunk);
-              
+
               // Flush every chunk for real progress tracking
               await client.flush();
               bytesSent += chunk.length;
@@ -2340,7 +2350,7 @@ class _AndroidHttpFileShareScreenState
 
       // Completion updates — done regardless of 'mounted' status since the state object still exists
       _progressList[fileIndex].value = 1.0;
-      _bytesSentList[fileIndex] = fileSize; 
+      _bytesSentList[fileIndex] = fileSize;
       if (_completedFiles.length > fileIndex) {
         _completedFiles[fileIndex] = true;
       }
@@ -2352,7 +2362,7 @@ class _AndroidHttpFileShareScreenState
         status.isCompleted = true;
         status.completionTime = DateTime.now();
         status.progress = 1.0;
-        status.bytesSent = fileSize; 
+        status.bytesSent = fileSize;
       }
 
       // Record transfer history
@@ -2378,7 +2388,7 @@ class _AndroidHttpFileShareScreenState
       if (_completedFiles.length > fileIndex) {
         _completedFiles[fileIndex] = true;
       }
-      
+
       // Update notification one last time to show 100%
       await showProgressNotification(
         fileIndex,
@@ -2399,7 +2409,6 @@ class _AndroidHttpFileShareScreenState
     }
     // Note: ACK wait handled in _handleTcpClient loop
   }
-
 
   Future<void> _stopServer() async {
     HapticFeedback.mediumImpact();
@@ -2523,25 +2532,25 @@ class _AndroidHttpFileShareScreenState
     // Check if all files have been marked as completed (sent at least once)
     bool allFilesCompleted = true;
     for (int i = 0; i < _fileNames.length; i++) {
-        // Use our global completion tracker which is updated even if client disconnects
-        if (i >= _completedFiles.length || !_completedFiles[i]) {
-            allFilesCompleted = false;
-            break;
-        }
+      // Use our global completion tracker which is updated even if client disconnects
+      if (i >= _completedFiles.length || !_completedFiles[i]) {
+        allFilesCompleted = false;
+        break;
+      }
     }
 
     if (allFilesCompleted) {
-        // Double check no current active TCP clients are still pulling data
-        // and no HTTP ranges are active
-        bool anyActiveRanges = false;
-        _activeRangeRequests.forEach((index, ranges) {
-            if (ranges.isNotEmpty) anyActiveRanges = true;
-        });
+      // Double check no current active TCP clients are still pulling data
+      // and no HTTP ranges are active
+      bool anyActiveRanges = false;
+      _activeRangeRequests.forEach((index, ranges) {
+        if (ranges.isNotEmpty) anyActiveRanges = true;
+      });
 
-        if (!anyActiveRanges && _activeTcpClients.isEmpty) {
-            print('🎯 [AutoStop] All files completed. Stopping sharing server...');
-            _autoStopSharing();
-        }
+      if (!anyActiveRanges && _activeTcpClients.isEmpty) {
+        print('🎯 [AutoStop] All files completed. Stopping sharing server...');
+        _autoStopSharing();
+      }
     }
   }
 
@@ -2553,33 +2562,34 @@ class _AndroidHttpFileShareScreenState
 
     // Clear all individual progress notifications just in case
     for (int i = 0; i < _fileNames.length; i++) {
-        await cancelProgressNotification(i);
+      await cancelProgressNotification(i);
     }
-    
+
     // Show summary notification
     try {
-        final androidSpecifics = const AndroidNotificationDetails(
-            'zapshare_transfer_summary',
-            'Transfer Summary',
-            channelDescription: 'Summary of completed file transfers',
-            importance: Importance.max,
-            priority: Priority.high,
-            icon: 'ic_stat_notify',
-        );
-        final platformSpecifics = NotificationDetails(android: androidSpecifics);
-        
-        // Get the IP of the last active client (fallback to "device")
-        String deviceName = "device";
-        if (_connectedClients.isNotEmpty) {
-            deviceName = _connectedClients.last; // use the last connected client's IP
-        }
-        
-        await flutterLocalNotificationsPlugin.show(
-            id: 9999, // Unique summary ID
-            title: 'ZapShare Transfer Complete',
-            body: 'Successfully sent ${_fileNames.length} file(s) to $deviceName.',
-            notificationDetails: platformSpecifics,
-        );
+      final androidSpecifics = const AndroidNotificationDetails(
+        'zapshare_transfer_summary',
+        'Transfer Summary',
+        channelDescription: 'Summary of completed file transfers',
+        importance: Importance.max,
+        priority: Priority.high,
+        icon: 'ic_stat_notify',
+      );
+      final platformSpecifics = NotificationDetails(android: androidSpecifics);
+
+      // Get the IP of the last active client (fallback to "device")
+      String deviceName = "device";
+      if (_connectedClients.isNotEmpty) {
+        deviceName =
+            _connectedClients.last; // use the last connected client's IP
+      }
+
+      await flutterLocalNotificationsPlugin.show(
+        id: 9999, // Unique summary ID
+        title: 'ZapShare Transfer Complete',
+        body: 'Successfully sent ${_fileNames.length} file(s) to $deviceName.',
+        notificationDetails: platformSpecifics,
+      );
     } catch (_) {}
 
     // Reuse the thorough stop logic
@@ -2591,7 +2601,7 @@ class _AndroidHttpFileShareScreenState
     return uri;
   }
 
-  Future<List<Map<String, String>>> listFilesInFolderSAF(
+  Future<List<Map<String, dynamic>>> listFilesInFolderSAF(
     String folderUri,
   ) async {
     final jsonString = await _channel.invokeMethod<String>(
@@ -2602,7 +2612,11 @@ class _AndroidHttpFileShareScreenState
     final List<dynamic> decoded = jsonDecode(jsonString);
     return decoded
         .cast<Map<String, dynamic>>()
-        .map((e) => {'uri': e['uri'] as String, 'name': e['name'] as String})
+        .map((e) => {
+              'uri': e['uri'] as String,
+              'name': e['name'] as String,
+              'size': e['size'] is int ? e['size'] as int : int.tryParse(e['size'].toString()) ?? 0
+            })
         .toList();
   }
 
@@ -2622,37 +2636,61 @@ class _AndroidHttpFileShareScreenState
     HapticFeedback.mediumImpact();
     final folderUri = await pickFolderSAF();
     if (folderUri != null) {
-      final files = await listFilesInFolderSAF(folderUri);
-      if (files.isNotEmpty) {
-        List<String> uris = [];
-        List<String> names = [];
-        List<int> sizes = [];
-        for (final f in files) {
-          uris.add(f['uri']!);
-          names.add(f['name']!);
-          try {
-            final size = await getFileSizeFromUri(f['uri']!);
-            sizes.add(size);
-          } catch (_) {
-            sizes.add(0);
+      setState(() => _loading = true);
+      // Start foreground service to show a notification during folder processing
+      try {
+        await FlutterForegroundTask.startService(
+          notificationTitle: "ZapShare: Processing Folder",
+          notificationText: "Scanning and reading files...",
+          notificationIcon: const NotificationIcon(
+            metaDataName: 'com.pravera.flutter_foreground_task.notification_icon',
+          ),
+        );
+      } catch (_) {}
+
+      try {
+        final files = await listFilesInFolderSAF(folderUri);
+        if (files.isNotEmpty) {
+          List<String> uris = [];
+          List<String> names = [];
+          List<int> sizes = [];
+          for (final f in files) {
+            final uri = f['uri'];
+            final name = f['name'];
+            final size = f['size'];
+            if (uri != null && name != null) {
+              uris.add(uri.toString());
+              names.add(name.toString());
+              sizes.add(size is int ? size : int.tryParse(size.toString()) ?? 0);
+            }
           }
+          setState(() {
+            // Append to existing lists instead of replacing
+            _fileUris.addAll(uris);
+            _fileNames.addAll(names);
+            _progressList.addAll(
+              List.generate(uris.length, (_) => ValueNotifier(0.0)),
+            );
+            _isPausedList.addAll(
+              List.generate(uris.length, (_) => ValueNotifier(false)),
+            );
+            _bytesSentList.addAll(List.generate(uris.length, (_) => 0));
+            _fileSizeList.addAll(sizes);
+            _completedFiles.addAll(
+              List.generate(uris.length, (_) => false),
+            ); // Initialize completedFiles
+          });
         }
-        setState(() {
-          // Append to existing lists instead of replacing
-          _fileUris.addAll(uris);
-          _fileNames.addAll(names);
-          _progressList.addAll(
-            List.generate(uris.length, (_) => ValueNotifier(0.0)),
-          );
-          _isPausedList.addAll(
-            List.generate(uris.length, (_) => ValueNotifier(false)),
-          );
-          _bytesSentList.addAll(List.generate(uris.length, (_) => 0));
-          _fileSizeList.addAll(sizes);
-          _completedFiles.addAll(
-            List.generate(uris.length, (_) => false),
-          ); // Initialize completedFiles
-        });
+      } catch (e) {
+        // Handle error
+      } finally {
+        setState(() => _loading = false);
+        // Stop foreground service after scanning completes, unless sharing is already running
+        try {
+          if (!_isSharing) {
+            await FlutterForegroundTask.stopService();
+          }
+        } catch (_) {}
       }
     }
   }
@@ -4407,6 +4445,43 @@ class _AndroidHttpFileShareScreenState
     super.dispose();
   }
 
+  Widget _buildLoadingOverlay() {
+    if (!_loading) return const SizedBox.shrink();
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withOpacity(0.7),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFFD600)),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'Loading folder contents...',
+                style: GoogleFonts.outfit(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Scanning files and metadata in background',
+                style: GoogleFonts.outfit(
+                  color: Colors.white70,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Get screen dimensions to force layout consistency during Hero transition
@@ -4423,52 +4498,57 @@ class _AndroidHttpFileShareScreenState
               (begin, end) => SmoothRectTween(begin: begin, end: end),
           child: Material(
             type: MaterialType.transparency,
-            child: Container(
-              width: size.width,
-              height: size.height,
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFFFFD84D), Color(0xFFF5C400)],
-                ),
-              ),
-              child: SafeArea(
-                child: Row(
-                  children: [
-                    // Left side: Pulse and Header
-                    Expanded(
-                      flex: 5,
-                      child: Stack(
-                        children: [
-                          _buildDiscoveryBackground(),
-                          Positioned(
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            child: _buildHeader(),
-                          ),
-                        ],
-                      ),
+            child: Stack(
+              children: [
+                Container(
+                  width: size.width,
+                  height: size.height,
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFFFFD84D), Color(0xFFF5C400)],
                     ),
-                    // Right side: Static Panel (replaces Bottom Sheet)
-                    Expanded(
-                      flex: 4,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black,
-                          border: Border(
-                            left: BorderSide(
-                              color: Colors.white.withOpacity(0.1),
-                            ),
+                  ),
+                  child: SafeArea(
+                    child: Row(
+                      children: [
+                        // Left side: Pulse and Header
+                        Expanded(
+                          flex: 5,
+                          child: Stack(
+                            children: [
+                              _buildDiscoveryBackground(),
+                              Positioned(
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                child: _buildHeader(),
+                              ),
+                            ],
                           ),
                         ),
-                        child: _buildSidePanel(isCompact),
-                      ),
+                        // Right side: Static Panel (replaces Bottom Sheet)
+                        Expanded(
+                          flex: 4,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.black,
+                              border: Border(
+                                left: BorderSide(
+                                  color: Colors.white.withOpacity(0.1),
+                                ),
+                              ),
+                            ),
+                            child: _buildSidePanel(isCompact),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
+                _buildLoadingOverlay(),
+              ],
             ),
           ),
         ),
@@ -4520,6 +4600,9 @@ class _AndroidHttpFileShareScreenState
 
                   // Bottom Sheet
                   _buildBottomSheet(isCompact),
+
+                  // Loading Overlay
+                  _buildLoadingOverlay(),
                 ],
               ),
             ),

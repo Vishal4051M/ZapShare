@@ -39,7 +39,7 @@
 -keep class android.provider.** { *; }
 
 # Keep method channels
--keep class com.example.zap_share.** { *; }
+-keep class app.zapshare.mobile.** { *; }
 
 # Media3 / ExoPlayer — required for native video player bridge
 -keep class androidx.media3.** { *; }

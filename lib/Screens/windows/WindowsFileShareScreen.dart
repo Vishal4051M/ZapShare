@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
@@ -13,8 +14,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/device_discovery_service.dart';
 import '../../widgets/CustomAvatarWidget.dart';
 import '../../widgets/SearchPulseWidget.dart';
-
-
 
 // --- Shared Components ---
 
@@ -108,7 +107,9 @@ class _StatusCapsule extends StatelessWidget {
 }
 
 class WindowsFileShareScreen extends StatefulWidget {
-  const WindowsFileShareScreen({super.key});
+  final List<PlatformFile>? initialFiles;
+
+  const WindowsFileShareScreen({super.key, this.initialFiles});
 
   @override
   State<WindowsFileShareScreen> createState() => _WindowsFileShareScreenState();
@@ -152,10 +153,10 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
   String? _customAvatar;
 
   Future<void> _loadAvatar() async {
-    final prefs = await SharedPreferences.getInstance();
+    final avatar = await CustomAvatarWidget.getEffectiveLocalAvatar();
     if (mounted) {
       setState(() {
-        _customAvatar = prefs.getString('custom_avatar');
+        _customAvatar = avatar;
       });
     }
   }
@@ -168,6 +169,16 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
     _setupDragDrop();
     _initDeviceDiscovery();
     _setupServiceListeners();
+    if (widget.initialFiles != null && widget.initialFiles!.isNotEmpty) {
+      _files = List<PlatformFile>.from(widget.initialFiles!);
+      _progressList = List.generate(_files.length, (_) => 0.0);
+      _isPausedList = List.generate(_files.length, (_) => false);
+      _downloadCounts = List.generate(_files.length, (_) => 0);
+      _isSharing = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _startServer();
+      });
+    }
     _ipCheckTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
       _checkIpChange();
     });
@@ -301,22 +312,16 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
 
     setState(() => _loading = true);
     try {
-      final dir = Directory(folderPath);
-      final files =
-          await dir
-              .list(recursive: true, followLinks: false)
-              .where((e) => e is File)
-              .toList();
-      final newFiles =
-          files
-              .map(
-                (e) => PlatformFile(
-                  name: e.path.split(Platform.pathSeparator).last,
-                  path: e.path,
-                  size: File(e.path).lengthSync(),
-                ),
-              )
-              .toList();
+      final List<Map<String, dynamic>> listedFiles = await compute(_listDirectoryFilesSync, folderPath);
+      final newFiles = listedFiles
+          .map(
+            (f) => PlatformFile(
+              name: f['name'] as String,
+              path: f['path'] as String,
+              size: f['size'] as int,
+            ),
+          )
+          .toList();
 
       setState(() {
         _files.addAll(newFiles);
@@ -669,36 +674,52 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
     );
   }
 
-  void _handleTcpClient(Socket client) {
+  Future<void> _handleTcpClient(Socket client) async {
     final clientAddress = client.remoteAddress.address;
     print('📱 TCP: Client connected from $clientAddress');
 
-    Completer<void>? pendingAck;
     bool requestProcessed = false;
     bool waitingForAck = false;
     int currentFileIndex = -1;
     final buffer = <int>[];
 
-    client.listen(
-      (chunk) async {
+    try {
+      await for (final chunk in client) {
         if (waitingForAck) {
           try {
             final msg = utf8.decode(chunk).trim();
             if (msg.contains('ACK')) {
-              print('🛰️ [TCP] Received ACK confirmation for file $currentFileIndex');
-              pendingAck?.complete();
-              waitingForAck = false;
+              print(
+                '🛰️ [TCP] Received ACK confirmation for file $currentFileIndex',
+              );
+              if (mounted) {
+                setState(() {
+                  if (currentFileIndex < _downloadCounts.length) {
+                    _downloadCounts[currentFileIndex]++;
+                  }
+                });
+
+                final count = _downloadCounts[currentFileIndex];
+                _showStatus(
+                  message: "$count client${count == 1 ? '' : 's'} sent",
+                  subtitle: "${_files[currentFileIndex].name} completed",
+                  icon: Icons.check_circle_rounded,
+                  isSuccess: true,
+                  autoDismiss: const Duration(seconds: 5),
+                );
+              }
               requestProcessed = true;
+              break; // Success, break out to close the socket
             }
           } catch (_) {}
-          return;
+          continue;
         }
 
-        if (requestProcessed) return;
+        if (requestProcessed) break;
         buffer.addAll(chunk);
-        if (buffer.isEmpty) return;
+        if (buffer.isEmpty) continue;
 
-        // Check if it's a line-based text command (starts with ASCII chars, e.g. 'L' for LIST, 'G' for GET, 'A' for ACK)
+        // Check if it's a line-based text command
         if (buffer[0] >= 32 && buffer[0] < 127) {
           if (buffer.contains(10)) {
             final lineBytes = buffer.takeWhile((b) => b != 10).toList();
@@ -707,12 +728,6 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
 
             final line = utf8.decode(lineBytes).trim();
             print('📥 TCP Line: Received command: $line');
-
-            if (line == 'ACK') {
-              print('✅ Received ACK');
-              pendingAck?.complete();
-              return;
-            }
 
             if (line == 'LIST') {
               final list = List.generate(
@@ -727,6 +742,7 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
               client.writeln(jsonEncode(list));
               await client.flush();
               requestProcessed = true;
+              break;
             } else if (line.startsWith('GET ')) {
               final indexStr = line.substring(4);
               final index = int.tryParse(indexStr);
@@ -738,99 +754,30 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
                 client.writeln(fileSize.toString());
                 await client.flush();
 
-                int bytesSent = 0;
-                DateTime lastUpdate = DateTime.now();
-
-                pendingAck = Completer<void>();
-                waitingForAck = true;
                 currentFileIndex = index;
+                waitingForAck = true;
 
                 // Setup ACK Timeout
                 Future.delayed(const Duration(seconds: 15), () {
                   if (waitingForAck) {
-                    print('⚠️ TCP: ACK Timeout for file $currentFileIndex. Closing connection.');
-                    try { client.destroy(); } catch (_) {}
+                    print(
+                      '⚠️ TCP: ACK Timeout for file $currentFileIndex. Closing connection.',
+                    );
+                    try {
+                      client.destroy();
+                    } catch (_) {}
                   }
                 });
 
-                RandomAccessFile? raf;
-                try {
-                  raf = await fsFile.open();
-                  const int chunkSize = 1024 * 1024; // 1MB chunks
-
-                  while (bytesSent < fileSize && _isSharing) {
-                    final chunk = await raf.read(chunkSize);
-                    if (chunk.isEmpty) break;
-
-                    client.add(chunk);
-                    bytesSent += chunk.length;
-
-                    if (bytesSent % (2 * 1024 * 1024) == 0) {
-                      await client.flush();
-                    }
-
-                    final now = DateTime.now();
-                    if (now.difference(lastUpdate).inMilliseconds > 50) {
-                      lastUpdate = now;
-                      if (mounted) {
-                        setState(() {
-                          if (index < _progressList.length) {
-                            _progressList[index] = bytesSent / fileSize;
-                          }
-                        });
-                      }
-                    }
-                  }
-
-                  if (mounted) {
-                    setState(() {
-                      if (index < _progressList.length) {
-                        _progressList[index] = 1.0;
-                      }
-                    });
-                  }
-
-                  print('⏳ Waiting for ACK...');
-                  try {
-                    await pendingAck!.future.timeout(
-                      const Duration(seconds: 15),
-                      onTimeout: () => print('⚠️ ACK timed out'),
-                    );
-
-                    if (mounted) {
-                      setState(() {
-                        if (index < _downloadCounts.length) {
-                          _downloadCounts[index]++;
-                        }
-                      });
-
-                      final count = _downloadCounts[index];
-                      _showStatus(
-                        message: "$count client${count == 1 ? '' : 's'} sent",
-                        subtitle: "${_files[index].name} completed",
-                        icon: Icons.check_circle_rounded,
-                        isSuccess: true,
-                        autoDismiss: const Duration(seconds: 5),
-                      );
-                    }
-                  } catch (e) {
-                    print('Error waiting for ACK: $e');
-                  }
-                } catch (e) {
-                  print("Error sending file: $e");
-                } finally {
-                  await raf?.close();
-                  try {
-                    await client.flush();
-                    await client.close();
-                  } catch (_) {
-                    try { client.destroy(); } catch (_) {}
-                  }
-                }
+                await _sendFileDataHelper(client, fsFile, fileSize, index);
+                buffer.clear();
+              } else {
+                print('❌ TCP Text: Invalid index: $indexStr');
+                break;
               }
             }
           }
-          return;
+          continue;
         }
 
         // Binary Protocol: starts with 4-byte big-endian file index
@@ -846,130 +793,114 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
 
           if (index < 0 || index >= _files.length) {
             print('❌ TCP Binary: Invalid file index: $index');
-            try { client.destroy(); } catch (_) {}
-            return;
+            break;
           }
 
           final file = _files[index];
           final fsFile = File(file.path!);
           final fileSize = file.size;
 
-          pendingAck = Completer<void>();
-          waitingForAck = true;
           currentFileIndex = index;
+          waitingForAck = true;
 
           // Setup ACK Timeout
           Future.delayed(const Duration(seconds: 15), () {
             if (waitingForAck) {
-              print('⚠️ TCP: ACK Timeout for binary file $currentFileIndex. Closing connection.');
-              try { client.destroy(); } catch (_) {}
+              print(
+                '⚠️ TCP: ACK Timeout for binary file $currentFileIndex. Closing connection.',
+              );
+              try {
+                client.destroy();
+              } catch (_) {}
             }
           });
 
-          RandomAccessFile? raf;
-          try {
-            final metadata = jsonEncode({
-              'fileName': file.name,
-              'fileSize': fileSize,
-              'fileIndex': index,
+          // Send metadata
+          final metadata = jsonEncode({
+            'fileName': file.name,
+            'fileSize': fileSize,
+            'fileIndex': index,
+          });
+          final metadataBytes = utf8.encode(metadata);
+          final metadataLength = metadataBytes.length;
+
+          client.add([
+            (metadataLength >> 24) & 0xFF,
+            (metadataLength >> 16) & 0xFF,
+            (metadataLength >> 8) & 0xFF,
+            metadataLength & 0xFF,
+          ]);
+          client.add(metadataBytes);
+          await client.flush();
+
+          await _sendFileDataHelper(client, fsFile, fileSize, index);
+          buffer.clear();
+        }
+      }
+    } catch (e) {
+      print('❌ TCP: Error handling client: $e');
+    } finally {
+      try {
+        await client.flush();
+        await client.close();
+      } catch (_) {
+        try {
+          client.destroy();
+        } catch (_) {}
+      }
+      print('🔌 TCP client disconnected: $clientAddress');
+    }
+  }
+
+  Future<void> _sendFileDataHelper(
+    Socket client,
+    File fsFile,
+    int fileSize,
+    int index,
+  ) async {
+    RandomAccessFile? raf;
+    try {
+      raf = await fsFile.open();
+      const int chunkSize = 1024 * 1024; // 1MB chunks
+      int bytesSent = 0;
+      DateTime lastUpdate = DateTime.now();
+
+      while (bytesSent < fileSize && _isSharing) {
+        final chunk = await raf.read(chunkSize);
+        if (chunk.isEmpty) break;
+
+        client.add(chunk);
+        bytesSent += chunk.length;
+
+        if (bytesSent % (2 * 1024 * 1024) == 0) {
+          await client.flush();
+        }
+
+        final now = DateTime.now();
+        if (now.difference(lastUpdate).inMilliseconds > 50) {
+          lastUpdate = now;
+          if (mounted) {
+            setState(() {
+              if (index < _progressList.length) {
+                _progressList[index] = bytesSent / fileSize;
+              }
             });
-            final metadataBytes = utf8.encode(metadata);
-            final metadataLength = metadataBytes.length;
-
-            client.add([
-              (metadataLength >> 24) & 0xFF,
-              (metadataLength >> 16) & 0xFF,
-              (metadataLength >> 8) & 0xFF,
-              metadataLength & 0xFF,
-            ]);
-            client.add(metadataBytes);
-            await client.flush();
-
-            raf = await fsFile.open();
-            const int chunkSize = 1024 * 1024;
-            int bytesSent = 0;
-            DateTime lastUpdate = DateTime.now();
-
-            while (bytesSent < fileSize && _isSharing) {
-              final chunk = await raf.read(chunkSize);
-              if (chunk.isEmpty) break;
-
-              client.add(chunk);
-              bytesSent += chunk.length;
-
-              if (bytesSent % (2 * 1024 * 1024) == 0) {
-                await client.flush();
-              }
-
-              final now = DateTime.now();
-              if (now.difference(lastUpdate).inMilliseconds > 50) {
-                lastUpdate = now;
-                if (mounted) {
-                  setState(() {
-                    if (index < _progressList.length) {
-                      _progressList[index] = bytesSent / fileSize;
-                    }
-                  });
-                }
-              }
-            }
-
-            if (mounted) {
-              setState(() {
-                if (index < _progressList.length) {
-                  _progressList[index] = 1.0;
-                }
-              });
-            }
-
-            print('⏳ Waiting for ACK...');
-            try {
-              await pendingAck!.future.timeout(
-                const Duration(seconds: 15),
-                onTimeout: () => print('⚠️ ACK timed out'),
-              );
-
-              if (mounted) {
-                setState(() {
-                  if (index < _downloadCounts.length) {
-                    _downloadCounts[index]++;
-                  }
-                });
-
-                final count = _downloadCounts[index];
-                _showStatus(
-                  message: "$count client${count == 1 ? '' : 's'} sent",
-                  subtitle: "${_files[index].name} completed",
-                  icon: Icons.check_circle_rounded,
-                  isSuccess: true,
-                  autoDismiss: const Duration(seconds: 5),
-                );
-              }
-            } catch (e) {
-              print('Error waiting for ACK: $e');
-            }
-          } catch (e) {
-            print("Error sending file: $e");
-          } finally {
-            await raf?.close();
-            try {
-              await client.flush();
-              await client.close();
-            } catch (_) {
-              try { client.destroy(); } catch (_) {}
-            }
           }
         }
-      },
-      onError: (e) {
-        print('❌ TCP socket error: $e');
-        try { client.destroy(); } catch (_) {}
-      },
-      onDone: () {
-        print('🔌 TCP client disconnected: $clientAddress');
-      },
-      cancelOnError: false,
-    );
+      }
+
+      if (mounted) {
+        setState(() {
+          if (index < _progressList.length) {
+            _progressList[index] = 1.0;
+          }
+        });
+      }
+    } catch (e) {
+      print("Error sending file data: $e");
+    } finally {
+      await raf?.close();
+    }
   }
 
   void _initDeviceDiscovery() async {
@@ -1179,50 +1110,53 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
   Widget build(BuildContext context) {
     final displayCode = _localIp != null ? _ipToCode(_localIp!) : "...";
 
-    return Hero(
-      tag: 'send_card_container',
-      createRectTween: (begin, end) {
-        return MaterialRectCenterArcTween(begin: begin, end: end);
-      },
-      child: Scaffold(
-        backgroundColor: Colors.black, // Base color
-        resizeToAvoidBottomInset: false, // Prevent resize issues
-        body: Container(
-          width: double.infinity,
-          height: double.infinity,
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Color(0xFFFFD84D),
-                Color(0xFFF5C400),
-              ], // Android Yellow Gradient
+    return Scaffold(
+      backgroundColor: Colors.black, // Base color
+      resizeToAvoidBottomInset: false, // Prevent resize issues
+      body: Hero(
+        tag: 'send_card_container',
+        createRectTween: (begin, end) {
+          return MaterialRectCenterArcTween(begin: begin, end: end);
+        },
+        child: Material(
+          type: MaterialType.transparency,
+          child: Container(
+            width: double.infinity,
+            height: double.infinity,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFFFFD84D),
+                  Color(0xFFF5C400),
+                ],
+              ),
             ),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch, // FILL HEIGHT
-            children: [
-              // LEFT PANEL: Devices & Connection (Radar View)
-              Expanded(flex: 5, child: _buildRadarPanel(displayCode)),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch, // FILL HEIGHT
+              children: [
+                // LEFT PANEL: Devices & Connection (Radar View)
+                Expanded(flex: 5, child: _buildRadarPanel(displayCode)),
 
-              // RIGHT PANEL: Files (Black Panel)
-              Expanded(
-                flex: 4,
-                child: Container(
-                  height: double.infinity,
-                  decoration: BoxDecoration(
-                    color: Colors.black,
-                    border: Border(
-                      left: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.1),
+                // RIGHT PANEL: Files (Black Panel)
+                Expanded(
+                  flex: 4,
+                  child: Container(
+                    height: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      border: Border(
+                        left: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.1),
+                        ),
                       ),
                     ),
+                    child: SafeArea(child: _buildFilesPanel()),
                   ),
-                  child: SafeArea(child: _buildFilesPanel()),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1240,11 +1174,7 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
 
         final Widget content = Stack(
           children: [
-            Positioned.fill(
-              child: SearchPulseWidget(
-                color: Colors.white,
-              ),
-            ),
+            Positioned.fill(child: SearchPulseWidget(color: Colors.white)),
 
             // Back Button (Top-Left)
             Positioned(
@@ -1432,7 +1362,7 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
                     decoration: BoxDecoration(
                       color: Colors.black,
                       shape: BoxShape.circle,
-                      boxShadow: [
+                      boxShadow: const [
                         BoxShadow(
                           color: Colors.black26,
                           blurRadius: 20,
@@ -1441,17 +1371,18 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
                       ],
                       border: Border.all(color: Colors.white, width: 2),
                     ),
-                    child: _customAvatar != null
-                        ? CustomAvatarWidget(
-                            avatarId: _customAvatar,
-                            size: 80,
-                            useBackground: true,
-                          )
-                        : Icon(
-                            Icons.desktop_windows_rounded,
-                            color: const Color(0xFFFFD600),
-                            size: 40,
-                          ),
+                    child:
+                        _customAvatar != null
+                            ? CustomAvatarWidget(
+                              avatarId: _customAvatar,
+                              size: 80,
+                              useBackground: true,
+                            )
+                            : const Icon(
+                              Icons.desktop_windows_rounded,
+                              color: Color(0xFFFFD600),
+                              size: 40,
+                            ),
                   ),
                   const SizedBox(height: 12),
                   ShimmerLoading(
@@ -1461,7 +1392,7 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
                         color: Colors.black,
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        shadows: [
+                        shadows: const [
                           Shadow(color: Colors.white30, blurRadius: 10),
                         ],
                       ),
@@ -1472,7 +1403,10 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
             ),
 
             // 4. Orbiting Devices
-            ..._buildOrbitingDevices(),
+            ..._buildOrbitingDevices(
+              constraints.maxWidth,
+              constraints.maxHeight,
+            ),
 
             // Status Capsule (moved to bottom center of this panel)
             if (_statusMessage != null)
@@ -1506,20 +1440,55 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
     );
   }
 
-  List<Widget> _buildOrbitingDevices() {
+  String _getDeviceEmoji(String name, {String? platform}) {
+    if (platform != null) {
+      final p = platform.toLowerCase();
+      if (p.contains('ios') || p.contains('iphone') || p.contains('ipad')) {
+        return '📱';
+      } else if (p.contains('mac')) {
+        return '💻';
+      } else if (p.contains('android')) {
+        return '🤖';
+      } else if (p.contains('windows') || p.contains('pc')) {
+        return '💻';
+      }
+    }
+
+    name = name.toLowerCase();
+    if (name.contains('iphone') ||
+        name.contains('ipad') ||
+        name.contains('ios')) {
+      return '📱';
+    } else if (name.contains('mac') || name.contains('apple')) {
+      return '💻';
+    } else if (name.contains('windows') ||
+        name.contains('pc') ||
+        name.contains('desktop')) {
+      return '💻';
+    } else if (name.contains('android') ||
+        name.contains('phone') ||
+        name.contains('pixel') ||
+        name.contains('samsung')) {
+      return '🤖';
+    }
+    return '🔌';
+  }
+
+  List<Widget> _buildOrbitingDevices(double width, double height) {
     final devices = _nearbyDevices; // Already filtered for online
     final widgets = <Widget>[];
 
     if (devices.isEmpty) return widgets;
 
-    // Center offset downwards to avoid collision with top code capsule
-    final double verticalOffset = 50.0;
-    final double orbitRadius = 240.0; // Increased radius
+    // Calculate orbit radius dynamically based on layout height and width to avoid overlaps
+    final double maxOrbit = min(width, height - 180) * 0.42;
+    final double orbitRadius = maxOrbit.clamp(100.0, 180.0);
+    final double verticalOffset =
+        30.0; // Slightly pushed down to avoid top header
     final int count = devices.length;
 
     for (int i = 0; i < count; i++) {
       final device = devices[i];
-      // Angle: Start from top (-pi/2) and distribute evenly
       final double angle = (-pi / 2) + (2 * pi * i / count);
 
       widgets.add(
@@ -1527,8 +1496,7 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
           child: Transform.translate(
             offset: Offset(
               orbitRadius * cos(angle),
-              (orbitRadius * sin(angle)) +
-                  verticalOffset, // Add vertical offset here
+              (orbitRadius * sin(angle)) + verticalOffset,
             ),
             child: _buildDeviceNode(device),
           ),
@@ -1540,6 +1508,90 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
 
   Widget _buildDeviceNode(DiscoveredDevice device) {
     String displayName = device.userName ?? device.deviceName;
+    String name = device.deviceName;
+    String? platform = device.platform;
+    String? avatarUrl = device.avatarUrl;
+
+    Widget centerWidget;
+    if (avatarUrl != null) {
+      bool isUrl =
+          avatarUrl.startsWith('http') || avatarUrl.startsWith('https');
+      bool isCustom = CustomAvatarWidget.avatars.any(
+        (a) => a['id'] == avatarUrl,
+      );
+
+      if (isUrl) {
+        centerWidget = ClipOval(
+          child: Image.network(
+            avatarUrl,
+            width: 60,
+            height: 60,
+            fit: BoxFit.cover,
+            errorBuilder:
+                (c, e, s) => Center(
+                  child: DefaultTextStyle(
+                    style: const TextStyle(),
+                    child: Text(
+                      _getDeviceEmoji(name, platform: platform),
+                      style: const TextStyle(
+                        fontSize: 32,
+                        fontFamily: 'Segoe UI Emoji',
+                        fontFamilyFallback: [
+                          'Apple Color Emoji',
+                          'Segoe UI Emoji',
+                          'Noto Color Emoji',
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+          ),
+        );
+      } else if (isCustom) {
+        centerWidget = CustomAvatarWidget(
+          avatarId: avatarUrl,
+          size: 60,
+          useBackground: true,
+        );
+      } else {
+        // Fallback to text (e.g. raw emoji)
+        centerWidget = Center(
+          child: DefaultTextStyle(
+            style: const TextStyle(),
+            child: Text(
+              avatarUrl,
+              style: const TextStyle(
+                fontSize: 32,
+                fontFamily: 'Segoe UI Emoji',
+                fontFamilyFallback: [
+                  'Apple Color Emoji',
+                  'Segoe UI Emoji',
+                  'Noto Color Emoji',
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+    } else {
+      centerWidget = Center(
+        child: DefaultTextStyle(
+          style: const TextStyle(),
+          child: Text(
+            _getDeviceEmoji(name, platform: platform),
+            style: const TextStyle(
+              fontSize: 32,
+              fontFamily: 'Segoe UI Emoji',
+              fontFamilyFallback: [
+                'Apple Color Emoji',
+                'Segoe UI Emoji',
+                'Noto Color Emoji',
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return GestureDetector(
       onTap: () => _sendConnectionRequest(device),
@@ -1553,7 +1605,7 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
               color: const Color(0xFF1C1C1E),
               shape: BoxShape.circle,
               border: Border.all(color: Colors.white, width: 2),
-              boxShadow: [
+              boxShadow: const [
                 BoxShadow(
                   color: Colors.black26,
                   blurRadius: 10,
@@ -1561,65 +1613,13 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
                 ),
               ],
             ),
-            child:
-                device.avatarUrl != null
-                    ? Builder(
-                      builder: (context) {
-                        final avatarUrl = device.avatarUrl!;
-                        bool isUrl =
-                            avatarUrl.startsWith('http') ||
-                            avatarUrl.startsWith('https');
-                        // Check for Custom Avatar ID
-                        bool isCustom = CustomAvatarWidget.avatars.any(
-                          (a) => a['id'] == avatarUrl,
-                        );
-
-                        if (isUrl) {
-                          return ClipOval(
-                            child: Image.network(
-                              avatarUrl,
-                              width: 60,
-                              height: 60,
-                              fit: BoxFit.cover,
-                              errorBuilder:
-                                  (c, e, s) => Icon(
-                                    _getPlatformIcon(device.platform),
-                                    color: Colors.white,
-                                    size: 28,
-                                  ),
-                            ),
-                          );
-                        } else if (isCustom) {
-                          return CustomAvatarWidget(
-                            avatarId: avatarUrl,
-                            size: 60,
-                            useBackground: true,
-                          );
-                        }
-                        // Fallback to text (e.g. raw emoji)
-                        return Center(
-                          child: Text(
-                            avatarUrl,
-                            style: const TextStyle(
-                              fontSize: 28,
-                              color: Colors.white,
-                              fontFamily: 'Segoe UI Emoji',
-                            ),
-                          ),
-                        );
-                      },
-                    )
-                    : Icon(
-                      _getPlatformIcon(device.platform),
-                      color: Colors.white,
-                      size: 28,
-                    ),
+            child: centerWidget,
           ),
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.6),
+              color: Colors.black.withOpacity(0.6),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
@@ -2187,7 +2187,11 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
         children: [
           Row(
             children: [
-              const Icon(Icons.shield_outlined, color: Colors.redAccent, size: 20),
+              const Icon(
+                Icons.shield_outlined,
+                color: Colors.redAccent,
+                size: 20,
+              ),
               const SizedBox(width: 8),
               Text(
                 'Windows Firewall & Permissions',
@@ -2212,13 +2216,18 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
                 backgroundColor: const Color(0xFFFFD600),
                 foregroundColor: Colors.black,
                 padding: const EdgeInsets.symmetric(vertical: 8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
               onPressed: _fixFirewall,
               icon: const Icon(Icons.security_rounded, size: 16),
               label: Text(
                 'Auto-Configure Firewall',
-                style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 12),
+                style: GoogleFonts.outfit(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
               ),
             ),
           ),
@@ -2234,8 +2243,8 @@ class _WindowsFileShareScreenState extends State<WindowsFileShareScreen> {
       final result = await Process.run('powershell', [
         '-Command',
         'Start-Process netsh -ArgumentList "advfirewall firewall add rule name=\\"ZapShare\\" dir=in action=allow program=\\"$exePath\\" enable=yes" -Verb RunAs; '
-        'Start-Process netsh -ArgumentList "advfirewall firewall add rule name=\\"ZapShare_Ports_UDP\\" dir=in action=allow protocol=UDP localport=37020 enable=yes" -Verb RunAs; '
-        'Start-Process netsh -ArgumentList "advfirewall firewall add rule name=\\"ZapShare_Ports_TCP\\" dir=in action=allow protocol=TCP localport=8080,50005,50006 enable=yes" -Verb RunAs;'
+            'Start-Process netsh -ArgumentList "advfirewall firewall add rule name=\\"ZapShare_Ports_UDP\\" dir=in action=allow protocol=UDP localport=37020 enable=yes" -Verb RunAs; '
+            'Start-Process netsh -ArgumentList "advfirewall firewall add rule name=\\"ZapShare_Ports_TCP\\" dir=in action=allow protocol=TCP localport=8080,50005,50006 enable=yes" -Verb RunAs;',
       ]);
       if (result.exitCode == 0) {
         _showStatus(
@@ -2327,4 +2336,41 @@ class _SlidingGradientTransform extends GradientTransform {
   Matrix4? transform(Rect bounds, {TextDirection? textDirection}) {
     return Matrix4.translationValues(bounds.width * percent, 0.0, 0.0);
   }
+}
+
+List<Map<String, dynamic>> _listDirectoryFilesSync(String dirPath) {
+  final dir = Directory(dirPath);
+  final List<Map<String, dynamic>> results = [];
+  if (!dir.existsSync()) return results;
+
+  void traverse(Directory currentDir) {
+    try {
+      final entities = currentDir.listSync(recursive: false, followLinks: false);
+      for (final entity in entities) {
+        final name = entity.path.split(Platform.pathSeparator).last;
+        if (name.startsWith('.')) {
+          continue;
+        }
+        if (entity is Directory) {
+          traverse(entity);
+        } else if (entity is File) {
+          try {
+            final size = entity.lengthSync();
+            results.add({
+              'path': entity.path,
+              'name': name,
+              'size': size,
+            });
+          } catch (_) {
+            // Skip files that can't be read or sized
+          }
+        }
+      }
+    } catch (_) {
+      // Skip directories we don't have access to
+    }
+  }
+
+  traverse(dir);
+  return results;
 }

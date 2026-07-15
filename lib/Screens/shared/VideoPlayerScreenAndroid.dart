@@ -65,6 +65,7 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
   bool _isCompleted = false;
   double _playbackSpeed = 1.0;
   bool _showSpeedMenu = false;
+  bool _isInitializing = true;
 
   // Subtitle state
   bool _subtitlesEnabled = false;
@@ -120,6 +121,7 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
   static const _maxRetries = 3;
   // Android TV codec fallback chain: mediacodec-copy → mediacodec → no
   int _hwdecAttempt = 0; // 0=mediacodec-copy, 1=mediacodec, 2=no
+  String _audioOutput = 'default';
 
   // Keyboard focus
   final FocusNode _keyboardFocusNode = FocusNode();
@@ -223,6 +225,9 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     });
     _player.stream.position.listen((pos) {
       if (!mounted) return;
+      if (_isInitializing && pos > Duration.zero) {
+        setState(() => _isInitializing = false);
+      }
       _position = pos;
       // ── CRITICAL THROTTLE ──
       // Video frames render on a native texture completely independent of
@@ -401,7 +406,8 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
           _sendStatusNow(discoveryService, controllerIp);
           break;
         case 'setAudioTrack':
-          if (control.trackIndex != null && control.trackIndex! < _audioTracks.length) {
+          if (control.trackIndex != null &&
+              control.trackIndex! < _audioTracks.length) {
             _player.setAudioTrack(_audioTracks[control.trackIndex!]);
           }
           break;
@@ -411,6 +417,19 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
               _player.setSubtitleTrack(SubtitleTrack.no());
             } else if (control.trackIndex! < _subtitleTracks.length) {
               _player.setSubtitleTrack(_subtitleTracks[control.trackIndex!]);
+            }
+          }
+          break;
+        case 'setAudioOutput':
+          if (control.propertyValue != null) {
+            final val = control.propertyValue.toString();
+            setState(() {
+              _audioOutput = val;
+            });
+            if (val == 'remote') {
+              _player.setVolume(0);
+            } else {
+              _player.setVolume(_volume * 100);
             }
           }
           break;
@@ -434,26 +453,33 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     String controllerIp,
   ) {
     // Build audio track labels
-    final audioLabels = _audioTracks.map((t) {
-      return t.title ?? t.language ?? 'Track ${t.id}';
-    }).toList();
+    final audioLabels =
+        _audioTracks.map((t) {
+          return t.title ?? t.language ?? 'Track ${t.id}';
+        }).toList();
 
     // Build subtitle track labels
-    final subtitleLabels = _subtitleTracks
-        .where((t) => t.id != 'auto' && t.id != 'no')
-        .map((t) => t.title ?? t.language ?? 'Track ${t.id}')
-        .toList();
+    final subtitleLabels =
+        _subtitleTracks
+            .where((t) => t.id != 'auto' && t.id != 'no')
+            .map((t) => t.title ?? t.language ?? 'Track ${t.id}')
+            .toList();
 
     // Find active indices
     int? activeAudioIdx;
     if (_activeAudioTrack != null) {
-      activeAudioIdx = _audioTracks.indexWhere((t) => t.id == _activeAudioTrack!.id);
+      activeAudioIdx = _audioTracks.indexWhere(
+        (t) => t.id == _activeAudioTrack!.id,
+      );
       if (activeAudioIdx < 0) activeAudioIdx = null;
     }
     int? activeSubIdx;
     if (_subtitlesEnabled && _activeSubtitleTrack != null) {
-      final realSubs = _subtitleTracks.where((t) => t.id != 'auto' && t.id != 'no').toList();
-      activeSubIdx = realSubs.indexWhere((t) => t.id == _activeSubtitleTrack!.id);
+      final realSubs =
+          _subtitleTracks.where((t) => t.id != 'auto' && t.id != 'no').toList();
+      activeSubIdx = realSubs.indexWhere(
+        (t) => t.id == _activeSubtitleTrack!.id,
+      );
       if (activeSubIdx < 0) activeSubIdx = null;
     }
 
@@ -469,8 +495,10 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
       audioTracks: audioLabels.isNotEmpty ? audioLabels : null,
       subtitleTracks: subtitleLabels.isNotEmpty ? subtitleLabels : null,
       activeAudioTrack: activeAudioIdx,
-      activeAudioTrackLabel: _activeAudioTrack?.title ?? _activeAudioTrack?.language,
+      activeAudioTrackLabel:
+          _activeAudioTrack?.title ?? _activeAudioTrack?.language,
       activeSubtitleTrack: activeSubIdx,
+      audioOutput: _audioOutput,
     );
   }
 
@@ -631,6 +659,12 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
         _errorMessage = null;
         _retryCount = 0;
       });
+      // Fallback timer to dismiss initializing screen after 4 seconds if no position update is received
+      Timer(const Duration(seconds: 4), () {
+        if (mounted && _isInitializing) {
+          setState(() => _isInitializing = false);
+        }
+      });
     } catch (e) {
       debugPrint('Failed to open media: $e');
       _addLog('ERROR', 'Failed to open: $e', _LogLevel.error);
@@ -687,6 +721,24 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
     _actionIndicatorTimer?.cancel();
     _swipeOverlayTimer?.cancel();
     _keyboardFocusNode.dispose();
+
+    // Notify cast controller that receiver is disconnecting
+    if (widget.castControllerIp != null) {
+      try {
+        DeviceDiscoveryService().sendCastStatus(
+          widget.castControllerIp!,
+          position: _position.inMilliseconds / 1000.0,
+          duration: _duration.inMilliseconds / 1000.0,
+          buffered: _buffered.inMilliseconds / 1000.0,
+          isPlaying: false,
+          isBuffering: false,
+          volume: _volume,
+          fileName: widget.title,
+          active: false,
+        );
+      } catch (_) {}
+    }
+
     _player.dispose();
     // Reset brightness to system default on exit
     try {
@@ -2091,6 +2143,34 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                 ),
               ),
 
+            // ── Initializing overlay ──
+            if (_isInitializing)
+              Positioned.fill(
+                child: Container(
+                  color: Colors.black,
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(
+                          color: _accentColor,
+                          strokeWidth: 3,
+                        ),
+                        const SizedBox(height: 20),
+                        Text(
+                          'Initializing Player...',
+                          style: GoogleFonts.outfit(
+                            color: Colors.white70,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
             // ── VLC-like swipe volume overlay (left side) ──
             if (_showSwipeVolumeOverlay) _buildSwipeVolumeOverlay(),
 
@@ -2498,16 +2578,28 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
               const SizedBox(width: 36),
               // Play / Pause
               _buildCircleButton(
-                icon:
-                    _isCompleted
-                        ? Icons.replay_rounded
-                        : (_isPlaying
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded),
                 size: 72,
-                iconSize: 44,
                 filled: true,
                 onTap: _togglePlayPause,
+                child:
+                    _duration == Duration.zero
+                        ? const SizedBox(
+                          width: 32,
+                          height: 32,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3,
+                            color: Colors.black,
+                          ),
+                        )
+                        : Icon(
+                          _isCompleted
+                              ? Icons.replay_rounded
+                              : (_isPlaying
+                                  ? Icons.pause_rounded
+                                  : Icons.play_arrow_rounded),
+                          color: Colors.black,
+                          size: 44,
+                        ),
               ),
               const SizedBox(width: 36),
               // Forward 10s
@@ -3402,11 +3494,12 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
   // ─── Reusable widgets ────────────────────────────────────
 
   Widget _buildCircleButton({
-    required IconData icon,
+    IconData? icon,
     required double size,
-    required double iconSize,
+    double? iconSize,
     required VoidCallback onTap,
     bool filled = false,
+    Widget? child,
   }) {
     return GestureDetector(
       onTap: onTap,
@@ -3424,10 +3517,16 @@ class _VideoPlayerScreenAndroidState extends State<VideoPlayerScreenAndroid>
                     width: 1.5,
                   ),
         ),
-        child: Icon(
-          icon,
-          color: filled ? Colors.black : Colors.white,
-          size: iconSize,
+        child: Center(
+          child:
+              child ??
+              (icon != null
+                  ? Icon(
+                    icon,
+                    color: filled ? Colors.black : Colors.white,
+                    size: iconSize ?? 24,
+                  )
+                  : const SizedBox.shrink()),
         ),
       ),
     );

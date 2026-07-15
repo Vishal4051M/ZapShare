@@ -1,8 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:zap_share/services/supabase_service.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:zap_share/services/firebase_service.dart';
 import 'package:zap_share/widgets/CustomAvatarWidget.dart';
 
 class AvatarPickerScreen extends StatefulWidget {
@@ -34,23 +37,90 @@ class _AvatarPickerScreenState extends State<AvatarPickerScreen>
     super.dispose();
   }
 
+  Future<void> _pickCustomImage() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+      );
+      if (result != null && result.files.single.path != null) {
+        final path = result.files.single.path!;
+        final appDir = await getApplicationDocumentsDirectory();
+        final fileName = 'custom_avatar_${DateTime.now().millisecondsSinceEpoch}.png';
+        final newFile = await File(path).copy('${appDir.path}/$fileName');
+        
+        setState(() {
+          _selectedAvatar = newFile.path;
+        });
+        
+        HapticFeedback.mediumImpact();
+      }
+    } catch (e) {
+      print("Error picking custom avatar: $e");
+    }
+  }
+
   Future<void> _saveAvatar() async {
     if (_selectedAvatar == null) return;
 
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('custom_avatar', _selectedAvatar!);
+    BuildContext? dialogContext;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        dialogContext = ctx;
+        return const Center(
+          child: CircularProgressIndicator(
+            color: Color(0xFFFFD600),
+          ),
+        );
+      },
+    );
 
-      final user = SupabaseService().currentUser;
+    try {
+      String finalAvatar = _selectedAvatar!;
+      final prefs = await SharedPreferences.getInstance();
+
+      final user = FirebaseService().currentUser;
       if (user != null) {
-        await SupabaseService().updateUserProfile(avatarUrl: _selectedAvatar);
+        final isLocalFile = finalAvatar.startsWith('/') ||
+            finalAvatar.contains(':\\') ||
+            finalAvatar.startsWith('file://') ||
+            File(finalAvatar).existsSync();
+
+        if (isLocalFile) {
+          final cleanPath = finalAvatar.replaceFirst('file://', '');
+          final file = File(cleanPath);
+          final uploadUrl = await FirebaseService().uploadCustomAvatarBase64(file);
+          if (uploadUrl != null) {
+            finalAvatar = uploadUrl;
+          } else {
+            throw Exception("Failed to process and encode avatar image.");
+          }
+        }
+
+        // Sync to database
+        await FirebaseService().saveUserProfile(
+          username: prefs.getString('username') ?? (user.email?.split('@').first ?? 'user'),
+          fullName: prefs.getString('device_name') ?? (user.userMetadata?['full_name'] ?? 'User'),
+          avatarUrl: finalAvatar,
+        );
+      }
+
+      await prefs.setString('custom_avatar', finalAvatar);
+
+      if (dialogContext != null && dialogContext!.mounted) {
+        Navigator.of(dialogContext!).pop(); // Dismiss loading spinner
       }
 
       if (mounted) {
         HapticFeedback.mediumImpact();
-        Navigator.pop(context, _selectedAvatar);
+        Navigator.pop(context, finalAvatar);
       }
     } catch (e) {
+      if (dialogContext != null && dialogContext!.mounted) {
+        Navigator.of(dialogContext!).pop(); // Dismiss loading spinner
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -103,7 +173,7 @@ class _AvatarPickerScreenState extends State<AvatarPickerScreen>
           children: [
             // Expanded Preview Section with nice aesthetic
             Container(
-              height: 200,
+              height: 240,
               width: double.infinity,
               alignment: Alignment.center,
               decoration: BoxDecoration(
@@ -117,7 +187,7 @@ class _AvatarPickerScreenState extends State<AvatarPickerScreen>
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   _buildAvatarPreview(),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   Text(
                     _selectedAvatar != null
                         ? 'Looking good!'
@@ -126,6 +196,26 @@ class _AvatarPickerScreenState extends State<AvatarPickerScreen>
                       color: Colors.white70,
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: _pickCustomImage,
+                    icon: const Icon(Icons.add_photo_alternate_rounded, color: Color(0xFFFFD600), size: 18),
+                    label: Text(
+                      'Upload Custom Photo',
+                      style: GoogleFonts.outfit(
+                        color: const Color(0xFFFFD600),
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    style: TextButton.styleFrom(
+                      backgroundColor: Colors.white.withOpacity(0.05),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
                     ),
                   ),
                 ],

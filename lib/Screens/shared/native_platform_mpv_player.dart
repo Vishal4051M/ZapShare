@@ -323,6 +323,23 @@ class NativePlatformMpvPlayer implements PlatformVideoPlayer {
           debugPrint("[Native] ${call.arguments}");
         }
         break;
+      case 'onTracks':
+        if (call.arguments is String) {
+          try {
+            final dynamic decoded = jsonDecode(call.arguments as String);
+            if (decoded is List) {
+              _handleTrackListUpdate(decoded);
+            }
+          } catch (e) {
+            debugPrint("Error parsing onTracks JSON: $e");
+          }
+        }
+        break;
+      case 'onSubtitle':
+        if (call.arguments is String) {
+          _captionController.add(call.arguments as String);
+        }
+        break;
     }
   }
 
@@ -356,7 +373,11 @@ class NativePlatformMpvPlayer implements PlatformVideoPlayer {
         await _sendCommand(['set_property', 'demuxer-max-bytes', '1048576']);
         await _sendCommand(['set_property', 'demuxer-readahead-secs', '0']);
         await _sendCommand(['set_property', 'vd-lavc-threads', '1']);
-        await _sendCommand(['set_property', 'demuxer-lavf-analyzeduration', '0.1']);
+        await _sendCommand([
+          'set_property',
+          'demuxer-lavf-analyzeduration',
+          '0.1',
+        ]);
         await _sendCommand(['set_property', 'demuxer-lavf-probesize', '8192']);
         await _sendCommand(['set_property', 'video-latency-hacks', 'yes']);
         await _sendCommand(['set_property', 'stream-buffer-size', '32k']);
@@ -365,34 +386,23 @@ class NativePlatformMpvPlayer implements PlatformVideoPlayer {
         await _sendCommand(['apply-profile', 'default']);
         await _sendCommand(['set_property', 'cache', 'yes']);
         await _sendCommand(['set_property', 'cache-pause', 'yes']);
-        await _sendCommand([
-          'set_property',
-          'demuxer-max-bytes',
-          Platform.isLinux ? '512M' : '150M',
-        ]);
-        await _sendCommand([
-          'set_property',
-          'demuxer-readahead-secs',
-          Platform.isLinux ? '600' : '60',
-        ]);
-        await _sendCommand([
-          'set_property',
-          'cache-secs',
-          Platform.isLinux ? '120' : '60',
-        ]);
+        await _sendCommand(['set_property', 'demuxer-max-bytes', '1024M']);
+        await _sendCommand(['set_property', 'demuxer-readahead-secs', '600']);
+        await _sendCommand(['set_property', 'cache-secs', '600']);
         await _sendCommand(['set_property', 'user-agent', 'ZapShare/1.0']);
         await _sendCommand(['set_property', 'network-timeout', '30']);
       }
     }
 
     // Load file via IPC
-    if (looksLikeUrl && (source.contains('live.wav') || source.contains('localhost:50006'))) {
+    if (looksLikeUrl &&
+        (source.contains('live.wav') || source.contains('localhost:50006'))) {
       await _sendCommand([
         'loadfile',
         loadSource,
         'replace',
         0,
-        'cache=no,cache-pause=no,demuxer-max-bytes=1048576,demuxer-readahead-secs=0,audio-buffer=0.08,vd-lavc-threads=1,demuxer-lavf-analyzeduration=0.1,demuxer-lavf-probesize=8192,video-latency-hacks=yes,stream-buffer-size=32k,network-timeout=5'
+        'cache=no,cache-pause=no,demuxer-max-bytes=1048576,demuxer-readahead-secs=0,audio-buffer=0.08,vd-lavc-threads=1,demuxer-lavf-analyzeduration=0.1,demuxer-lavf-probesize=8192,video-latency-hacks=yes,stream-buffer-size=32k,network-timeout=5',
       ]);
     } else {
       await _sendCommand(['loadfile', loadSource]);

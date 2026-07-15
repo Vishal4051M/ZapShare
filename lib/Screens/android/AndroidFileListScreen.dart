@@ -142,7 +142,7 @@ class _AndroidFileListScreenState extends State<AndroidFileListScreen>
   // ─── TV Remote / D-pad Navigation Handler ───
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    
+
     final key = event.logicalKey;
 
     // D-pad Up: Move focus up
@@ -165,7 +165,8 @@ class _AndroidFileListScreenState extends State<AndroidFileListScreen>
       setState(() {
         if (_focusedItemIndex < _fileItems.length - 1) {
           _focusedItemIndex++;
-        } else if (!_isDownloadButtonFocused && _fileItems.where((f) => f.isSelected).isNotEmpty) {
+        } else if (!_isDownloadButtonFocused &&
+            _fileItems.where((f) => f.isSelected).isNotEmpty) {
           _isDownloadButtonFocused = true;
         }
       });
@@ -517,7 +518,7 @@ class _AndroidFileListScreenState extends State<AndroidFileListScreen>
         // Final update to notification before stopping
         if (selectedFiles.every((f) => f.status == 'Complete')) {
           await _notificationsPlugin.cancelAll();
-          
+
           final androidSpecifics = const AndroidNotificationDetails(
             'zapshare_transfer_summary',
             'Transfer Summary',
@@ -526,14 +527,17 @@ class _AndroidFileListScreenState extends State<AndroidFileListScreen>
             priority: Priority.high,
             icon: 'ic_stat_notify',
           );
-          final platformSpecifics = NotificationDetails(android: androidSpecifics);
+          final platformSpecifics = NotificationDetails(
+            android: androidSpecifics,
+          );
           await _notificationsPlugin.show(
             id: 9999, // Unique summary ID
             title: 'ZapShare Transfer Complete',
-            body: 'Successfully received ${selectedFiles.length} file(s) from ${widget.serverIp}.',
+            body:
+                'Successfully received ${selectedFiles.length} file(s) from ${widget.serverIp}.',
             notificationDetails: platformSpecifics,
           );
-          
+
           // Small delay to allow user to see the "Complete" status in notification
           await Future.delayed(const Duration(milliseconds: 500));
         }
@@ -762,11 +766,13 @@ class _AndroidFileListScreenState extends State<AndroidFileListScreen>
         try {
           await sink.flush();
           await sink.close();
-          print('💾 [Receiver] File saved and flushed: $fileName ($received bytes)');
+          print(
+            '💾 [Receiver] File saved and flushed: $fileName ($received bytes)',
+          );
         } catch (e) {
           print('❌ [Receiver] File close error: $e');
         }
-        
+
         // Only send ACK if we reached 100%
         if (downloadSuccess && widget.useTcp && tcpSocket != null) {
           try {
@@ -780,7 +786,7 @@ class _AndroidFileListScreenState extends State<AndroidFileListScreen>
             print('⚠️ [Receiver] ACK send error: $e');
           }
         }
-        
+
         httpClient?.close();
         tcpSocket?.destroy();
         await cancelProgressNotification(_fileItems.indexOf(file));
@@ -1232,23 +1238,27 @@ class _AndroidFileListScreenState extends State<AndroidFileListScreen>
           border: Border.all(
             color:
                 isFocused
-                    ? const Color(0xFFFFD600) // Yellow focus indicator for TV remote
+                    ? const Color(
+                      0xFFFFD600,
+                    ) // Yellow focus indicator for TV remote
                     : (isComplete
                         ? Colors.green.withOpacity(0.3)
                         : (file.isSelected
                             ? color.withOpacity(0.35)
                             : Colors.white.withOpacity(0.04))),
-            width: isFocused ? 2.5 : (file.isSelected || isComplete ? 1.2 : 0.8),
+            width:
+                isFocused ? 2.5 : (file.isSelected || isComplete ? 1.2 : 0.8),
           ),
-          boxShadow: isFocused
-              ? [
-                  BoxShadow(
-                    color: const Color(0xFFFFD600).withOpacity(0.4),
-                    blurRadius: 12,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
+          boxShadow:
+              isFocused
+                  ? [
+                    BoxShadow(
+                      color: const Color(0xFFFFD600).withOpacity(0.4),
+                      blurRadius: 12,
+                      spreadRadius: 2,
+                    ),
+                  ]
+                  : null,
         ),
         child: Row(
           children: [
@@ -1391,33 +1401,44 @@ class _AndroidFileListScreenState extends State<AndroidFileListScreen>
                 () => file.isCancelled = true,
               ),
             ] else if (isComplete)
-              _miniIconButton(
-                Icons.open_in_new_rounded,
-                Colors.green,
-                () async {
-                  final ext = _getFileExtension(file.name).toLowerCase();
-                  final mimeType = _getMimeTypeFromExtension(ext);
-                  print('📂 Opening file: ${file.savePath} (MIME: $mimeType)');
-                  if (ext == 'apk') {
-                    const platform = MethodChannel('zapshare.saf');
-                    final canInstall = await platform.invokeMethod<bool>('checkInstallPackagesPermission') ?? true;
-                    if (!canInstall) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Please enable "Install from unknown sources" to install APKs')),
-                        );
-                        await platform.invokeMethod('requestInstallPackagesPermission');
-                        return;
-                    }
-                  }
-
-                  final result = await OpenFile.open(file.savePath, type: mimeType);
-                  if (result.type != ResultType.done) {
+              _miniIconButton(Icons.open_in_new_rounded, Colors.green, () async {
+                final ext = _getFileExtension(file.name).toLowerCase();
+                final mimeType = _getMimeTypeFromExtension(ext);
+                print('📂 Opening file: ${file.savePath} (MIME: $mimeType)');
+                if (ext == 'apk') {
+                  const platform = MethodChannel('zapshare.saf');
+                  final canInstall =
+                      await platform.invokeMethod<bool>(
+                        'checkInstallPackagesPermission',
+                      ) ??
+                      true;
+                  if (!canInstall) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Could not open file: ${result.message}')),
+                      const SnackBar(
+                        content: Text(
+                          'Please enable "Install from unknown sources" to install APKs',
+                        ),
+                      ),
                     );
+                    await platform.invokeMethod(
+                      'requestInstallPackagesPermission',
+                    );
+                    return;
                   }
-                },
-              )
+                }
+
+                final result = await OpenFile.open(
+                  file.savePath,
+                  type: mimeType,
+                );
+                if (result.type != ResultType.done) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Could not open file: ${result.message}'),
+                    ),
+                  );
+                }
+              })
             else
               AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
@@ -1606,22 +1627,25 @@ class _AndroidFileListScreenState extends State<AndroidFileListScreen>
                               ? Colors.grey[800]
                               : const Color(0xFFFFD600),
                       borderRadius: BorderRadius.circular(30),
-                      border: _isDownloadButtonFocused
-                          ? Border.all(
-                              color: Colors.white,
-                              width: 2.5,
-                            )
-                          : null,
+                      border:
+                          _isDownloadButtonFocused
+                              ? Border.all(color: Colors.white, width: 2.5)
+                              : null,
                       boxShadow:
                           _downloading
                               ? null
                               : [
                                 BoxShadow(
-                                  color: _isDownloadButtonFocused
-                                      ? Colors.white.withOpacity(0.5)
-                                      : const Color(0xFFFFD600).withOpacity(0.25),
-                                  blurRadius: _isDownloadButtonFocused ? 16 : 16,
-                                  spreadRadius: _isDownloadButtonFocused ? 3 : 0,
+                                  color:
+                                      _isDownloadButtonFocused
+                                          ? Colors.white.withOpacity(0.5)
+                                          : const Color(
+                                            0xFFFFD600,
+                                          ).withOpacity(0.25),
+                                  blurRadius:
+                                      _isDownloadButtonFocused ? 16 : 16,
+                                  spreadRadius:
+                                      _isDownloadButtonFocused ? 3 : 0,
                                   offset: const Offset(0, 4),
                                 ),
                               ],
@@ -1656,6 +1680,7 @@ class _AndroidFileListScreenState extends State<AndroidFileListScreen>
       ),
     );
   }
+
   String _getFileExtension(String fileName) {
     final lastDotIndex = fileName.lastIndexOf('.');
     if (lastDotIndex == -1 || lastDotIndex == fileName.length - 1) {

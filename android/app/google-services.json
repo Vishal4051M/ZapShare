@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "22061846776",
+    "firebase_url": "https://assistant-mark-2-bdd7e-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "assistant-mark-2-bdd7e",
+    "storage_bucket": "assistant-mark-2-bdd7e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:22061846776:android:9da31d03933c1e0805eb0d",
+        "android_client_info": {
+          "package_name": "app.zapshare.mobile"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "22061846776-vh6u48rua2qpmhpdaddlo3qjbq13p0uf.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "app.zapshare.mobile",
+            "certificate_hash": "fde519f1b713eaaddf83a632a9f43bf2d5f0c8c4"
+          }
+        },
+        {
+          "client_id": "22061846776-4phmh2r8ldfmui3adups1tvnhvfid063.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAXM2QUxDZ9a0cSo-hyNu-yla5sDBJ3YoE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "22061846776-4phmh2r8ldfmui3adups1tvnhvfid063.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

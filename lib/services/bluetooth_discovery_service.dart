@@ -11,8 +11,9 @@ import 'package:permission_handler/permission_handler.dart';
 class BluetoothDiscoveryService {
   static const String SERVICE_UUID = '0000face-0000-1000-8000-00805f9b34fb';
 
-  static const MethodChannel _channel =
-      MethodChannel('zapshare.bluetooth_discovery');
+  static const MethodChannel _channel = MethodChannel(
+    'zapshare.bluetooth_discovery',
+  );
 
   final Map<String, DiscoveredBluetoothDevice> _devices = {};
   Timer? _cleanupTimer;
@@ -39,8 +40,10 @@ class BluetoothDiscoveryService {
     // Listen for native callbacks
     _channel.setMethodCallHandler(_handleNativeCallback);
     // Periodic cleanup of stale devices
-    _cleanupTimer =
-        Timer.periodic(const Duration(seconds: 10), (_) => _cleanupStaleDevices());
+    _cleanupTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _cleanupStaleDevices(),
+    );
   }
 
   // ────────────────────────────────────────────────
@@ -51,8 +54,15 @@ class BluetoothDiscoveryService {
     switch (call.method) {
       case 'onDeviceDiscovered':
         final map = Map<String, dynamic>.from(call.arguments);
+        final deviceId = map['deviceId'] ?? '';
+
+        // Ignore own device
+        if (deviceId == _localDeviceId && _localDeviceId != null) {
+          break;
+        }
+
         final device = DiscoveredBluetoothDevice(
-          deviceId: map['deviceId'] ?? '',
+          deviceId: deviceId,
           deviceName: map['deviceName'] ?? 'ZapShare Device',
           bleAddress: map['bleAddress'] ?? '',
           port: map['port'] ?? 8080,
@@ -90,8 +100,8 @@ class BluetoothDiscoveryService {
   }
 
   void _emitDevices() {
-    final list = _devices.values.toList()
-      ..sort((a, b) => b.rssi.compareTo(a.rssi));
+    final list =
+        _devices.values.toList()..sort((a, b) => b.rssi.compareTo(a.rssi));
     if (!_devicesController.isClosed) {
       _devicesController.add(list);
     }
@@ -102,12 +112,13 @@ class BluetoothDiscoveryService {
   // ────────────────────────────────────────────────
 
   Future<bool> requestPermissions() async {
-    final statuses = await [
-      Permission.bluetoothScan,
-      Permission.bluetoothAdvertise,
-      Permission.bluetoothConnect,
-      Permission.locationWhenInUse,
-    ].request();
+    final statuses =
+        await [
+          Permission.bluetoothScan,
+          Permission.bluetoothAdvertise,
+          Permission.bluetoothConnect,
+          Permission.locationWhenInUse,
+        ].request();
 
     return statuses[Permission.bluetoothScan]!.isGranted &&
         statuses[Permission.bluetoothAdvertise]!.isGranted &&
@@ -295,16 +306,15 @@ class BluetoothDiscoveryService {
   // ────────────────────────────────────────────────
 
   List<DiscoveredBluetoothDevice> getDiscoveredDevices() {
-    final list = _devices.values.toList()
-      ..sort((a, b) => b.rssi.compareTo(a.rssi));
+    final list =
+        _devices.values.toList()..sort((a, b) => b.rssi.compareTo(a.rssi));
     return list;
   }
 
   void _cleanupStaleDevices() {
     final now = DateTime.now();
     final before = _devices.length;
-    _devices.removeWhere(
-        (_, d) => now.difference(d.lastSeen).inSeconds > 45);
+    _devices.removeWhere((_, d) => now.difference(d.lastSeen).inSeconds > 45);
     if (_devices.length != before) _emitDevices();
   }
 
@@ -358,13 +368,13 @@ class DiscoveredBluetoothDevice {
   bool get isOnline => DateTime.now().difference(lastSeen).inSeconds < 45;
 
   Map<String, dynamic> toMap() => {
-        'deviceId': deviceId,
-        'deviceName': deviceName,
-        'bleAddress': bleAddress,
-        'port': port,
-        'platform': platform,
-        'rssi': rssi,
-      };
+    'deviceId': deviceId,
+    'deviceName': deviceName,
+    'bleAddress': bleAddress,
+    'port': port,
+    'platform': platform,
+    'rssi': rssi,
+  };
 }
 
 class HotspotCredentials {
@@ -381,6 +391,5 @@ class HotspotCredentials {
   });
 
   @override
-  String toString() =>
-      'HotspotCredentials(ssid: $ssid, ip: $ipAddress:$port)';
+  String toString() => 'HotspotCredentials(ssid: $ssid, ip: $ipAddress:$port)';
 }

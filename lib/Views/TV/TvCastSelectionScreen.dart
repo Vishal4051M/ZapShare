@@ -1,0 +1,353 @@
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:zap_share/widgets/tv_widgets.dart';
+import 'package:zap_share/Views/TV/TvCastScreen.dart';
+import 'package:zap_share/Views/TV/TvAudioShareScreen.dart';
+import 'package:zap_share/Views/TV/TvRemoteCastScreen.dart';
+import 'package:zap_share/Screens/android/AndroidCastScreen.dart'; // CastMode enum
+
+class TvCastSelectionScreen extends StatelessWidget {
+  const TvCastSelectionScreen({super.key});
+
+  void _navigateTo(BuildContext context, Widget screen) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF0E0E10), Color(0xFF08080A)],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 48.0, vertical: 24.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Android-style custom header ──
+                _buildHeader(context),
+                const SizedBox(height: 32),
+
+                // ── Section label ──
+                Text(
+                  'CAST OPTIONS',
+                  style: GoogleFonts.outfit(
+                    color: Colors.grey[400],
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // ── Four-card square row matching Android cast options ──
+                Expanded(
+                  child: Center(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        const gaps = 3 * 20.0;
+                        final cardSize = (constraints.maxHeight).clamp(
+                          0.0,
+                          (constraints.maxWidth - gaps) / 4,
+                        );
+                        return Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            // Audio Share — GOLD/primary
+                            SizedBox(
+                              width: cardSize,
+                              height: cardSize,
+                              child: AspectRatio(
+                                aspectRatio: 1,
+                                child: TVFocusableCard(
+                                  autofocus: true,
+                                  backgroundColor: Colors.transparent,
+                                  borderRadius: const BorderRadius.all(Radius.circular(28)),
+                                  onPressed: () => _navigateTo(context, const TvAudioShareScreen()),
+                                  child: _buildCard(
+                                    title: 'Audio Share',
+                                    subtitle: 'Real-time sync',
+                                    icon: Icons.waves_rounded,
+                                    backgroundColor: const Color(0xFFF5C400),
+                                    textColor: Colors.black,
+                                    iconBgColor: Colors.black.withValues(alpha: 0.1),
+                                    iconColor: Colors.black,
+                                    isMainFeature: true,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 20),
+                            // Video Cast — LIGHT GREY
+                            SizedBox(
+                              width: cardSize,
+                              height: cardSize,
+                              child: AspectRatio(
+                                aspectRatio: 1,
+                                child: TVFocusableCard(
+                                  backgroundColor: Colors.transparent,
+                                  borderRadius: const BorderRadius.all(Radius.circular(28)),
+                                  onPressed: () => _navigateTo(
+                                    context,
+                                    const TvCastScreen(initialMode: CastMode.video),
+                                  ),
+                                  child: _buildCard(
+                                    title: 'Video Cast',
+                                    subtitle: 'Stream movies',
+                                    icon: Icons.movie_filter_rounded,
+                                    backgroundColor: const Color(0xFFEDEDED),
+                                    textColor: const Color(0xFF2C2C2E),
+                                    iconBgColor: Colors.black.withValues(alpha: 0.08),
+                                    iconColor: Colors.black,
+                                    isMainFeature: false,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 20),
+                            // Screen Mirror — DARK
+                            SizedBox(
+                              width: cardSize,
+                              height: cardSize,
+                              child: AspectRatio(
+                                aspectRatio: 1,
+                                child: TVFocusableCard(
+                                  backgroundColor: Colors.transparent,
+                                  borderRadius: const BorderRadius.all(Radius.circular(28)),
+                                  onPressed: () => _navigateTo(
+                                    context,
+                                    const TvCastScreen(initialMode: CastMode.screenMirror),
+                                  ),
+                                  child: _buildCard(
+                                    title: 'Screen Mirror',
+                                    subtitle: 'Mirror Screen',
+                                    icon: Icons.screen_share_rounded,
+                                    backgroundColor: const Color(0xFF1C1C1E),
+                                    textColor: Colors.white,
+                                    iconBgColor: Colors.white.withValues(alpha: 0.1),
+                                    iconColor: const Color(0xFFFFD600),
+                                    isMainFeature: false,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 20),
+                            // Remote Cast — PURPLE/DARK (friend P2P by code)
+                            SizedBox(
+                              width: cardSize,
+                              height: cardSize,
+                              child: AspectRatio(
+                                aspectRatio: 1,
+                                child: TVFocusableCard(
+                                  backgroundColor: Colors.transparent,
+                                  borderRadius: const BorderRadius.all(Radius.circular(28)),
+                                  onPressed: () => _navigateTo(
+                                    context,
+                                    const TvRemoteCastScreen(),
+                                  ),
+                                  child: _buildCard(
+                                    title: 'Remote Cast',
+                                    subtitle: 'Cast by Code',
+                                    icon: Icons.cast_connected_rounded,
+                                    backgroundColor: const Color(0xFF1C1C1E),
+                                    textColor: Colors.white,
+                                    iconBgColor: const Color(0xFF6C3FE0).withValues(alpha: 0.2),
+                                    iconColor: const Color(0xFFAA80FF),
+                                    isMainFeature: false,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Matches AndroidCastSelectionScreen._buildHeader()
+  Widget _buildHeader(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: const Color(0xFF1C1C1E),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+          ),
+          child: TVFocusableButton(
+            borderRadius: BorderRadius.circular(24),
+            padding: EdgeInsets.zero,
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Icon(
+              Icons.arrow_back_ios_new_rounded,
+              color: Colors.white,
+              size: 20,
+            ),
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: RichText(
+            text: TextSpan(
+              children: [
+                TextSpan(
+                  text: 'Cast ',
+                  style: GoogleFonts.outfit(
+                    color: const Color(0xFFFFD600),
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+                TextSpan(
+                  text: 'Options',
+                  style: GoogleFonts.outfit(
+                    color: Colors.white,
+                    fontSize: 26,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color backgroundColor,
+    required Color textColor,
+    required Color iconBgColor,
+    required Color iconColor,
+    required bool isMainFeature,
+  }) {
+    final isLightBg = backgroundColor == const Color(0xFFEDEDED) ||
+        backgroundColor == Colors.white ||
+        backgroundColor == const Color(0xFFF5F5F7);
+
+    final gradient = isMainFeature
+        ? const LinearGradient(
+            colors: [Color(0xFFFFD84D), Color(0xFFF5C400)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          )
+        : isLightBg
+            ? const LinearGradient(
+                colors: [Color(0xFFF0F0F0), Color(0xFFE5E5E5)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              )
+            : const LinearGradient(
+                colors: [Color(0xFF2C2C2E), Color(0xFF1C1C1E)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              );
+
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      decoration: BoxDecoration(
+        gradient: gradient,
+        borderRadius: const BorderRadius.all(Radius.circular(28)),
+        border: isMainFeature
+            ? null
+            : Border.all(
+                color: isLightBg
+                    ? Colors.black.withValues(alpha: 0.05)
+                    : Colors.white.withValues(alpha: 0.05),
+              ),
+      ),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.all(Radius.circular(28)),
+        child: Stack(
+          children: [
+            Positioned(
+              bottom: -28,
+              right: -28,
+              child: Icon(
+                icon,
+                size: 120,
+                color: isMainFeature
+                    ? Colors.black.withValues(alpha: 0.05)
+                    : isLightBg
+                        ? Colors.black.withValues(alpha: 0.04)
+                        : Colors.white.withValues(alpha: 0.03),
+              ),
+            ),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isCompact = constraints.maxHeight < 180;
+                final sizeFactor = isCompact ? 0.85 : 1.0;
+                final padding = 20.0 * sizeFactor;
+
+                return Padding(
+                  padding: EdgeInsets.all(padding),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: EdgeInsets.all(10 * sizeFactor),
+                        decoration: BoxDecoration(
+                          color: iconBgColor,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(icon, color: iconColor, size: 24 * sizeFactor),
+                      ),
+                      const Spacer(),
+                      Text(
+                        title,
+                        style: GoogleFonts.outfit(
+                          color: textColor,
+                          fontSize: 20 * sizeFactor,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
+                          height: 1.1,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      SizedBox(height: 3 * sizeFactor),
+                      Text(
+                        subtitle,
+                        style: GoogleFonts.outfit(
+                          color: textColor.withValues(alpha: 0.7),
+                          fontSize: 14 * sizeFactor,
+                          fontWeight: FontWeight.w500,
+                          height: 1.2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

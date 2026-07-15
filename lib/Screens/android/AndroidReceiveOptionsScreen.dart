@@ -15,7 +15,6 @@ class AndroidReceiveOptionsScreen extends StatefulWidget {
 
 class _AndroidReceiveOptionsScreenState
     extends State<AndroidReceiveOptionsScreen> {
-
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -24,13 +23,11 @@ class _AndroidReceiveOptionsScreenState
         backgroundColor: Colors.black,
         body: Hero(
           tag: 'receive_card_container',
-          createRectTween: (begin, end) =>
-              SmoothRectTween(begin: begin, end: end),
+          createRectTween:
+              (begin, end) => SmoothRectTween(begin: begin, end: end),
           child: Material(
             color: Colors.black,
-            child: SafeArea(
-              child: _buildContent(context),
-            ),
+            child: SafeArea(child: _buildContent(context)),
           ),
         ),
       ),
@@ -189,10 +186,11 @@ class _AndroidReceiveOptionsScreenState
                         textColor: Colors.black,
                         iconBgColor: Colors.black.withOpacity(0.1),
                         iconColor: Colors.black,
-                        onTap: () => _navigateToScreen(
-                          context,
-                          AndroidReceiveScreen(),
-                        ),
+                        onTap:
+                            () => _navigateToScreen(
+                              context,
+                              AndroidReceiveScreen(),
+                            ),
                         isMainFeature: true,
                       ),
                       right: _buildCard(
@@ -203,10 +201,9 @@ class _AndroidReceiveOptionsScreenState
                         textColor: Colors.white,
                         iconBgColor: Colors.white.withOpacity(0.1),
                         iconColor: const Color(0xFFFFD600),
-                        onTap: () => _navigateToScreen(
-                          context,
-                          WebReceiveScreen(),
-                        ),
+                        onTap:
+                            () =>
+                                _navigateToScreen(context, WebReceiveScreen()),
                       ),
                     );
                   },
@@ -252,7 +249,8 @@ class _AndroidReceiveOptionsScreenState
 
     return Container(
       decoration: BoxDecoration(
-        color: isMainFeature ? const Color(0xFFFFD600) : const Color(0xFF1C1C1E),
+        color:
+            isMainFeature ? const Color(0xFFFFD600) : const Color(0xFF1C1C1E),
         borderRadius: BorderRadius.circular(32 * scale),
         border:
             isMainFeature
@@ -270,9 +268,10 @@ class _AndroidReceiveOptionsScreenState
               child: Icon(
                 icon,
                 size: 120 * scale,
-                color: isMainFeature
-                    ? Colors.black.withOpacity(0.05)
-                    : Colors.white.withOpacity(0.02),
+                color:
+                    isMainFeature
+                        ? Colors.black.withOpacity(0.05)
+                        : Colors.white.withOpacity(0.02),
               ),
             ),
             // Content
@@ -289,21 +288,21 @@ class _AndroidReceiveOptionsScreenState
                     final isUltraTight = constraints.maxHeight < 130;
                     final isTiny = constraints.maxHeight < 110;
                     final sizeFactor =
-                      isTiny
-                        ? 0.7
-                        : (isUltraTight ? 0.78 : (isTight ? 0.85 : 1.0));
+                        isTiny
+                            ? 0.7
+                            : (isUltraTight ? 0.78 : (isTight ? 0.85 : 1.0));
                     final showSubtitle = !isUltraTight;
                     final showTitle = !isTiny;
                     final padding =
-                      (isCompact ? 12.0 : 16.0) * scale * sizeFactor;
+                        (isCompact ? 12.0 : 16.0) * scale * sizeFactor;
                     final iconPadding =
-                      (isCompact ? 8.0 : 10.0) * scale * sizeFactor;
+                        (isCompact ? 8.0 : 10.0) * scale * sizeFactor;
                     final iconSize =
                         (isCompact ? 22.0 : 26.0) * scale * sizeFactor;
                     final titleSize =
-                      (isCompact ? 18.0 : 20.0) * scale * sizeFactor;
+                        (isCompact ? 18.0 : 20.0) * scale * sizeFactor;
                     final subtitleSize =
-                      (isCompact ? 13.0 : 15.0) * scale * sizeFactor;
+                        (isCompact ? 13.0 : 15.0) * scale * sizeFactor;
                     final gap = (isCompact ? 3.0 : 4.0) * scale * sizeFactor;
                     final textTopGap = isUltraTight ? gap * 0.5 : gap;
 

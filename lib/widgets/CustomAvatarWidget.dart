@@ -1,7 +1,26 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:zap_share/services/firebase_service.dart';
 
 class CustomAvatarWidget extends StatelessWidget {
+  static Future<String?> getEffectiveLocalAvatar() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final mode = prefs.getString('p2p_avatar_mode') ?? 'emoji';
+      if (mode == 'image') {
+        final googlePhoto = FirebaseService().currentUser?.userMetadata?['picture'];
+        if (googlePhoto != null && googlePhoto.isNotEmpty) {
+          return googlePhoto;
+        }
+      }
+      return prefs.getString('custom_avatar');
+    } catch (_) {
+      return null;
+    }
+  }
   final String? avatarId;
   final double size;
   final bool showBorder;
@@ -198,6 +217,97 @@ class CustomAvatarWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (avatarId != null && avatarId!.startsWith('data:image/')) {
+      try {
+        final String base64Content = avatarId!.split(',').last;
+        final Uint8List bytes = base64Decode(base64Content);
+        return Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: showBorder
+                ? Border.all(
+                    color: borderColor ?? Colors.white.withOpacity(0.2),
+                    width: 2,
+                  )
+                : null,
+          ),
+          child: ClipOval(
+            child: Image.memory(
+              bytes,
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) => Container(
+                color: const Color(0xFF2C2C2E),
+                child: Icon(Icons.person, color: Colors.white, size: size * 0.6),
+              ),
+            ),
+          ),
+        );
+      } catch (e) {
+        print("Error rendering base64 avatar: $e");
+      }
+    }
+
+    if (avatarId != null && (avatarId!.startsWith('http://') || avatarId!.startsWith('https://'))) {
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: showBorder
+              ? Border.all(
+                  color: borderColor ?? Colors.white.withOpacity(0.2),
+                  width: 2,
+                )
+              : null,
+        ),
+        child: ClipOval(
+          child: Image.network(
+            avatarId!,
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) => Container(
+              color: const Color(0xFF2C2C2E),
+              child: Icon(Icons.person, color: Colors.white, size: size * 0.6),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (avatarId != null && (avatarId!.startsWith('/') || avatarId!.contains(':\\') || avatarId!.startsWith('file://') || File(avatarId!).existsSync())) {
+      final cleanPath = avatarId!.replaceFirst('file://', '');
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: showBorder
+              ? Border.all(
+                  color: borderColor ?? Colors.white.withOpacity(0.2),
+                  width: 2,
+                )
+              : null,
+        ),
+        child: ClipOval(
+          child: Image.file(
+            File(cleanPath),
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stackTrace) => Container(
+              color: const Color(0xFF2C2C2E),
+              child: Icon(Icons.person, color: Colors.white, size: size * 0.6),
+            ),
+          ),
+        ),
+      );
+    }
+
     if (avatarId == null || !_avatarMap.containsKey(avatarId)) {
       return Container(
         width: size,
@@ -205,8 +315,9 @@ class CustomAvatarWidget extends StatelessWidget {
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color:
+
               useBackground
-                  ? Colors.white.withOpacity(0.08)
+                  ? const Color(0xFF2C2C2E)
                   : Colors.transparent,
           shape: BoxShape.circle,
         ),
@@ -222,9 +333,8 @@ class CustomAvatarWidget extends StatelessWidget {
       height: size,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        // Only show glassy background if requested
-        color:
-            useBackground ? Colors.white.withOpacity(0.08) : Colors.transparent,
+        // Solid dark background when requested, transparent in grid/picker mode.
+        color: useBackground ? const Color(0xFF2C2C2E) : Colors.transparent,
         shape: BoxShape.circle,
         border:
             showBorder
@@ -239,19 +349,24 @@ class CustomAvatarWidget extends StatelessWidget {
           // Only nudge left in Grid Mode (!useBackground) where visual centering is tricky.
           // In Preview Mode (useBackground), standard centering works best.
           offset: _getAvatarOffset(size, useBackground, avatarId!),
-          child: Text(
-            emoji,
-            style: TextStyle(
-              fontSize: size * (useBackground ? 0.55 : 0.85),
-              height: Platform.isWindows ? 1.0 : 1.15,
-              fontFamilyFallback: [
-                'Apple Color Emoji',
-                'Segoe UI Emoji',
-                'Noto Color Emoji',
-              ],
-              color: const Color(0xFFFFFFFF),
+          child: DefaultTextStyle(
+            style: const TextStyle(),
+            child: Text(
+              emoji,
+              style: TextStyle(
+                fontSize: size * (useBackground ? 0.55 : 0.85),
+                height: Platform.isWindows ? 1.0 : 1.15,
+                // On Windows: use Segoe UI Emoji as primary — it's the system
+                // color emoji font, no APK size impact. Other platforms fall
+                // back to their native color emoji fonts.
+                fontFamily: Platform.isWindows ? 'Segoe UI Emoji' : null,
+                fontFamilyFallback: const [
+                  'Apple Color Emoji',
+                  'Noto Color Emoji',
+                ],
+              ),
+              textAlign: TextAlign.center,
             ),
-            textAlign: TextAlign.center,
           ),
         ),
       ),

@@ -65,24 +65,72 @@ class _NativeVideoPlayerScreenState extends State<NativeVideoPlayerScreen> {
     }
 
     try {
-      final result =
-          await _channel.invokeMethod<Map>('launchNativeVideoPlayer', {
-        'source': widget.videoSource,
-        'title': widget.title ?? '',
-        'subtitlePath': widget.subtitlePath ?? '',
-        'position': widget.startPosition,
-        'castControllerIp': widget.castControllerIp ?? '',
-      });
+      final result = await _channel
+          .invokeMethod<Map>('launchNativeVideoPlayer', {
+            'source': widget.videoSource,
+            'title': widget.title ?? '',
+            'subtitlePath': widget.subtitlePath ?? '',
+            'position': widget.startPosition,
+            'castControllerIp': widget.castControllerIp ?? '',
+          });
 
       final lastPosition = (result?['position'] as num?)?.toInt() ?? 0;
+      if (widget.castControllerIp != null &&
+          widget.castControllerIp!.isNotEmpty) {
+        try {
+          DeviceDiscoveryService().sendCastStatus(
+            widget.castControllerIp!,
+            position: lastPosition / 1000.0,
+            duration: 0,
+            buffered: 0,
+            isPlaying: false,
+            isBuffering: false,
+            volume: 1.0,
+            fileName: widget.title,
+            active: false,
+          );
+        } catch (_) {}
+      }
       _stopCastRelay();
       if (mounted) Navigator.of(context).pop(lastPosition);
     } on PlatformException catch (e) {
       debugPrint('[NativeVideoPlayer] PlatformException: ${e.message}');
+      if (widget.castControllerIp != null &&
+          widget.castControllerIp!.isNotEmpty) {
+        try {
+          DeviceDiscoveryService().sendCastStatus(
+            widget.castControllerIp!,
+            position: 0,
+            duration: 0,
+            buffered: 0,
+            isPlaying: false,
+            isBuffering: false,
+            volume: 1.0,
+            fileName: widget.title,
+            active: false,
+          );
+        } catch (_) {}
+      }
       _stopCastRelay();
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       debugPrint('[NativeVideoPlayer] error: $e');
+      if (widget.castControllerIp != null &&
+          widget.castControllerIp!.isNotEmpty) {
+        try {
+          DeviceDiscoveryService().sendCastStatus(
+            widget.castControllerIp!,
+            position: 0,
+            duration: 0,
+            buffered: 0,
+            isPlaying: false,
+            isBuffering: false,
+            volume: 1.0,
+            fileName: widget.title,
+            active: false,
+          );
+        } catch (_) {}
+      }
       _stopCastRelay();
       if (mounted) Navigator.of(context).pop();
     }
@@ -115,13 +163,14 @@ class _NativeVideoPlayerScreenState extends State<NativeVideoPlayerScreen> {
       );
     }
 
-    // Forward incoming cast control commands to native Activity
     _castControlSub = discoveryService.castControlStream.listen((control) {
       _castChannel.invokeMethod('castCommand', {
         'action': control.action,
         if (control.seekPosition != null) 'seekPosition': control.seekPosition,
         if (control.volume != null) 'volume': control.volume,
         if (control.trackIndex != null) 'trackIndex': control.trackIndex,
+        if (control.propertyValue != null)
+          'propertyValue': control.propertyValue,
       });
     });
 

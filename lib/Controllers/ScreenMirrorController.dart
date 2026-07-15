@@ -146,7 +146,12 @@ class ScreenMirrorController {
         Uint8List? latestFrame;
 
         while (true) {
-          final jpegStart = _findMarker(currentBuffer, 0xFF, 0xD8, searchOffset);
+          final jpegStart = _findMarker(
+            currentBuffer,
+            0xFF,
+            0xD8,
+            searchOffset,
+          );
           if (jpegStart == -1) {
             bytesBuilder.add(currentBuffer.sublist(searchOffset));
             previousLength = currentBuffer.length - searchOffset;
@@ -158,7 +163,12 @@ class ScreenMirrorController {
             startSearchingForEnd = previousLength - 1;
           }
 
-          final jpegEnd = _findMarker(currentBuffer, 0xFF, 0xD9, startSearchingForEnd);
+          final jpegEnd = _findMarker(
+            currentBuffer,
+            0xFF,
+            0xD9,
+            startSearchingForEnd,
+          );
           if (jpegEnd == -1) {
             bytesBuilder.add(currentBuffer.sublist(jpegStart));
             previousLength = currentBuffer.length - jpegStart;
@@ -220,12 +230,15 @@ class ScreenMirrorController {
 
   void _scheduleReconnect() {
     if (isDisposed || _reconnectAttempts >= _maxReconnectAttempts) {
-      error = 'Connection lost after $_reconnectAttempts attempts. Tap Retry to reconnect.';
+      error =
+          'Connection lost after $_reconnectAttempts attempts. Tap Retry to reconnect.';
       onFrameUpdated();
       return;
     }
     _reconnectAttempts++;
-    final delay = Duration(milliseconds: (_reconnectAttempts * 500).clamp(500, 3000));
+    final delay = Duration(
+      milliseconds: (_reconnectAttempts * 500).clamp(500, 3000),
+    );
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, () {
       if (!isDisposed) {
@@ -251,7 +264,10 @@ class ScreenMirrorController {
           int height = (bytes[offset + 5] << 8) | bytes[offset + 6];
           int width = (bytes[offset + 7] << 8) | bytes[offset + 8];
           return Size(width.toDouble(), height.toDouble());
-        } else if (marker == 0xD8 || marker == 0xD9 || marker == 0x00 || (marker >= 0xD0 && marker <= 0xD7)) {
+        } else if (marker == 0xD8 ||
+            marker == 0xD9 ||
+            marker == 0x00 ||
+            (marker >= 0xD0 && marker <= 0xD7)) {
           offset += 2;
         } else {
           int length = (bytes[offset + 2] << 8) | bytes[offset + 3];

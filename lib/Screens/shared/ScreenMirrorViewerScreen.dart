@@ -5,11 +5,12 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:zap_share/controllers/ScreenMirrorController.dart';
-import 'package:zap_share/controllers/ScreenMirrorKeyboardHandler.dart';
-import 'package:zap_share/views/ScreenMirrorStreamView.dart';
-import 'package:zap_share/views/ScreenMirrorControlBar.dart';
-import 'package:zap_share/views/ScreenMirrorStatusViews.dart';
+import 'package:zap_share/Controllers/ScreenMirrorController.dart';
+import 'package:zap_share/Controllers/ScreenMirrorKeyboardHandler.dart';
+import 'package:zap_share/Views/ScreenMirrorStreamView.dart';
+import 'package:zap_share/Views/ScreenMirrorControlBar.dart';
+import 'package:zap_share/Views/ScreenMirrorStatusViews.dart';
+import 'package:zap_share/widgets/TouchpadWidget.dart';
 import 'dart:ui' as ui;
 
 class ScreenMirrorViewerScreen extends StatefulWidget {
@@ -31,7 +32,8 @@ class ScreenMirrorViewerScreen extends StatefulWidget {
   });
 
   @override
-  State<ScreenMirrorViewerScreen> createState() => _ScreenMirrorViewerScreenState();
+  State<ScreenMirrorViewerScreen> createState() =>
+      _ScreenMirrorViewerScreenState();
 }
 
 class _ScreenMirrorViewerScreenState extends State<ScreenMirrorViewerScreen> {
@@ -39,16 +41,14 @@ class _ScreenMirrorViewerScreenState extends State<ScreenMirrorViewerScreen> {
   late final ScreenMirrorKeyboardHandler _keyboardHandler;
   final FocusNode _keyboardFocusNode = FocusNode();
   final TextEditingController _textController = TextEditingController();
-  
+
   bool _isFullscreen = false;
   bool _showControls = false;
   String? _inputStatusText;
   Timer? _inputStatusTimer;
 
   double? _frameAspectRatio;
-  double _targetWidth = 360;
-  double _targetHeight = 740;
-  
+
   Offset? _dragStart;
   Offset? _dragCurrent;
 
@@ -56,23 +56,32 @@ class _ScreenMirrorViewerScreenState extends State<ScreenMirrorViewerScreen> {
   static const Size _defaultWindowSize = Size(900, 650);
   static const _accentColor = Color(0xFFFFD600);
 
+  bool get _isAndroidViewingWindows =>
+      Platform.isAndroid && widget.senderIp != null;
+
   @override
   void initState() {
     super.initState();
     _controller = ScreenMirrorController(
       streamUrl: widget.streamUrl,
       senderIp: widget.senderIp,
-      onFrameUpdated: () { if (mounted) setState(() {}); },
-      onError: (err) { if (mounted) setState(() {}); },
+      onFrameUpdated: () {
+        if (mounted) setState(() {});
+      },
+      onError: (err) {
+        if (mounted) setState(() {});
+      },
       onRatioDetected: (ratio) {
-        if (_frameAspectRatio == null || (_frameAspectRatio! - ratio).abs() > 0.1) {
+        if (_frameAspectRatio == null ||
+            (_frameAspectRatio! - ratio).abs() > 0.1) {
           _frameAspectRatio = ratio;
           _resizeWindowToMatchRatio(ratio);
         }
       },
     );
     _keyboardHandler = ScreenMirrorKeyboardHandler(
-      sendControl: (action, {text}) => _controller.sendControl(action, text: text),
+      sendControl:
+          (action, {text}) => _controller.sendControl(action, text: text),
     );
   }
 
@@ -85,10 +94,13 @@ class _ScreenMirrorViewerScreenState extends State<ScreenMirrorViewerScreen> {
         const double vPadding = 16.0;
 
         final displays = ui.PlatformDispatcher.instance.displays;
-        final Size displaySize = displays.isNotEmpty
-            ? Size(displays.first.size.width / displays.first.devicePixelRatio,
-                displays.first.size.height / displays.first.devicePixelRatio)
-            : const Size(1920, 1080);
+        final Size displaySize =
+            displays.isNotEmpty
+                ? Size(
+                  displays.first.size.width / displays.first.devicePixelRatio,
+                  displays.first.size.height / displays.first.devicePixelRatio,
+                )
+                : const Size(1920, 1080);
 
         final double maxHeight = displaySize.height * 0.85;
         final double maxWidth = displaySize.width * 0.85;
@@ -102,13 +114,6 @@ class _ScreenMirrorViewerScreenState extends State<ScreenMirrorViewerScreen> {
         if (windowHeight > maxHeight) {
           windowHeight = maxHeight;
           windowWidth = (windowHeight - vPadding) * phoneRatio + hPadding;
-        }
-
-        if (mounted) {
-          setState(() {
-            _targetWidth = windowWidth - hPadding;
-            _targetHeight = windowHeight - vPadding;
-          });
         }
 
         await windowManager.setAspectRatio(windowWidth / windowHeight);
@@ -151,7 +156,8 @@ class _ScreenMirrorViewerScreenState extends State<ScreenMirrorViewerScreen> {
   }
 
   Offset? _toNormalized(Offset localPosition) {
-    final renderBox = _imageKey.currentContext?.findRenderObject() as RenderBox?;
+    final renderBox =
+        _imageKey.currentContext?.findRenderObject() as RenderBox?;
     if (renderBox == null) return null;
     final size = renderBox.size;
     return Offset(
@@ -165,50 +171,202 @@ class _ScreenMirrorViewerScreenState extends State<ScreenMirrorViewerScreen> {
     _textController.clear();
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E1E),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: _accentColor.withOpacity(0.3))),
-        title: Row(
-          children: [
-            Icon(Icons.keyboard_rounded, color: _accentColor, size: 22),
-            const SizedBox(width: 10),
-            Text('Type Text', style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.w700)),
-          ],
-        ),
-        content: TextField(
-          controller: _textController,
-          autofocus: true,
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            hintText: 'Type here...',
-            hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
-            filled: true,
-            fillColor: Colors.white.withOpacity(0.05),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+      builder:
+          (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(color: _accentColor.withOpacity(0.3)),
+            ),
+            title: Row(
+              children: [
+                Icon(Icons.keyboard_rounded, color: _accentColor, size: 22),
+                const SizedBox(width: 10),
+                Text(
+                  'Type Text',
+                  style: GoogleFonts.spaceGrotesk(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            content: TextField(
+              controller: _textController,
+              autofocus: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Type here...',
+                hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.05),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                ),
+              ),
+              onSubmitted: (value) {
+                if (value.isNotEmpty) {
+                  _controller.sendControl('type', text: value);
+                  _showInputStatus(
+                    'Sent: ${_keyboardHandler.summarizeText(value)}',
+                  );
+                  Navigator.of(ctx).pop();
+                }
+              },
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: Text(
+                  'Cancel',
+                  style: TextStyle(color: Colors.white.withOpacity(0.5)),
+                ),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _accentColor,
+                  foregroundColor: Colors.black,
+                ),
+                onPressed: () {
+                  if (_textController.text.isNotEmpty) {
+                    _controller.sendControl('type', text: _textController.text);
+                    _showInputStatus(
+                      'Sent: ${_keyboardHandler.summarizeText(_textController.text)}',
+                    );
+                  }
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('Send'),
+              ),
+            ],
           ),
-          onSubmitted: (value) {
-            if (value.isNotEmpty) {
-              _controller.sendControl('type', text: value);
-              _showInputStatus('Sent: ${_keyboardHandler.summarizeText(value)}');
-              Navigator.of(ctx).pop();
-            }
-          },
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text('Cancel', style: TextStyle(color: Colors.white.withOpacity(0.5)))),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: _accentColor, foregroundColor: Colors.black),
-            onPressed: () {
-              if (_textController.text.isNotEmpty) {
-                _controller.sendControl('type', text: _textController.text);
-                _showInputStatus('Sent: ${_keyboardHandler.summarizeText(_textController.text)}');
-              }
-              Navigator.of(ctx).pop();
-            },
-            child: const Text('Send'),
-          ),
-        ],
+    );
+  }
+
+  /// Show the Android touchpad bottom sheet for Windows mouse control.
+  void _showTouchpadSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      isDismissible: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
+      builder:
+          (ctx) => Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF0D0F1A),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(28),
+              ),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: SafeArea(
+              top: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Drag handle
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12, bottom: 4),
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  // Header row
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: _accentColor.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(
+                            Icons.mouse_rounded,
+                            color: _accentColor,
+                            size: 18,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Touchpad',
+                                style: GoogleFonts.outfit(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              Text(
+                                'Control ${widget.deviceName} mouse',
+                                style: GoogleFonts.outfit(
+                                  color: Colors.white38,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          icon: const Icon(
+                            Icons.close_rounded,
+                            color: Colors.white38,
+                            size: 20,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Touchpad widget
+                  TouchpadWidget(
+                    onMouseMove: (dx, dy) {
+                      if (widget.senderIp != null) {
+                        _controller.sendControl(
+                          'mousemove',
+                          tapX: dx,
+                          tapY: dy,
+                        );
+                      }
+                    },
+                    onLeftClick: () {
+                      if (widget.senderIp != null) {
+                        _controller.sendControl('click', tapX: 0.5, tapY: 0.5);
+                      }
+                    },
+                    onRightClick: () {
+                      if (widget.senderIp != null) {
+                        _controller.sendControl('right_click');
+                      }
+                    },
+                    onScroll: (delta) {
+                      if (widget.senderIp != null) {
+                        _controller.sendControl(
+                          'scroll',
+                          tapX: 0.5,
+                          tapY: 0.5,
+                          scrollDelta: delta,
+                        );
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
     );
   }
 
@@ -219,7 +377,12 @@ class _ScreenMirrorViewerScreenState extends State<ScreenMirrorViewerScreen> {
       body: Focus(
         focusNode: _keyboardFocusNode,
         autofocus: true,
-        onKeyEvent: (node, event) => _keyboardHandler.handleKeyEvent(event, context, _showInputStatus),
+        onKeyEvent:
+            (node, event) => _keyboardHandler.handleKeyEvent(
+              event,
+              context,
+              _showInputStatus,
+            ),
         child: Stack(
           children: [
             if (_isMirrorMode())
@@ -230,7 +393,10 @@ class _ScreenMirrorViewerScreenState extends State<ScreenMirrorViewerScreen> {
                     decoration: BoxDecoration(
                       color: const Color(0xFF101010),
                       borderRadius: BorderRadius.circular(40),
-                      border: Border.all(color: Colors.white.withOpacity(0.12), width: 1.5),
+                      border: Border.all(
+                        color: Colors.white.withOpacity(0.12),
+                        width: 1.5,
+                      ),
                     ),
                   ),
                 ),
@@ -241,56 +407,96 @@ class _ScreenMirrorViewerScreenState extends State<ScreenMirrorViewerScreen> {
                 borderRadius: BorderRadius.circular(_isMirrorMode() ? 32 : 0),
                 child: Container(
                   color: Colors.black,
-                  child: _controller.isConnecting
-                      ? ScreenMirrorConnectingView(deviceName: widget.deviceName, streamUrl: widget.streamUrl, accentColor: _accentColor)
-                      : _controller.error != null && _controller.currentFrame == null
-                          ? ScreenMirrorErrorView(error: _controller.error ?? '', onDisconnect: _disconnect, onRetry: () => _controller.connect(), accentColor: _accentColor)
+                  child:
+                      _controller.isConnecting
+                          ? ScreenMirrorConnectingView(
+                            deviceName: widget.deviceName,
+                            streamUrl: widget.streamUrl,
+                            accentColor: _accentColor,
+                          )
+                          : _controller.error != null &&
+                              _controller.currentFrame == null
+                          ? ScreenMirrorErrorView(
+                            error: _controller.error ?? '',
+                            onDisconnect: _disconnect,
+                            onRetry: () => _controller.connect(),
+                            accentColor: _accentColor,
+                          )
                           : ScreenMirrorStreamView(
-                              currentFrame: _controller.currentFrame,
-                              imageKey: _imageKey,
-                              onPointerSignal: (event) {
-                                if (event is PointerScrollEvent && widget.senderIp != null) {
-                                  final renderBox = _imageKey.currentContext?.findRenderObject() as RenderBox?;
-                                  if (renderBox != null) {
-                                    final localPos = renderBox.globalToLocal(event.position);
-                                    final norm = _toNormalized(localPos);
-                                    if (norm != null) {
-                                      _controller.sendControl('scroll', tapX: norm.dx, tapY: norm.dy, scrollDelta: event.scrollDelta.dy / 40.0);
-                                    }
+                            currentFrame: _controller.currentFrame,
+                            imageKey: _imageKey,
+                            onPointerSignal: (event) {
+                              if (event is PointerScrollEvent &&
+                                  widget.senderIp != null) {
+                                final renderBox =
+                                    _imageKey.currentContext?.findRenderObject()
+                                        as RenderBox?;
+                                if (renderBox != null) {
+                                  final localPos = renderBox.globalToLocal(
+                                    event.position,
+                                  );
+                                  final norm = _toNormalized(localPos);
+                                  if (norm != null) {
+                                    _controller.sendControl(
+                                      'scroll',
+                                      tapX: norm.dx,
+                                      tapY: norm.dy,
+                                      scrollDelta: event.scrollDelta.dy / 40.0,
+                                    );
                                   }
                                 }
-                              },
-                              onTapUp: (details) {
-                                final norm = _toNormalized(details.localPosition);
-                                if (norm != null) _controller.sendControl('click', tapX: norm.dx, tapY: norm.dy);
-                              },
-                              onLongPressStart: (details) {
-                                final norm = _toNormalized(details.localPosition);
-                                if (norm != null) _controller.sendControl('long_press', tapX: norm.dx, tapY: norm.dy);
-                              },
-                              onPanStart: (details) {
-                                final norm = _toNormalized(details.localPosition);
-                                if (norm != null) {
-                                  _dragStart = norm;
-                                  _dragCurrent = norm;
+                              }
+                            },
+                            onTapUp: (details) {
+                              final norm = _toNormalized(details.localPosition);
+                              if (norm != null) {
+                                _controller.sendControl(
+                                  'click',
+                                  tapX: norm.dx,
+                                  tapY: norm.dy,
+                                );
+                              }
+                            },
+                            onLongPressStart: (details) {
+                              final norm = _toNormalized(details.localPosition);
+                              if (norm != null) {
+                                _controller.sendControl(
+                                  'long_press',
+                                  tapX: norm.dx,
+                                  tapY: norm.dy,
+                                );
+                              }
+                            },
+                            onPanStart: (details) {
+                              final norm = _toNormalized(details.localPosition);
+                              if (norm != null) {
+                                _dragStart = norm;
+                                _dragCurrent = norm;
+                              }
+                            },
+                            onPanUpdate: (details) {
+                              final norm = _toNormalized(details.localPosition);
+                              if (norm != null) _dragCurrent = norm;
+                            },
+                            onPanEnd: (details) {
+                              if (_dragStart != null && _dragCurrent != null) {
+                                final dx = _dragCurrent!.dx - _dragStart!.dx;
+                                final dy = _dragCurrent!.dy - _dragStart!.dy;
+                                if (sqrt(dx * dx + dy * dy) > 0.05) {
+                                  _controller.sendControl(
+                                    'swipe',
+                                    tapX: _dragStart!.dx,
+                                    tapY: _dragStart!.dy,
+                                    endX: _dragCurrent!.dx,
+                                    endY: _dragCurrent!.dy,
+                                    duration: 400,
+                                  );
                                 }
-                              },
-                              onPanUpdate: (details) {
-                                final norm = _toNormalized(details.localPosition);
-                                if (norm != null) _dragCurrent = norm;
-                              },
-                              onPanEnd: (details) {
-                                if (_dragStart != null && _dragCurrent != null) {
-                                  final dx = _dragCurrent!.dx - _dragStart!.dx;
-                                  final dy = _dragCurrent!.dy - _dragStart!.dy;
-                                  if (sqrt(dx * dx + dy * dy) > 0.05) {
-                                    _controller.sendControl('swipe', tapX: _dragStart!.dx, tapY: _dragStart!.dy, endX: _dragCurrent!.dx, endY: _dragCurrent!.dy, duration: 400);
-                                  }
-                                }
-                                _dragStart = null;
-                                _dragCurrent = null;
-                              },
-                            ),
+                              }
+                              _dragStart = null;
+                              _dragCurrent = null;
+                            },
+                          ),
                 ),
               ),
             ),
@@ -300,6 +506,7 @@ class _ScreenMirrorViewerScreenState extends State<ScreenMirrorViewerScreen> {
               remoteInputEnabled: _keyboardHandler.remoteInputEnabled,
               inputStatusText: _inputStatusText,
               senderIp: widget.senderIp,
+              isAndroidViewingWindows: _isAndroidViewingWindows,
               onDisconnect: _disconnect,
               onToggleControls: () {
                 setState(() => _showControls = !_showControls);
@@ -307,12 +514,26 @@ class _ScreenMirrorViewerScreenState extends State<ScreenMirrorViewerScreen> {
               },
               onTextInputDialog: _showTextInputDialog,
               onToggleRemoteInput: () {
-                if (_keyboardHandler.remoteInputEnabled) _keyboardHandler.flushTypeBuffer();
-                setState(() => _keyboardHandler.remoteInputEnabled = !_keyboardHandler.remoteInputEnabled);
-                _showInputStatus(_keyboardHandler.remoteInputEnabled ? 'Remote input on' : 'Remote input paused');
-                if (_keyboardHandler.remoteInputEnabled) _keyboardFocusNode.requestFocus();
+                if (_keyboardHandler.remoteInputEnabled) {
+                  _keyboardHandler.flushTypeBuffer();
+                }
+                setState(
+                  () =>
+                      _keyboardHandler.remoteInputEnabled =
+                          !_keyboardHandler.remoteInputEnabled,
+                );
+                _showInputStatus(
+                  _keyboardHandler.remoteInputEnabled
+                      ? 'Remote input on'
+                      : 'Remote input paused',
+                );
+                if (_keyboardHandler.remoteInputEnabled) {
+                  _keyboardFocusNode.requestFocus();
+                }
               },
               onSendControl: (action) => _controller.sendControl(action),
+              onShowTouchpad:
+                  _isAndroidViewingWindows ? _showTouchpadSheet : null,
               accentColor: _accentColor,
             ),
           ],

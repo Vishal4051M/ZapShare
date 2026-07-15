@@ -69,7 +69,10 @@ class AudioShareHeader extends StatelessWidget {
               color: const Color(0xFF1C1C1E),
               shape: BoxShape.circle,
               border: Border.all(
-                color: isFocused ? const Color(0xFFFFD600) : Colors.white.withOpacity(0.05),
+                color:
+                    isFocused
+                        ? const Color(0xFFFFD600)
+                        : Colors.white.withOpacity(0.05),
                 width: isFocused ? 2 : 1,
               ),
             ),

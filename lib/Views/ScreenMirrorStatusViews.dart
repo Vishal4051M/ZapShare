@@ -22,12 +22,18 @@ class ScreenMirrorConnectingView extends StatelessWidget {
           SizedBox(
             width: 48,
             height: 48,
-            child: CircularProgressIndicator(color: accentColor, strokeWidth: 3),
+            child: CircularProgressIndicator(
+              color: accentColor,
+              strokeWidth: 3,
+            ),
           ),
           const SizedBox(height: 20),
           Text(
             'Connecting to $deviceName...',
-            style: GoogleFonts.spaceGrotesk(color: Colors.white70, fontSize: 16),
+            style: GoogleFonts.spaceGrotesk(
+              color: Colors.white70,
+              fontSize: 16,
+            ),
           ),
           const SizedBox(height: 8),
           Text(

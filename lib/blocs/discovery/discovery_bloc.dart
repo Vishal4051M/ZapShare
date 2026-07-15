@@ -10,10 +10,9 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
 
   List<DiscoveredDevice> _udpDevices = [];
 
-  DiscoveryBloc({
-    DeviceDiscoveryService? discoveryService,
-  }) : _discoveryService = discoveryService ?? DeviceDiscoveryService(),
-       super(DiscoveryInitial()) {
+  DiscoveryBloc({DeviceDiscoveryService? discoveryService})
+    : _discoveryService = discoveryService ?? DeviceDiscoveryService(),
+      super(DiscoveryInitial()) {
     on<StartDiscovery>(_onStartDiscovery);
     on<StopDiscovery>(_onStopDiscovery);
     on<DevicesUpdated>(_onDevicesUpdated);
@@ -45,7 +44,7 @@ class DiscoveryBloc extends Bloc<DiscoveryEvent, DiscoveryState> {
     _udpDevices = event.devices.where((d) => d.isOnline).toList();
     _emitDevices(emit);
   }
-  
+
   void _emitDevices(Emitter<DiscoveryState> emit) {
     print('🔍 Discovery Bloc: ${_udpDevices.length} UDP devices');
     emit(DiscoveryLoaded(_udpDevices));

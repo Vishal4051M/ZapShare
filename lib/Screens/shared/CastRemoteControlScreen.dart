@@ -42,6 +42,7 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
   int? _activeAudioTrack;
   int? _activeSubtitleTrack;
   bool _connected = false;
+  bool _hasStartedPlaying = false;
 
   // Phone UI state
   double _subSize = 1.0;
@@ -54,11 +55,12 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
   Player? _localAudioPlayer;
   bool _isLocalAudioActive = false;
   bool _localAudioReady = false;
+  Timer? _localAudioSyncTimer;
   Timer? _syncTimer;
   DateTime? _lastStatusUpdate;
 
   String _cleanTrackLabel(String label) {
-    if (label.length > 12) return '${label.substring(0, 10)}...';
+    // Show full label — ellipsis overflow is handled per-widget
     return label;
   }
 
@@ -66,45 +68,52 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
   void initState() {
     super.initState();
     _initStatusStream();
-    _startCastNotification();
   }
 
-  /// Start the foreground service with media controls in the notification
-  Future<void> _startCastNotification() async {
-    if (!Platform.isAndroid) return;
-    try {
-      await const MethodChannel('zapshare.saf').invokeMethod('startForegroundService', {
-        'title': 'Casting: ${widget.fileName}',
-        'content': 'Playing on ${widget.targetDeviceName}',
-      });
-    } catch (e) {
-      debugPrint('⚠️ Foreground service start warning: $e');
-    }
-  }
+
 
   void _initStatusStream() {
     _statusSub = _discoveryService.castStatusStream.listen((status) {
       if (!mounted) return;
       if (status.senderIp == widget.targetDeviceIp) {
+        if (!status.active) {
+          setState(() {
+            _connected = false;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Cast receiver disconnected')),
+          );
+          Navigator.of(context).pop();
+          return;
+        }
         setState(() {
           // Latency Compensation: account for time taken by packet to travel over network
           final now = DateTime.now().millisecondsSinceEpoch;
           final sentAt = status.timestamp ?? now; // Fallback to now if missing
           final latency = (now - sentAt) / 1000.0;
-          
+
           // Apply latency-adjusted position
           _position = status.position + (status.isPlaying ? latency : 0.0);
-          
+
           _duration = status.duration;
           _isPlaying = status.isPlaying;
           _isBuffering = status.isBuffering;
           _volume = status.volume;
-          _audioTracks = status.audioTracks ?? [];
-          _subtitleTracks = status.subtitleTracks ?? [];
+          if (status.audioTracks != null) {
+            _audioTracks = status.audioTracks!;
+          }
+          if (status.subtitleTracks != null) {
+            _subtitleTracks = status.subtitleTracks!;
+          }
           _activeAudioTrack = status.activeAudioTrack;
           _activeSubtitleTrack = status.activeSubtitleTrack;
           _connected = true;
           _lastStatusUpdate = DateTime.now();
+
+          // Foreground notification is handled persistently by DeviceDiscoveryService
+          if (!_hasStartedPlaying && _connected && status.duration > 0) {
+            _hasStartedPlaying = true;
+          }
         });
 
         // Handle Audio Routing (Local Phone Sync)
@@ -126,6 +135,10 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
           _lastStatusUpdate != null &&
           DateTime.now().difference(_lastStatusUpdate!).inSeconds > 45) {
         setState(() => _connected = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cast receiver connection lost')),
+        );
+        Navigator.of(context).pop();
       }
 
       // Ping: If no status for 12s, send a ping to TV to wake up the network link
@@ -135,33 +148,6 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
         _sendControl('ping');
       }
     });
-
-    // Handle Remote Commands from Notification
-    MethodChannel('zapshare.saf').setMethodCallHandler((call) async {
-      if (call.method == 'remoteCommand') {
-        final action = call.arguments['action'];
-        _handleRemoteAction(action);
-      }
-      return null;
-    });
-  }
-
-  void _handleRemoteAction(String? action) {
-    if (action == null) return;
-    switch (action) {
-      case 'zapshare.ACTION_PLAY':
-        _sendControl('play');
-        break;
-      case 'zapshare.ACTION_PAUSE':
-        _sendControl('pause');
-        break;
-      case 'zapshare.ACTION_FORWARD':
-        _sendControl('seek', seekPosition: _position + 30);
-        break;
-      case 'zapshare.ACTION_REWIND':
-        _sendControl('seek', seekPosition: _position - 30);
-        break;
-    }
   }
 
   @override
@@ -169,8 +155,6 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
     _statusSub?.cancel();
     _syncTimer?.cancel();
     _stopLocalAudio();
-    // Clear the MethodChannel handler to prevent stale callbacks
-    MethodChannel('zapshare.saf').setMethodCallHandler(null);
     super.dispose();
   }
 
@@ -211,11 +195,17 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
 
       await player.seek(Duration(milliseconds: (position * 1000).toInt()));
 
-      if (_isPlaying) await player.play();
+      // Wait briefly for the demuxer to buffer before starting playback.
+      // This prevents audio running ahead of video on initial sync.
+      await Future.delayed(const Duration(milliseconds: 600));
+
+      if (_isPlaying && mounted && _isLocalAudioActive) await player.play();
       _localAudioReady = true;
 
       // Local audio specific sync loop (independent of connection watchdog)
-      Timer.periodic(const Duration(milliseconds: 500), (t) {
+      _localAudioSyncTimer = Timer.periodic(const Duration(milliseconds: 500), (
+        t,
+      ) {
         if (!mounted || !_isLocalAudioActive) {
           t.cancel();
           return;
@@ -232,23 +222,28 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
     final player = _localAudioPlayer;
     if (player == null || !_localAudioReady) return;
 
+    if (_isBuffering || !_isPlaying) {
+      if (player.state.playing) {
+        player.pause();
+      }
+      return;
+    }
+
     // Extrapolate TV position
     final drift =
         _lastStatusUpdate != null
             ? DateTime.now().difference(_lastStatusUpdate!).inMilliseconds /
                 1000.0
             : 0.0;
-    final expectedPos = _isPlaying ? (_position + drift) : _position;
+    final expectedPos = _position + drift;
     final currentPos = player.state.position.inMilliseconds / 1000.0;
 
     final diff = currentPos - expectedPos; // local - remote
     final absDiff = diff.abs();
 
     // Play/Pause sync (with sanity check)
-    if (_isPlaying && !player.state.playing && !player.state.buffering) {
+    if (!player.state.playing && !player.state.buffering) {
       player.play();
-    } else if (!_isPlaying && player.state.playing) {
-      player.pause();
     }
 
     // Robust Jitter-free Drift correction
@@ -273,6 +268,8 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
 
   void _stopLocalAudio() {
     _syncTimer?.cancel();
+    _localAudioSyncTimer?.cancel();
+    _localAudioSyncTimer = null;
     _localAudioPlayer?.dispose();
     _localAudioPlayer = null;
     _isLocalAudioActive = false;
@@ -346,11 +343,118 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
     return '$m:${s.toString().padLeft(2, '0')}';
   }
 
+  Widget _buildLoadingView(Color accentColor, Color secondaryColor) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: accentColor.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: accentColor.withValues(alpha: 0.15),
+                    blurRadius: 30,
+                    spreadRadius: 5,
+                  ),
+                ],
+              ),
+              child: Icon(
+                Icons.cast_connected_rounded,
+                color: accentColor,
+                size: 48,
+              ),
+            ),
+            const SizedBox(height: 40),
+            Text(
+              'Connecting & Loading...',
+              style: GoogleFonts.outfit(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Starting playback on ${widget.targetDeviceName}',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.outfit(fontSize: 14, color: Colors.white70),
+            ),
+            const SizedBox(height: 32),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: secondaryColor.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.movie_rounded, color: Colors.white54, size: 24),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      widget.fileName,
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 48),
+            const SizedBox(
+              width: 32,
+              height: 32,
+              child: CircularProgressIndicator(
+                strokeWidth: 3,
+                color: Color(0xFFFFD600),
+              ),
+            ),
+            const SizedBox(height: 64),
+            OutlinedButton.icon(
+              onPressed: () {
+                _sendControl('stop');
+                _discoveryService.stopCastSession();
+                Navigator.pop(context);
+              },
+              icon: const Icon(Icons.close_rounded, size: 18),
+              label: Text(
+                'Cancel Cast',
+                style: GoogleFonts.outfit(fontWeight: FontWeight.w600),
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white70,
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     const accentColor = Color(0xFFFFD600);
-    const primaryBg = Color(0xFF0D0F1A);
-    const secondaryColor = Color(0xFF1F2232);
+    const primaryBg = Colors.black;
+    const secondaryColor = Color(0xFF1C1C1E);
 
     return Scaffold(
       backgroundColor: primaryBg,
@@ -374,27 +478,30 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
               children: [
                 _buildModernAppBar(accentColor),
                 Expanded(
-                  child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Column(
-                      children: [
-                        const SizedBox(height: 12),
-                        _buildMediaCard(accentColor, secondaryColor),
-                        const SizedBox(height: 32),
-                        _buildSeekSection(accentColor),
-                        const SizedBox(height: 48),
-                        _buildMainControls(accentColor),
-                        const SizedBox(height: 48),
-                        _buildVolumeSection(accentColor),
-                        const SizedBox(height: 32),
-                        _buildTrackSelection(accentColor),
-                        const SizedBox(height: 32),
-                        _buildBottomActions(secondaryColor),
-                        const SizedBox(height: 40),
-                      ],
-                    ),
-                  ),
+                  child:
+                      _hasStartedPlaying
+                          ? SingleChildScrollView(
+                            physics: const BouncingScrollPhysics(),
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Column(
+                              children: [
+                                const SizedBox(height: 12),
+                                _buildMediaCard(accentColor, secondaryColor),
+                                const SizedBox(height: 32),
+                                _buildSeekSection(accentColor),
+                                const SizedBox(height: 48),
+                                _buildMainControls(accentColor),
+                                const SizedBox(height: 48),
+                                _buildVolumeSection(accentColor),
+                                const SizedBox(height: 32),
+                                _buildTrackSelection(accentColor),
+                                const SizedBox(height: 32),
+                                _buildBottomActions(secondaryColor),
+                                const SizedBox(height: 40),
+                              ],
+                            ),
+                          )
+                          : _buildLoadingView(accentColor, secondaryColor),
                 ),
               ],
             ),
@@ -481,6 +588,7 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
     return GestureDetector(
       onTap: () {
         _sendControl('stop');
+        _discoveryService.stopCastSession();
         Navigator.pop(context);
       },
       child: Container(
@@ -512,23 +620,20 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
         child: Stack(
           children: [
             Positioned.fill(
-              child: Opacity(
-                opacity: 0.4,
-                child: Image.network(
-                  'https://images.unsplash.com/photo-1478720568477-152d9b164e26?q=80&w=600&auto=format&fit=crop',
-                  fit: BoxFit.cover,
+              child: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Color(0xFF1C1C1E), Color(0xFF0F0F16)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
                 ),
-              ),
-            ),
-            Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.bottomCenter,
-                  end: Alignment.topCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: 0.8),
-                    Colors.transparent,
-                  ],
+                child: Center(
+                  child: Icon(
+                    Icons.movie_filter_rounded,
+                    color: const Color(0xFFFFD600).withValues(alpha: 0.08),
+                    size: 80,
+                  ),
                 ),
               ),
             ),
@@ -578,6 +683,47 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
   }
 
   Widget _buildSeekSection(Color accentColor) {
+    if (_duration <= 0) {
+      return Column(
+        children: [
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 4,
+            child: ClipRRect(
+              borderRadius: const BorderRadius.all(Radius.circular(2)),
+              child: LinearProgressIndicator(
+                backgroundColor: Colors.white10,
+                color: accentColor,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: accentColor,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Connecting to TV & Loading Media...',
+                style: GoogleFonts.outfit(
+                  color: Colors.white70,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
     return Column(
       children: [
         SliderTheme(
@@ -644,7 +790,12 @@ class _CastRemoteControlScreenState extends State<CastRemoteControlScreen> {
 
   Widget _buildPlayPauseBtn(Color accentColor) {
     return GestureDetector(
-      onTap: () => _sendControl(_isPlaying ? 'pause' : 'play'),
+      onTap: () {
+        final wasPlaying = _isPlaying;
+        // Optimistic update — icon changes instantly without waiting for status
+        setState(() => _isPlaying = !wasPlaying);
+        _sendControl(wasPlaying ? 'pause' : 'play');
+      },
       child: Container(
         width: 84,
         height: 84,

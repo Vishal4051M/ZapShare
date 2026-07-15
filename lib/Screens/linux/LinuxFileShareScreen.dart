@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
@@ -12,8 +13,6 @@ import '../../services/device_discovery_service.dart';
 import '../../widgets/CustomAvatarWidget.dart';
 import '../../widgets/SearchPulseWidget.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-
 
 // --- Shared Components ---
 
@@ -151,10 +150,10 @@ class _LinuxFileShareScreenState extends State<LinuxFileShareScreen> {
   String? _customAvatar;
 
   Future<void> _loadAvatar() async {
-    final prefs = await SharedPreferences.getInstance();
+    final avatar = await CustomAvatarWidget.getEffectiveLocalAvatar();
     if (mounted) {
       setState(() {
-        _customAvatar = prefs.getString('custom_avatar');
+        _customAvatar = avatar;
       });
     }
   }
@@ -250,22 +249,16 @@ class _LinuxFileShareScreenState extends State<LinuxFileShareScreen> {
 
     setState(() => _loading = true);
     try {
-      final dir = Directory(folderPath);
-      final files =
-          await dir
-              .list(recursive: true, followLinks: false)
-              .where((e) => e is File)
-              .toList();
-      final newFiles =
-          files
-              .map(
-                (e) => PlatformFile(
-                  name: e.path.split(Platform.pathSeparator).last,
-                  path: e.path,
-                  size: File(e.path).lengthSync(),
-                ),
-              )
-              .toList();
+      final List<Map<String, dynamic>> listedFiles = await compute(_listDirectoryFilesSync, folderPath);
+      final newFiles = listedFiles
+          .map(
+            (f) => PlatformFile(
+              name: f['name'] as String,
+              path: f['path'] as String,
+              size: f['size'] as int,
+            ),
+          )
+          .toList();
 
       setState(() {
         _files.addAll(newFiles);
@@ -618,36 +611,52 @@ class _LinuxFileShareScreenState extends State<LinuxFileShareScreen> {
     );
   }
 
-  void _handleTcpClient(Socket client) {
+  Future<void> _handleTcpClient(Socket client) async {
     final clientAddress = client.remoteAddress.address;
     print('📱 TCP: Client connected from $clientAddress');
 
-    Completer<void>? pendingAck;
     bool requestProcessed = false;
     bool waitingForAck = false;
     int currentFileIndex = -1;
     final buffer = <int>[];
 
-    client.listen(
-      (chunk) async {
+    try {
+      await for (final chunk in client) {
         if (waitingForAck) {
           try {
             final msg = utf8.decode(chunk).trim();
             if (msg.contains('ACK')) {
-              print('🛰️ [TCP] Received ACK confirmation for file $currentFileIndex');
-              pendingAck?.complete();
-              waitingForAck = false;
+              print(
+                '🛰️ [TCP] Received ACK confirmation for file $currentFileIndex',
+              );
+              if (mounted) {
+                setState(() {
+                  if (currentFileIndex < _downloadCounts.length) {
+                    _downloadCounts[currentFileIndex]++;
+                  }
+                });
+
+                final count = _downloadCounts[currentFileIndex];
+                _showStatus(
+                  message: "$count client${count == 1 ? '' : 's'} sent",
+                  subtitle: "${_files[currentFileIndex].name} completed",
+                  icon: Icons.check_circle_rounded,
+                  isSuccess: true,
+                  autoDismiss: const Duration(seconds: 5),
+                );
+              }
               requestProcessed = true;
+              break; // Success, break out to close the socket
             }
           } catch (_) {}
-          return;
+          continue;
         }
 
-        if (requestProcessed) return;
+        if (requestProcessed) break;
         buffer.addAll(chunk);
-        if (buffer.isEmpty) return;
+        if (buffer.isEmpty) continue;
 
-        // Check if it's a line-based text command (starts with ASCII chars, e.g. 'L' for LIST, 'G' for GET, 'A' for ACK)
+        // Check if it's a line-based text command
         if (buffer[0] >= 32 && buffer[0] < 127) {
           if (buffer.contains(10)) {
             final lineBytes = buffer.takeWhile((b) => b != 10).toList();
@@ -656,12 +665,6 @@ class _LinuxFileShareScreenState extends State<LinuxFileShareScreen> {
 
             final line = utf8.decode(lineBytes).trim();
             print('📥 TCP Line: Received command: $line');
-
-            if (line == 'ACK') {
-              print('✅ Received ACK');
-              pendingAck?.complete();
-              return;
-            }
 
             if (line == 'LIST') {
               final list = List.generate(
@@ -676,6 +679,7 @@ class _LinuxFileShareScreenState extends State<LinuxFileShareScreen> {
               client.writeln(jsonEncode(list));
               await client.flush();
               requestProcessed = true;
+              break;
             } else if (line.startsWith('GET ')) {
               final indexStr = line.substring(4);
               final index = int.tryParse(indexStr);
@@ -687,99 +691,30 @@ class _LinuxFileShareScreenState extends State<LinuxFileShareScreen> {
                 client.writeln(fileSize.toString());
                 await client.flush();
 
-                int bytesSent = 0;
-                DateTime lastUpdate = DateTime.now();
-
-                pendingAck = Completer<void>();
-                waitingForAck = true;
                 currentFileIndex = index;
+                waitingForAck = true;
 
                 // Setup ACK Timeout
                 Future.delayed(const Duration(seconds: 15), () {
                   if (waitingForAck) {
-                    print('⚠️ TCP: ACK Timeout for file $currentFileIndex. Closing connection.');
-                    try { client.destroy(); } catch (_) {}
+                    print(
+                      '⚠️ TCP: ACK Timeout for file $currentFileIndex. Closing connection.',
+                    );
+                    try {
+                      client.destroy();
+                    } catch (_) {}
                   }
                 });
 
-                RandomAccessFile? raf;
-                try {
-                  raf = await fsFile.open();
-                  const int chunkSize = 1024 * 1024; // 1MB chunks
-
-                  while (bytesSent < fileSize && _isSharing) {
-                    final chunk = await raf.read(chunkSize);
-                    if (chunk.isEmpty) break;
-
-                    client.add(chunk);
-                    bytesSent += chunk.length;
-
-                    if (bytesSent % (2 * 1024 * 1024) == 0) {
-                      await client.flush();
-                    }
-
-                    final now = DateTime.now();
-                    if (now.difference(lastUpdate).inMilliseconds > 50) {
-                      lastUpdate = now;
-                      if (mounted) {
-                        setState(() {
-                          if (index < _progressList.length) {
-                            _progressList[index] = bytesSent / fileSize;
-                          }
-                        });
-                      }
-                    }
-                  }
-
-                  if (mounted) {
-                    setState(() {
-                      if (index < _progressList.length) {
-                        _progressList[index] = 1.0;
-                      }
-                    });
-                  }
-
-                  print('⏳ Waiting for ACK...');
-                  try {
-                    await pendingAck!.future.timeout(
-                      const Duration(seconds: 15),
-                      onTimeout: () => print('⚠️ ACK timed out'),
-                    );
-
-                    if (mounted) {
-                      setState(() {
-                        if (index < _downloadCounts.length) {
-                          _downloadCounts[index]++;
-                        }
-                      });
-
-                      final count = _downloadCounts[index];
-                      _showStatus(
-                        message: "$count client${count == 1 ? '' : 's'} sent",
-                        subtitle: "${_files[index].name} completed",
-                        icon: Icons.check_circle_rounded,
-                        isSuccess: true,
-                        autoDismiss: const Duration(seconds: 5),
-                      );
-                    }
-                  } catch (e) {
-                    print('Error waiting for ACK: $e');
-                  }
-                } catch (e) {
-                  print("Error sending file: $e");
-                } finally {
-                  await raf?.close();
-                  try {
-                    await client.flush();
-                    await client.close();
-                  } catch (_) {
-                    try { client.destroy(); } catch (_) {}
-                  }
-                }
+                await _sendFileDataHelper(client, fsFile, fileSize, index);
+                buffer.clear();
+              } else {
+                print('❌ TCP Text: Invalid index: $indexStr');
+                break;
               }
             }
           }
-          return;
+          continue;
         }
 
         // Binary Protocol: starts with 4-byte big-endian file index
@@ -795,130 +730,114 @@ class _LinuxFileShareScreenState extends State<LinuxFileShareScreen> {
 
           if (index < 0 || index >= _files.length) {
             print('❌ TCP Binary: Invalid file index: $index');
-            try { client.destroy(); } catch (_) {}
-            return;
+            break;
           }
 
           final file = _files[index];
           final fsFile = File(file.path!);
           final fileSize = file.size;
 
-          pendingAck = Completer<void>();
-          waitingForAck = true;
           currentFileIndex = index;
+          waitingForAck = true;
 
           // Setup ACK Timeout
           Future.delayed(const Duration(seconds: 15), () {
             if (waitingForAck) {
-              print('⚠️ TCP: ACK Timeout for binary file $currentFileIndex. Closing connection.');
-              try { client.destroy(); } catch (_) {}
+              print(
+                '⚠️ TCP: ACK Timeout for binary file $currentFileIndex. Closing connection.',
+              );
+              try {
+                client.destroy();
+              } catch (_) {}
             }
           });
 
-          RandomAccessFile? raf;
-          try {
-            final metadata = jsonEncode({
-              'fileName': file.name,
-              'fileSize': fileSize,
-              'fileIndex': index,
+          // Send metadata
+          final metadata = jsonEncode({
+            'fileName': file.name,
+            'fileSize': fileSize,
+            'fileIndex': index,
+          });
+          final metadataBytes = utf8.encode(metadata);
+          final metadataLength = metadataBytes.length;
+
+          client.add([
+            (metadataLength >> 24) & 0xFF,
+            (metadataLength >> 16) & 0xFF,
+            (metadataLength >> 8) & 0xFF,
+            metadataLength & 0xFF,
+          ]);
+          client.add(metadataBytes);
+          await client.flush();
+
+          await _sendFileDataHelper(client, fsFile, fileSize, index);
+          buffer.clear();
+        }
+      }
+    } catch (e) {
+      print('❌ TCP: Error handling client: $e');
+    } finally {
+      try {
+        await client.flush();
+        await client.close();
+      } catch (_) {
+        try {
+          client.destroy();
+        } catch (_) {}
+      }
+      print('🔌 TCP client disconnected: $clientAddress');
+    }
+  }
+
+  Future<void> _sendFileDataHelper(
+    Socket client,
+    File fsFile,
+    int fileSize,
+    int index,
+  ) async {
+    RandomAccessFile? raf;
+    try {
+      raf = await fsFile.open();
+      const int chunkSize = 1024 * 1024; // 1MB chunks
+      int bytesSent = 0;
+      DateTime lastUpdate = DateTime.now();
+
+      while (bytesSent < fileSize && _isSharing) {
+        final chunk = await raf.read(chunkSize);
+        if (chunk.isEmpty) break;
+
+        client.add(chunk);
+        bytesSent += chunk.length;
+
+        if (bytesSent % (2 * 1024 * 1024) == 0) {
+          await client.flush();
+        }
+
+        final now = DateTime.now();
+        if (now.difference(lastUpdate).inMilliseconds > 50) {
+          lastUpdate = now;
+          if (mounted) {
+            setState(() {
+              if (index < _progressList.length) {
+                _progressList[index] = bytesSent / fileSize;
+              }
             });
-            final metadataBytes = utf8.encode(metadata);
-            final metadataLength = metadataBytes.length;
-
-            client.add([
-              (metadataLength >> 24) & 0xFF,
-              (metadataLength >> 16) & 0xFF,
-              (metadataLength >> 8) & 0xFF,
-              metadataLength & 0xFF,
-            ]);
-            client.add(metadataBytes);
-            await client.flush();
-
-            raf = await fsFile.open();
-            const int chunkSize = 1024 * 1024;
-            int bytesSent = 0;
-            DateTime lastUpdate = DateTime.now();
-
-            while (bytesSent < fileSize && _isSharing) {
-              final chunk = await raf.read(chunkSize);
-              if (chunk.isEmpty) break;
-
-              client.add(chunk);
-              bytesSent += chunk.length;
-
-              if (bytesSent % (2 * 1024 * 1024) == 0) {
-                await client.flush();
-              }
-
-              final now = DateTime.now();
-              if (now.difference(lastUpdate).inMilliseconds > 50) {
-                lastUpdate = now;
-                if (mounted) {
-                  setState(() {
-                    if (index < _progressList.length) {
-                      _progressList[index] = bytesSent / fileSize;
-                    }
-                  });
-                }
-              }
-            }
-
-            if (mounted) {
-              setState(() {
-                if (index < _progressList.length) {
-                  _progressList[index] = 1.0;
-                }
-              });
-            }
-
-            print('⏳ Waiting for ACK...');
-            try {
-              await pendingAck!.future.timeout(
-                const Duration(seconds: 15),
-                onTimeout: () => print('⚠️ ACK timed out'),
-              );
-
-              if (mounted) {
-                setState(() {
-                  if (index < _downloadCounts.length) {
-                    _downloadCounts[index]++;
-                  }
-                });
-
-                final count = _downloadCounts[index];
-                _showStatus(
-                  message: "$count client${count == 1 ? '' : 's'} sent",
-                  subtitle: "${_files[index].name} completed",
-                  icon: Icons.check_circle_rounded,
-                  isSuccess: true,
-                  autoDismiss: const Duration(seconds: 5),
-                );
-              }
-            } catch (e) {
-              print('Error waiting for ACK: $e');
-            }
-          } catch (e) {
-            print("Error sending file: $e");
-          } finally {
-            await raf?.close();
-            try {
-              await client.flush();
-              await client.close();
-            } catch (_) {
-              try { client.destroy(); } catch (_) {}
-            }
           }
         }
-      },
-      onError: (e) {
-        print('❌ TCP socket error: $e');
-        try { client.destroy(); } catch (_) {}
-      },
-      onDone: () {
-        print('🔌 TCP client disconnected: $clientAddress');
-      },
-      cancelOnError: false,
-    );
+      }
+
+      if (mounted) {
+        setState(() {
+          if (index < _progressList.length) {
+            _progressList[index] = 1.0;
+          }
+        });
+      }
+    } catch (e) {
+      print("Error sending file data: $e");
+    } finally {
+      await raf?.close();
+    }
   }
 
   void _initDeviceDiscovery() async {
@@ -1189,11 +1108,7 @@ class _LinuxFileShareScreenState extends State<LinuxFileShareScreen> {
 
         final Widget content = Stack(
           children: [
-            Positioned.fill(
-              child: SearchPulseWidget(
-                color: Colors.white,
-              ),
-            ),
+            Positioned.fill(child: SearchPulseWidget(color: Colors.white)),
 
             // Back Button (Top-Left)
             Positioned(
@@ -1390,17 +1305,18 @@ class _LinuxFileShareScreenState extends State<LinuxFileShareScreen> {
                       ],
                       border: Border.all(color: Colors.white, width: 2),
                     ),
-                    child: _customAvatar != null
-                        ? CustomAvatarWidget(
-                            avatarId: _customAvatar,
-                            size: 80,
-                            useBackground: true,
-                          )
-                        : Icon(
-                            Icons.computer_rounded,
-                            color: const Color(0xFFFFD600),
-                            size: 40,
-                          ),
+                    child:
+                        _customAvatar != null
+                            ? CustomAvatarWidget(
+                              avatarId: _customAvatar,
+                              size: 80,
+                              useBackground: true,
+                            )
+                            : Icon(
+                              Icons.computer_rounded,
+                              color: const Color(0xFFFFD600),
+                              size: 40,
+                            ),
                   ),
                   const SizedBox(height: 12),
                   ShimmerLoading(
@@ -2188,4 +2104,41 @@ class _SlidingGradientTransform extends GradientTransform {
   Matrix4? transform(Rect bounds, {TextDirection? textDirection}) {
     return Matrix4.translationValues(bounds.width * percent, 0.0, 0.0);
   }
+}
+
+List<Map<String, dynamic>> _listDirectoryFilesSync(String dirPath) {
+  final dir = Directory(dirPath);
+  final List<Map<String, dynamic>> results = [];
+  if (!dir.existsSync()) return results;
+
+  void traverse(Directory currentDir) {
+    try {
+      final entities = currentDir.listSync(recursive: false, followLinks: false);
+      for (final entity in entities) {
+        final name = entity.path.split(Platform.pathSeparator).last;
+        if (name.startsWith('.')) {
+          continue;
+        }
+        if (entity is Directory) {
+          traverse(entity);
+        } else if (entity is File) {
+          try {
+            final size = entity.lengthSync();
+            results.add({
+              'path': entity.path,
+              'name': name,
+              'size': size,
+            });
+          } catch (_) {
+            // Skip files that can't be read or sized
+          }
+        }
+      }
+    } catch (_) {
+      // Skip directories we don't have access to
+    }
+  }
+
+  traverse(dir);
+  return results;
 }

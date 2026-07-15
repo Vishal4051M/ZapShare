@@ -1,39 +1,59 @@
 import 'package:encrypt/encrypt.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class EncryptionService {
-  // Use a fixed Key and IV for deterministic encryption (needed for DB deduplication)
-  // Use a fixed Key and IV for deterministic encryption (needed for DB deduplication)
-  static Encrypter get _encrypter {
-    final keyString =
-        dotenv.env['ENCRYPTION_KEY'] ?? 'MySuperSecretKeyForZapShareApp32';
-    final ivString = dotenv.env['ENCRYPTION_IV'] ?? 'ZapShareFixedIV1';
+  static String _deriveKey(String userId) {
+    const salt = 'MySuperSecretKeyForZapShareApp32';
+    if (userId.isEmpty) return salt;
 
+    final derived = List<int>.generate(32, (i) {
+      final saltChar = salt.codeUnitAt(i);
+      final userChar = userId.codeUnitAt(i % userId.length);
+      return 32 + ((saltChar ^ userChar) % 95);
+    });
+    return String.fromCharCodes(derived);
+  }
+
+  static String _deriveIv(String userId) {
+    const salt = 'ZapShareFixedIV1';
+    if (userId.isEmpty) return salt;
+
+    final derived = List<int>.generate(16, (i) {
+      final saltChar = salt.codeUnitAt(i);
+      final userChar = userId.codeUnitAt(i % userId.length);
+      return 32 + ((saltChar ^ userChar) % 95);
+    });
+    return String.fromCharCodes(derived);
+  }
+
+  static Encrypter _getEncrypter(String userId) {
+    final keyString = _deriveKey(userId);
     final key = Key.fromUtf8(keyString);
     return Encrypter(AES(key, mode: AESMode.cbc));
   }
 
-  static IV get _iv {
-    final ivString = dotenv.env['ENCRYPTION_IV'] ?? 'ZapShareFixedIV1';
+  static IV _getIv(String userId) {
+    final ivString = _deriveIv(userId);
     return IV.fromUtf8(ivString);
   }
 
-  static String encrypt(String plainText) {
+  static String encrypt(String plainText, [String? userId]) {
     if (plainText.isEmpty) return plainText;
     try {
-      final encrypted = _encrypter.encrypt(plainText, iv: _iv);
+      final encrypter = _getEncrypter(userId ?? '');
+      final iv = _getIv(userId ?? '');
+      final encrypted = encrypter.encrypt(plainText, iv: iv);
       return encrypted.base64;
     } catch (e) {
       return plainText; // Fallback
     }
   }
 
-  static String decrypt(String encryptedText) {
+  static String decrypt(String encryptedText, [String? userId]) {
     if (encryptedText.isEmpty) return encryptedText;
     try {
-      // Check if it looks like base64 (very basic check)
-      // Or just try to decrypt
-      final decrypted = _encrypter.decrypt64(encryptedText, iv: _iv);
+      final encrypter = _getEncrypter(userId ?? '');
+      final iv = _getIv(userId ?? '');
+      final decrypted = encrypter.decrypt64(encryptedText, iv: iv);
       return decrypted;
     } catch (e) {
       // If decryption fails (e.g. old plain text data), return generic text or original

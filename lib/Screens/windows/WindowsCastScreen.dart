@@ -1,13 +1,19 @@
 import 'dart:io';
+import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:network_info_plus/network_info_plus.dart';
-import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/device_discovery_service.dart';
 import '../../widgets/cast_remote_control.dart';
+import '../../widgets/CustomAvatarWidget.dart';
+import '../../widgets/SearchPulseWidget.dart';
 import 'LocalPlayerDebugScreen.dart';
+import 'WindowsScreenMirrorScreen.dart';
+
 /// Hub screen showing casting entry points (video, phone cast).
 class WindowsCastScreen extends StatelessWidget {
   final File? initialFile;
@@ -15,7 +21,30 @@ class WindowsCastScreen extends StatelessWidget {
 
   void _open(BuildContext context, Widget screen) {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => screen),
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) => screen,
+        transitionDuration: const Duration(milliseconds: 350),
+        reverseTransitionDuration: const Duration(milliseconds: 300),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          const begin = Offset(1.0, 0.0);
+          const end = Offset.zero;
+          const curve = Curves.easeOutCubic;
+          final tween = Tween(
+            begin: begin,
+            end: end,
+          ).chain(CurveTween(curve: curve));
+          final fadeTween = Tween<double>(begin: 0.0, end: 1.0).chain(
+            CurveTween(curve: const Interval(0.0, 0.6, curve: Curves.easeIn)),
+          );
+          return SlideTransition(
+            position: animation.drive(tween),
+            child: FadeTransition(
+              opacity: animation.drive(fadeTween),
+              child: child,
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -27,7 +56,10 @@ class WindowsCastScreen extends StatelessWidget {
         backgroundColor: const Color(0xFFFAFAFA),
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.black),
+          icon: const Icon(
+            Icons.arrow_back_ios_new_rounded,
+            color: Colors.black,
+          ),
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
@@ -52,17 +84,19 @@ class WindowsCastScreen extends StatelessWidget {
                   subtitle: 'Cast local video with subtitles',
                   icon: Icons.cast_rounded,
                   color: const Color(0xFF2C2C2E),
-                  onTap: () => _open(
-                    context,
-                    WindowsVideoCastScreen(initialFile: initialFile),
-                  ),
+                  onTap:
+                      () => _open(
+                        context,
+                        WindowsVideoCastScreen(initialFile: initialFile),
+                      ),
                 ),
                 _CastTile(
-                  title: 'Phone Cast',
-                  subtitle: 'Available on Android devices only',
-                  icon: Icons.smartphone_rounded,
-                  color: Colors.grey,
-                  disabled: true,
+                  title: 'Desktop Mirroring',
+                  subtitle: 'Cast Windows screen to Android device',
+                  icon: Icons.laptop_chromebook_rounded,
+                  color: const Color(0xFFFFD600),
+                  onTap:
+                      () => _open(context, const WindowsScreenMirrorScreen()),
                 ),
               ];
 
@@ -138,7 +172,10 @@ class _CastTile extends StatelessWidget {
                   color: disabled ? Colors.grey.shade400 : color,
                   shape: BoxShape.circle,
                 ),
-                child: Icon(icon, color: disabled ? Colors.white70 : Colors.black87),
+                child: Icon(
+                  icon,
+                  color: disabled ? Colors.white70 : Colors.black87,
+                ),
               ),
               const SizedBox(height: 14),
               Text(
@@ -170,7 +207,10 @@ class _CastTile extends StatelessWidget {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  Icon(Icons.arrow_forward_rounded, color: textColor.withOpacity(0.8)),
+                  Icon(
+                    Icons.arrow_forward_rounded,
+                    color: textColor.withOpacity(0.8),
+                  ),
                 ],
               ),
             ],
@@ -189,8 +229,7 @@ class WindowsVideoCastScreen extends StatefulWidget {
   State<WindowsVideoCastScreen> createState() => _WindowsVideoCastScreenState();
 }
 
-class _WindowsVideoCastScreenState extends State<WindowsVideoCastScreen>
-    with SingleTickerProviderStateMixin {
+class _WindowsVideoCastScreenState extends State<WindowsVideoCastScreen> {
   final DeviceDiscoveryService _discoveryService = DeviceDiscoveryService();
   final NetworkInfo _networkInfo = NetworkInfo();
 
@@ -200,8 +239,7 @@ class _WindowsVideoCastScreenState extends State<WindowsVideoCastScreen>
   File? _selectedSubtitle;
   HttpServer? _server;
   String? _serverUrl;
-
-  late AnimationController _scanController;
+  String? _customAvatar;
 
   // Cast session state
   String? _castTargetIp;
@@ -215,13 +253,19 @@ class _WindowsVideoCastScreenState extends State<WindowsVideoCastScreen>
   bool _statusIsError = false;
   Timer? _statusDismissTimer;
 
+  Future<void> _loadAvatar() async {
+    final avatar = await CustomAvatarWidget.getEffectiveLocalAvatar();
+    if (mounted) {
+      setState(() {
+        _customAvatar = avatar;
+      });
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    _scanController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    )..repeat();
+    _loadAvatar();
 
     // Handle initial file
     if (widget.initialFile != null) {
@@ -585,10 +629,262 @@ class _WindowsVideoCastScreenState extends State<WindowsVideoCastScreen>
     }
   }
 
+  String _getDeviceEmoji(String name, {String? platform}) {
+    if (platform != null) {
+      final p = platform.toLowerCase();
+      if (p.contains('ios') || p.contains('iphone') || p.contains('ipad')) {
+        return '📱';
+      } else if (p.contains('mac')) {
+        return '💻';
+      } else if (p.contains('android')) {
+        return '🤖';
+      } else if (p.contains('windows') || p.contains('pc')) {
+        return '💻';
+      }
+    }
+
+    name = name.toLowerCase();
+    if (name.contains('iphone') ||
+        name.contains('ipad') ||
+        name.contains('ios')) {
+      return '📱';
+    } else if (name.contains('mac') || name.contains('apple')) {
+      return '💻';
+    } else if (name.contains('windows') ||
+        name.contains('pc') ||
+        name.contains('desktop')) {
+      return '💻';
+    } else if (name.contains('android') ||
+        name.contains('phone') ||
+        name.contains('pixel') ||
+        name.contains('samsung')) {
+      return '🤖';
+    }
+    return '🔌';
+  }
+
+  Widget _buildDeviceNode(DiscoveredDevice device) {
+    String name = device.deviceName;
+    String? platform = device.platform;
+    String? userName = device.userName;
+    String displayName = userName ?? name;
+    bool isTarget = _castTargetIp == device.ipAddress;
+
+    String emoji = '📱';
+    if (device.avatarUrl != null) {
+      bool found = false;
+      for (final cat in CustomAvatarWidget.categories.values) {
+        for (final item in cat) {
+          if (item['id'] == device.avatarUrl) {
+            emoji = item['emoji'] as String;
+            found = true;
+            break;
+          }
+        }
+        if (found) break;
+      }
+      if (!found) {
+        emoji = device.avatarUrl!;
+      }
+    } else {
+      emoji = _getDeviceEmoji(name, platform: platform);
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          HapticFeedback.lightImpact();
+          _castToDevice(device);
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(4.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1C1C1E),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 8,
+                      offset: const Offset(0, 4),
+                    ),
+                    if (isTarget)
+                      const BoxShadow(
+                        color: Colors.greenAccent,
+                        blurRadius: 12,
+                        spreadRadius: 2,
+                      ),
+                  ],
+                  border: Border.all(
+                    color: isTarget ? Colors.greenAccent : Colors.white,
+                    width: 2,
+                  ),
+                ),
+                child: Center(
+                  child: DefaultTextStyle(
+                    style: const TextStyle(),
+                    child: Text(
+                      emoji,
+                      style: const TextStyle(
+                        fontSize: 30,
+                        fontFamily: 'Segoe UI Emoji',
+                        fontFamilyFallback: [
+                          'Apple Color Emoji',
+                          'Segoe UI Emoji',
+                          'Noto Color Emoji',
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Container(
+                constraints: const BoxConstraints(maxWidth: 70),
+                child: Text(
+                  displayName.length > 8
+                      ? '${displayName.substring(0, 8)}...'
+                      : displayName,
+                  style: GoogleFonts.outfit(
+                    color: Colors.black87,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDiscoveryStatusLabel(int deviceCount) {
+    String text;
+    IconData icon;
+    bool isLoading = false;
+
+    if (_isScanning && deviceCount == 0) {
+      text = 'Scanning...';
+      icon = Icons.radar_rounded;
+      isLoading = true;
+    } else if (deviceCount > 0) {
+      text = '$deviceCount device${deviceCount > 1 ? 's' : ''} nearby';
+      icon = Icons.check_circle_outline_rounded;
+    } else {
+      text = 'No devices nearby';
+      icon = Icons.device_unknown_rounded;
+    }
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2C2C2E).withOpacity(0.08),
+        border: Border.all(color: const Color(0xFF2C2C2E).withOpacity(0.15)),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isLoading)
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF2C2C2E)),
+              ),
+            )
+          else
+            Icon(icon, color: const Color(0xFF2C2C2E), size: 14),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: GoogleFonts.outfit(
+              color: const Color(0xFF2C2C2E),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRadarArea({required double width, required double height}) {
+    final double pulseSize = min(width, height) * 0.82;
+    final double clampedPulseSize = pulseSize.clamp(200.0, 360.0);
+
+    final List<Widget> deviceNodes = [];
+    final int totalCount = _devices.length;
+    final int maxVisibleDevices = 8;
+    final int visibleCount = totalCount.clamp(0, maxVisibleDevices);
+
+    final double deviceScale =
+        totalCount <= 4 ? 1.0 : (totalCount <= 6 ? 0.9 : 0.8);
+    final double deviceNodeSize = 56.0 * deviceScale;
+
+    final double pulseRadius = clampedPulseSize / 2;
+    final double orbitPadding = 12.0;
+    final double orbitRadius =
+        pulseRadius - (deviceNodeSize / 2) - orbitPadding;
+    final double startAngle = -3.14159 / 2;
+
+    for (int i = 0; i < visibleCount; i++) {
+      final double angle = startAngle + (2 * 3.14159 * i / visibleCount);
+      final double offsetX = orbitRadius * cos(angle);
+      final double offsetY = orbitRadius * sin(angle);
+
+      deviceNodes.add(
+        Transform.translate(
+          offset: Offset(offsetX, offsetY),
+          child: Transform.scale(
+            scale: deviceScale,
+            child: _buildDeviceNode(_devices[i]),
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          SearchPulseWidget(
+            key: const ValueKey('pulse_effect_video_cast'),
+            size: clampedPulseSize,
+            color: const Color(0xFF2C2C2E),
+            showCenterDot: false,
+          ),
+          CustomAvatarWidget(
+            avatarId: _customAvatar,
+            size: 60,
+            useBackground: true,
+            showBorder: true,
+            borderColor: Colors.black.withOpacity(0.12),
+          ),
+          ...deviceNodes,
+        ],
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _server?.close(force: true);
-    _scanController.dispose();
     _castAckSubscription?.cancel();
     _statusDismissTimer?.cancel();
     super.dispose();
@@ -1036,38 +1332,29 @@ class _WindowsVideoCastScreenState extends State<WindowsVideoCastScreen>
                         ),
                       ),
 
-                      // Right Side - Device List
+                      // Right Side - Pulse & Orbiting Emojis
                       Expanded(
                         flex: 3,
                         child: Container(
                           color: const Color(0xFFFAFAFA),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.all(24),
-                                child: Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Row(
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final w = constraints.maxWidth;
+                              final h = constraints.maxHeight;
+
+                              return Column(
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 24,
+                                      vertical: 12,
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
                                       children: [
-                                        if (_isScanning)
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                              right: 12,
-                                            ),
-                                            child: RotationTransition(
-                                              turns: _scanController,
-                                              child: const Icon(
-                                                Icons.sync,
-                                                color: Color(0xFFFFD600),
-                                                size: 16,
-                                              ),
-                                            ),
-                                          ),
                                         Text(
-                                          'AVAILABLE DEVICES',
+                                          'DEVICES IN RANGE',
                                           style: GoogleFonts.outfit(
                                             color: Colors.black54,
                                             fontSize: 12,
@@ -1075,157 +1362,57 @@ class _WindowsVideoCastScreenState extends State<WindowsVideoCastScreen>
                                             letterSpacing: 1.2,
                                           ),
                                         ),
+                                        IconButton(
+                                          icon: Icon(
+                                            _isScanning
+                                                ? Icons.sync_disabled_rounded
+                                                : Icons.refresh_rounded,
+                                            color: Colors.black54,
+                                          ),
+                                          onPressed:
+                                              _isScanning
+                                                  ? _stopScanning
+                                                  : _startScanning,
+                                        ),
                                       ],
                                     ),
-                                    IconButton(
-                                      icon: Icon(
-                                        _isScanning
-                                            ? Icons.stop_circle_outlined
-                                            : Icons.refresh_rounded,
-                                        color: Colors.black54,
-                                      ),
-                                      onPressed:
-                                          _isScanning
-                                              ? _stopScanning
-                                              : _startScanning,
+                                  ),
+                                  Expanded(
+                                    child: _buildRadarArea(
+                                      width: w,
+                                      height: h - 120,
                                     ),
-                                  ],
-                                ),
-                              ),
-                              Expanded(
-                                child:
-                                    _devices.isEmpty
-                                        ? Center(
-                                          child: Column(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
-                                            children: [
-                                              Icon(
-                                                Icons.computer_rounded,
-                                                size: 64,
-                                                color: Colors.grey[300],
-                                              ),
-                                              const SizedBox(height: 16),
-                                              Text(
-                                                _isScanning
-                                                    ? 'Scanning network...'
-                                                    : 'No devices found',
-                                                style: GoogleFonts.outfit(
-                                                  color: Colors.grey[600],
-                                                  fontSize: 16,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        )
-                                        : ListView.builder(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 24,
-                                          ),
-                                          itemCount: _devices.length,
-                                          itemBuilder: (context, index) {
-                                            final device = _devices[index];
-                                            return Container(
-                                              margin: const EdgeInsets.only(
-                                                bottom: 12,
-                                              ),
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFFF5F5F7),
-                                                borderRadius:
-                                                    BorderRadius.circular(16),
-                                                border: Border.all(
-                                                  color: Colors.grey
-                                                      .withOpacity(0.2),
-                                                ),
-                                              ),
-                                              child: Padding(
-                                                padding: const EdgeInsets.all(
-                                                  16,
-                                                ),
-                                                child: Row(
-                                                  children: [
-                                                    Container(
-                                                      width: 48,
-                                                      height: 48,
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.white,
-                                                        borderRadius:
-                                                            BorderRadius.circular(
-                                                              12,
-                                                            ),
-                                                      ),
-                                                      child: Icon(
-                                                        Icons.devices,
-                                                        color: Colors.black54,
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 16),
-                                                    Expanded(
-                                                      child: Column(
-                                                        crossAxisAlignment:
-                                                            CrossAxisAlignment
-                                                                .start,
-                                                        children: [
-                                                          Text(
-                                                            device.deviceName,
-                                                            style:
-                                                                GoogleFonts.outfit(
-                                                                  color:
-                                                                      Colors
-                                                                          .black,
-                                                                  fontWeight:
-                                                                      FontWeight
-                                                                          .w600,
-                                                                ),
-                                                          ),
-                                                          const SizedBox(
-                                                            height: 4,
-                                                          ),
-                                                          Text(
-                                                            device.ipAddress,
-                                                            style: GoogleFonts.outfit(
-                                                              color:
-                                                                  Colors
-                                                                      .grey[800],
-                                                              fontSize: 13,
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 16),
-                                                    ElevatedButton(
-                                                      onPressed:
-                                                          () => _castToDevice(
-                                                            device,
-                                                          ),
-                                                      style:
-                                                          ElevatedButton.styleFrom(
-                                                            backgroundColor:
-                                                                const Color(
-                                                                  0xFFFFD600,
-                                                                ),
-                                                            foregroundColor:
-                                                                Colors.black,
-                                                          ),
-                                                      child: Text(
-                                                        'CAST',
-                                                        style:
-                                                            GoogleFonts.outfit(
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .bold,
-                                                            ),
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                            );
-                                          },
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      bottom: 24.0,
+                                    ),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        _buildDiscoveryStatusLabel(
+                                          _devices.length,
                                         ),
-                              ),
-                            ],
+                                        const SizedBox(height: 12),
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 24.0,
+                                          ),
+                                          child: Text(
+                                            'Tap any discovered device to cast your video.',
+                                            style: GoogleFonts.outfit(
+                                              fontSize: 13,
+                                              color: Colors.black54,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
                           ),
                         ),
                       ),

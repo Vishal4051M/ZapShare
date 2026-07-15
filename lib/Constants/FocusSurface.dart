@@ -4,11 +4,7 @@ class FocusSurface extends StatefulWidget {
   final Widget Function(bool isFocused) builder;
   final VoidCallback? onTap;
 
-  const FocusSurface({
-    super.key,
-    required this.builder,
-    required this.onTap,
-  });
+  const FocusSurface({super.key, required this.builder, required this.onTap});
 
   @override
   State<FocusSurface> createState() => _FocusSurfaceState();

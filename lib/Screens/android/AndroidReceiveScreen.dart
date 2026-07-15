@@ -892,10 +892,11 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
       )) {
         try {
           await flutterLocalNotificationsPlugin.cancelAll();
-          
-          final completedCount = _downloadedFiles.length; // count of tasks completed
-          final senderIP = _serverIp ?? "Sender"; 
-          
+
+          final completedCount =
+              _downloadedFiles.length; // count of tasks completed
+          final senderIP = _serverIp ?? "Sender";
+
           final androidSpecifics = const AndroidNotificationDetails(
             'zapshare_transfer_summary',
             'Transfer Summary',
@@ -904,14 +905,17 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
             priority: Priority.high,
             icon: 'ic_stat_notify',
           );
-          final platformSpecifics = NotificationDetails(android: androidSpecifics);
+          final platformSpecifics = NotificationDetails(
+            android: androidSpecifics,
+          );
           await flutterLocalNotificationsPlugin.show(
             id: 9999, // Unique summary ID
             title: 'ZapShare Transfer Complete',
-            body: 'Successfully received $completedCount file(s) from $senderIP.',
+            body:
+                'Successfully received $completedCount file(s) from $senderIP.',
             notificationDetails: platformSpecifics,
           );
-          
+
           await FlutterForegroundTask.stopService();
         } catch (e) {
           // Ignore PlatformException when service is already stopped
@@ -954,7 +958,7 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
       final fileName = task.fileName.toLowerCase();
       final ext = fileName.split('.').last;
       String? mimeType;
-      
+
       // Use the same MIME detection logic
       if (ext == 'apk') {
         mimeType = 'application/vnd.android.package-archive';
@@ -963,23 +967,31 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
       } else if (['mp4', 'mkv', 'mov', 'avi'].contains(ext)) {
         mimeType = 'video/mp4'; // most common fallback
       }
-      
+
       print('📂 Opening file: ${task.savePath} (MIME: $mimeType)');
-      
+
       if (ext == 'apk') {
-          const platform = MethodChannel('zapshare.saf');
-          final canInstall = await platform.invokeMethod<bool>('checkInstallPackagesPermission') ?? true;
-          if (!canInstall) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please enable "Install from unknown sources" to install APKs')),
-              );
-              await platform.invokeMethod('requestInstallPackagesPermission');
-              return;
-          }
+        const platform = MethodChannel('zapshare.saf');
+        final canInstall =
+            await platform.invokeMethod<bool>(
+              'checkInstallPackagesPermission',
+            ) ??
+            true;
+        if (!canInstall) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Please enable "Install from unknown sources" to install APKs',
+              ),
+            ),
+          );
+          await platform.invokeMethod('requestInstallPackagesPermission');
+          return;
+        }
       }
 
       final result = await OpenFile.open(task.savePath, type: mimeType);
-      
+
       if (result.type != ResultType.done) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -989,9 +1001,9 @@ class _AndroidReceiveScreenState extends State<AndroidReceiveScreen> {
             ),
             backgroundColor: Colors.orange,
             action: SnackBarAction(
-                label: 'Retry', 
-                textColor: Colors.white,
-                onPressed: () => OpenFile.open(task.savePath)
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => OpenFile.open(task.savePath),
             ),
           ),
         );

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:zap_share/services/firebase_service.dart';
 // import 'wifi_direct_service.dart'; // REMOVED: Using Bluetooth + Hotspot instead
 
 // Connection request model
@@ -403,7 +404,38 @@ class DeviceDiscoveryService {
         _audioForegroundActive = active;
         _audioActiveController.add(active);
         print('🎵 [Discovery] Native audio state changed: active=$active');
+      } else if (call.method == 'remoteCommand') {
+        final action = call.arguments['action'] as String?;
+        if (action == null) return null;
+        if (activeCastTargetIp != null) {
+          switch (action) {
+            case 'zapshare.ACTION_PLAY':
+              sendCastControl(activeCastTargetIp!, 'play');
+              break;
+            case 'zapshare.ACTION_PAUSE':
+              sendCastControl(activeCastTargetIp!, 'pause');
+              break;
+            case 'zapshare.ACTION_FORWARD':
+              sendCastControl(activeCastTargetIp!, 'seek', seekPosition: activeCastPosition + 30);
+              break;
+            case 'zapshare.ACTION_REWIND':
+              sendCastControl(
+                activeCastTargetIp!,
+                'seek',
+                seekPosition: (activeCastPosition - 30).clamp(0, activeCastDuration),
+              );
+              break;
+            case 'seek':
+            case 'zapshare.ACTION_SEEK':
+              final pos = (call.arguments['seekPosition'] as num?)?.toDouble();
+              if (pos != null) {
+                sendCastControl(activeCastTargetIp!, 'seek', seekPosition: pos);
+              }
+              break;
+          }
+        }
       }
+      return null;
     });
   }
 
@@ -782,6 +814,7 @@ class DeviceDiscoveryService {
       await stop();
     }
     _isRunning = true;
+    _isStopping = false;
 
     try {
       // WiFi Direct removed - using Bluetooth + Hotspot instead
@@ -989,12 +1022,17 @@ class DeviceDiscoveryService {
       String? userName;
       final prefs = await SharedPreferences.getInstance();
 
-      // 1. Start with custom avatar from local preferences
-      avatarUrl = prefs.getString('custom_avatar');
-      print('🔍 Custom avatar from prefs: $avatarUrl');
+      // 1. Get the avatar mode preference (emoji vs image)
+      final avatarMode = prefs.getString('p2p_avatar_mode') ?? 'emoji';
+      final currentUser = FirebaseService().currentUser;
 
-      // 2. Google Profile logic removed as per user request to use local only.
-      // We rely on 'custom_avatar' loaded above and 'device_name' loaded in _myDeviceName.
+      if (avatarMode == 'image' &&
+          currentUser?.userMetadata?['picture'] != null) {
+        avatarUrl = currentUser!.userMetadata!['picture'];
+      } else {
+        avatarUrl = prefs.getString('custom_avatar');
+      }
+      print('🔍 Custom avatar selected: $avatarUrl (mode: $avatarMode)');
 
       print(
         '🔍 Final avatar before broadcast: $avatarUrl, userName: $userName',
@@ -1023,10 +1061,11 @@ class DeviceDiscoveryService {
       int totalBytesSent = 0;
 
       for (final interfaceInfo in _networkInterfaces) {
+        RawDatagramSocket? tempSocket;
         try {
           // Create a temporary socket for THIS interface (bound to port 0 = dynamic port)
           // Note: Windows doesn't support reusePort
-          final tempSocket = await RawDatagramSocket.bind(
+          tempSocket = await RawDatagramSocket.bind(
             InternetAddress.anyIPv4,
             0, // Port 0 = let OS choose a free port
             reusePort: false, // Ephemeral sending port doesn't need reusePort
@@ -1065,11 +1104,10 @@ class DeviceDiscoveryService {
           }
 
           totalBytesSent += bytesSent1 + bytesSent2 + bytesSent3;
-
-          // Close the temporary socket immediately after sending
-          tempSocket.close();
         } catch (e) {
           print('❌ Error broadcasting on ${interfaceInfo.interface.name}: $e');
+        } finally {
+          tempSocket?.close();
         }
       }
 
@@ -1287,8 +1325,14 @@ class DeviceDiscoveryService {
     final avatarUrl = data['avatarUrl'] as String?;
     final userName = data['userName'] as String?;
 
-    // Ignore own device
-    if (deviceId == _myDeviceId) {
+    // Check if the sender IP is one of our own local IPs
+    final isLocalIp = _networkInterfaces.any(
+      (interfaceInfo) =>
+          interfaceInfo.ipv4Addresses.any((addr) => addr.address == ipAddress),
+    );
+
+    // Ignore own device by deviceId or IP address
+    if (deviceId == _myDeviceId || isLocalIp || ipAddress == '127.0.0.1') {
       return;
     }
 
@@ -1640,8 +1684,7 @@ class DeviceDiscoveryService {
       final lastTrackSig = _lastCastTrackSignature[targetIp];
       final lastTracksSentAt = _lastCastTracksSentAt[targetIp] ?? 0;
       final tracksChanged = trackSignature != lastTrackSig;
-      final shouldSendTracks =
-          tracksChanged || (nowMs - lastTracksSentAt) >= 8000;
+      final shouldSendTracks = true;
 
       if (shouldSendTracks) {
         _lastCastTracksSentAt[targetIp] = nowMs;
@@ -1658,9 +1701,8 @@ class DeviceDiscoveryService {
         'isBuffering': isBuffering,
         'volume': volume,
         if (fileName != null) 'fileName': fileName,
-        if (shouldSendTracks && audioTracks != null) 'audioTracks': audioTracks,
-        if (shouldSendTracks && subtitleTracks != null)
-          'subtitleTracks': subtitleTracks,
+        if (audioTracks != null) 'audioTracks': audioTracks,
+        if (subtitleTracks != null) 'subtitleTracks': subtitleTracks,
         if (activeAudioTrack != null) 'activeAudioTrack': activeAudioTrack,
         if (activeAudioTrackLabel != null)
           'activeAudioTrackLabel': activeAudioTrackLabel,
@@ -3132,5 +3174,100 @@ class DeviceDiscoveryService {
       });
     }
     return newSdp;
+  }
+
+  // ─── Persistent Background Cast Session Management ───
+  String? activeCastTargetIp;
+  String? activeCastTargetName;
+  String? activeCastFileName;
+  double activeCastPosition = 0.0;
+  double activeCastDuration = 0.0;
+  bool activeCastIsPlaying = false;
+  StreamSubscription<CastStatus>? _castStatusSubPersistent;
+  Timer? _castWatchdogTimer;
+  DateTime? _lastCastStatusTime;
+
+  void startCastSession(String targetIp, String targetName, String fileName) {
+    print('🎬 [DiscoveryService] Starting persistent cast session: targetIp=$targetIp name=$targetName file=$fileName');
+    activeCastTargetIp = targetIp;
+    activeCastTargetName = targetName;
+    activeCastFileName = fileName;
+    activeCastPosition = 0.0;
+    activeCastDuration = 0.0;
+    activeCastIsPlaying = false;
+    _lastCastStatusTime = DateTime.now();
+
+    _castStatusSubPersistent?.cancel();
+    _castStatusSubPersistent = castStatusStream.listen((status) {
+      if (status.senderIp == activeCastTargetIp) {
+        _lastCastStatusTime = DateTime.now();
+        activeCastPosition = status.position;
+        activeCastDuration = status.duration;
+        activeCastIsPlaying = status.isPlaying;
+
+        if (status.active == false) {
+          stopCastSession();
+          return;
+        }
+
+        // Update Android notification state periodically
+        if (Platform.isAndroid && status.duration > 0) {
+          _nativeChannel.invokeMethod('updatePlaybackState', {
+            'isPlaying': status.isPlaying,
+            'position': status.position,
+            'duration': status.duration,
+            'title': activeCastFileName,
+          });
+        }
+      }
+    });
+
+    // Start Foreground Service notification immediately on Android
+    if (Platform.isAndroid) {
+      try {
+        _nativeChannel.invokeMethod('startForegroundService', {
+          'title': 'Casting: $fileName',
+          'content': 'Playing on $targetName',
+          'duration': 0.0,
+          'position': 0.0,
+          'isPlaying': false,
+        });
+      } catch (e) {
+        print('⚠️ Foreground service start warning: $e');
+      }
+    }
+
+    _castWatchdogTimer?.cancel();
+    _castWatchdogTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (activeCastTargetIp == null) return;
+      final now = DateTime.now();
+      if (_lastCastStatusTime != null &&
+          now.difference(_lastCastStatusTime!) > const Duration(seconds: 30)) {
+        print('⏳ [DiscoveryService] Lost connection to cast receiver (30s timeout), stopping session');
+        stopCastSession();
+      }
+    });
+  }
+
+  void stopCastSession() {
+    if (activeCastTargetIp == null) return;
+    print('🛑 [DiscoveryService] Stopping persistent cast session');
+    _castStatusSubPersistent?.cancel();
+    _castStatusSubPersistent = null;
+    _castWatchdogTimer?.cancel();
+    _castWatchdogTimer = null;
+    activeCastTargetIp = null;
+    activeCastTargetName = null;
+    activeCastFileName = null;
+    activeCastPosition = 0.0;
+    activeCastDuration = 0.0;
+    activeCastIsPlaying = false;
+
+    if (Platform.isAndroid) {
+      try {
+        _nativeChannel.invokeMethod('stopForegroundService');
+        _nativeChannel.invokeMethod('stopVideoServer');
+      } catch (_) {}
+    }
   }
 }

@@ -957,7 +957,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
       } catch (e) {
         print('File close error (ignored): $e');
       }
-      
+
       await _cancelProgressNotification(fileName);
 
       // Only proceed if upload was successful
@@ -1149,9 +1149,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                     height: double.infinity,
                     decoration: BoxDecoration(
                       border: Border(
-                        left: BorderSide(
-                          color: Colors.white.withOpacity(0.1),
-                        ),
+                        left: BorderSide(color: Colors.white.withOpacity(0.1)),
                       ),
                     ),
                     child: SingleChildScrollView(
@@ -1425,7 +1423,10 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color:
                       _isHosting
@@ -1480,11 +1481,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
             ),
             child: Row(
               children: [
-                Icon(
-                  Icons.link_rounded,
-                  color: Colors.grey[400],
-                  size: 18,
-                ),
+                Icon(Icons.link_rounded, color: Colors.grey[400], size: 18),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -1502,9 +1499,7 @@ class _WebReceiveScreenState extends State<WebReceiveScreen> {
                   onPressed:
                       hasLink
                           ? () {
-                            Clipboard.setData(
-                              ClipboardData(text: linkUrl),
-                            );
+                            Clipboard.setData(ClipboardData(text: linkUrl));
                             HapticFeedback.mediumImpact();
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(

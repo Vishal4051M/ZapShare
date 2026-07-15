@@ -639,8 +639,7 @@ class _LinuxReceiveScreenState extends State<LinuxReceiveScreen> {
   Widget build(BuildContext context) {
     return Hero(
       tag: 'receive_card_container',
-      createRectTween: (begin, end) =>
-          SmoothRectTween(begin: begin, end: end),
+      createRectTween: (begin, end) => SmoothRectTween(begin: begin, end: end),
       child: AnnotatedRegion<SystemUiOverlayStyle>(
         value: SystemUiOverlayStyle.light,
         child: Scaffold(

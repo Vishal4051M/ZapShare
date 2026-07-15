@@ -53,16 +53,13 @@ class NativeMpvPlayer {
   }) async {
     try {
       // Call the plugin's init method and get the textureId
-      final int? tid = await _channel.invokeMethod<int>(
-        'init',
-        {
-          'mpvPath': mpvPath,
-          'x': x,
-          'y': y,
-          'width': width,
-          'height': height,
-        },
-      );
+      final int? tid = await _channel.invokeMethod<int>('init', {
+        'mpvPath': mpvPath,
+        'x': x,
+        'y': y,
+        'width': width,
+        'height': height,
+      });
       if (tid == null) throw Exception('Failed to get textureId from plugin');
       textureId = tid;
 

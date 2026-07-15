@@ -181,21 +181,30 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
         if (!writable) {
           showDialog(
             context: context,
-            builder: (context) => AlertDialog(
-              backgroundColor: const Color(0xFF1C1C1E),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              title: const Text('Folder Restricted', style: TextStyle(color: Colors.white)),
-              content: const Text(
-                'This folder is protected or read-only. Please choose another location.',
-                style: TextStyle(color: Colors.white70),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('OK', style: TextStyle(color: Color(0xFFFFD600))),
+            builder:
+                (context) => AlertDialog(
+                  backgroundColor: const Color(0xFF1C1C1E),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  title: const Text(
+                    'Folder Restricted',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  content: const Text(
+                    'This folder is protected or read-only. Please choose another location.',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text(
+                        'OK',
+                        style: TextStyle(color: Color(0xFFFFD600)),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
           );
           return;
         }
@@ -679,8 +688,7 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
   Widget build(BuildContext context) {
     return Hero(
       tag: 'receive_card_container',
-      createRectTween: (begin, end) =>
-          SmoothRectTween(begin: begin, end: end),
+      createRectTween: (begin, end) => SmoothRectTween(begin: begin, end: end),
       child: AnnotatedRegion<SystemUiOverlayStyle>(
         value: SystemUiOverlayStyle.light,
         child: Scaffold(
@@ -1657,7 +1665,11 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
         children: [
           Row(
             children: [
-              const Icon(Icons.shield_outlined, color: Colors.redAccent, size: 20),
+              const Icon(
+                Icons.shield_outlined,
+                color: Colors.redAccent,
+                size: 20,
+              ),
               const SizedBox(width: 8),
               Text(
                 'Windows Firewall Check',
@@ -1682,13 +1694,18 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
                 backgroundColor: const Color(0xFFFFD600),
                 foregroundColor: Colors.black,
                 padding: const EdgeInsets.symmetric(vertical: 8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
               onPressed: _fixFirewall,
               icon: const Icon(Icons.security_rounded, size: 16),
               label: Text(
                 'Auto-Configure Firewall',
-                style: GoogleFonts.outfit(fontWeight: FontWeight.bold, fontSize: 12),
+                style: GoogleFonts.outfit(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
               ),
             ),
           ),
@@ -1704,8 +1721,8 @@ class _WindowsReceiveScreenState extends State<WindowsReceiveScreen> {
       final result = await Process.run('powershell', [
         '-Command',
         'Start-Process netsh -ArgumentList "advfirewall firewall add rule name=\\"ZapShare\\" dir=in action=allow program=\\"$exePath\\" enable=yes" -Verb RunAs; '
-        'Start-Process netsh -ArgumentList "advfirewall firewall add rule name=\\"ZapShare_Ports_UDP\\" dir=in action=allow protocol=UDP localport=37020 enable=yes" -Verb RunAs; '
-        'Start-Process netsh -ArgumentList "advfirewall firewall add rule name=\\"ZapShare_Ports_TCP\\" dir=in action=allow protocol=TCP localport=8080,50005,50006 enable=yes" -Verb RunAs;'
+            'Start-Process netsh -ArgumentList "advfirewall firewall add rule name=\\"ZapShare_Ports_UDP\\" dir=in action=allow protocol=UDP localport=37020 enable=yes" -Verb RunAs; '
+            'Start-Process netsh -ArgumentList "advfirewall firewall add rule name=\\"ZapShare_Ports_TCP\\" dir=in action=allow protocol=TCP localport=8080,50005,50006 enable=yes" -Verb RunAs;',
       ]);
       if (result.exitCode == 0) {
         _showStatus(

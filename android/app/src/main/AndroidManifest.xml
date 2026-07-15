@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    package="com.example.zap_share">
+    package="app.zapshare.mobile">
 
     <!-- Permissions -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
@@ -65,6 +65,22 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
             </intent-filter>
+            <!-- Deep Link for Supabase Auth -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="io.supabase.zapshare" android:host="login-callback" />
+            </intent-filter>
+        </activity>
+
+        <!-- Activity Aliases for native share options -->
+        <activity-alias
+            android:name=".LocalShareActivity"
+            android:targetActivity=".MainActivity"
+            android:label="ZapShare: Local Share"
+            android:icon="@mipmap/launcher_icon"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.SEND"/>
                 <category android:name="android.intent.category.DEFAULT"/>
@@ -75,15 +91,51 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:mimeType="*/*"/>
             </intent-filter>
+        </activity-alias>
 
-            <!-- Deep Link for Supabase Auth -->
+        <activity-alias
+            android:name=".RemoteShareActivity"
+            android:targetActivity=".MainActivity"
+            android:label="ZapShare: Remote Share"
+            android:icon="@mipmap/launcher_icon"
+            android:exported="true">
             <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="io.supabase.zapshare" android:host="login-callback" />
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="*/*"/>
             </intent-filter>
-        </activity>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="*/*"/>
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".CastVideoActivity"
+            android:targetActivity=".MainActivity"
+            android:label="ZapShare: Cast Video"
+            android:icon="@mipmap/launcher_icon"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="video/mp4"/>
+                <data android:mimeType="video/x-matroska"/>
+                <data android:mimeType="video/webm"/>
+                <data android:mimeType="video/quicktime"/>
+                <data android:mimeType="video/*"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="video/mp4"/>
+                <data android:mimeType="video/x-matroska"/>
+                <data android:mimeType="video/webm"/>
+                <data android:mimeType="video/quicktime"/>
+                <data android:mimeType="video/*"/>
+            </intent-filter>
+        </activity-alias>
 
         <!-- Native Video Player Activity — SurfaceView-based for butter-smooth TV playback -->
         <activity
@@ -100,7 +152,7 @@
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:foregroundServiceType="dataSync"
             android:icon="@drawable/ic_stat_notify"
-            android:stopWithTask="true"
+            android:stopWithTask="false"
             android:exported="false"/>
 
         <!-- Native Service for Background Video Server & Audio Sharing -->
@@ -155,13 +207,16 @@
             android:name="com.pravera.flutter_foreground_task.notification_icon"
             android:resource="@drawable/ic_stat_notify" />
         <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_notify" />
+        <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
 
         <!-- File Provider — Essential for opening APKs & shared files on Android 7+ -->
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="com.example.zap_share.fileprovider"
+            android:authorities="app.zapshare.mobile.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data

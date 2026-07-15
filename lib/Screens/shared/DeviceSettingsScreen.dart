@@ -4,11 +4,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:io';
 import 'dart:async';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:zap_share/services/supabase_service.dart';
+import 'package:zap_share/services/firebase_service.dart';
 import 'package:zap_share/Screens/shared/AvatarPickerScreen.dart';
 import 'package:zap_share/widgets/CustomAvatarWidget.dart';
+import 'package:zap_share/Screens/shared/FirstTimeSetupScreen.dart';
+import 'package:zap_share/Screens/android/AndroidHomeScreen.dart';
+import 'package:zap_share/Screens/windows/WindowsHomeScreen.dart';
+import 'package:zap_share/Screens/linux/LinuxHomeScreen.dart';
 import 'package:zap_share/Screens/auth/LoginScreen.dart';
+import 'package:zap_share/services/device_discovery_service.dart';
 
 class DeviceSettingsScreen extends StatefulWidget {
   const DeviceSettingsScreen({super.key});
@@ -24,12 +28,13 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
   String? _currentAvatar;
   User? _currentUser;
   StreamSubscription<AuthState>? _authSubscription;
+  String _avatarMode = 'emoji';
 
   @override
   void initState() {
     super.initState();
-    _currentUser = SupabaseService().currentUser;
-    _authSubscription = SupabaseService().authStateChanges.listen((data) {
+    _currentUser = FirebaseService().currentUser;
+    _authSubscription = FirebaseService().authStateChanges.listen((data) {
       if (mounted) {
         setState(() {
           _currentUser = data.session?.user;
@@ -43,6 +48,7 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final avatar = prefs.getString('custom_avatar');
+    final avatarMode = prefs.getString('p2p_avatar_mode') ?? 'emoji';
 
     setState(() {
       _currentDeviceName =
@@ -50,6 +56,7 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
       _deviceNameController.text = _currentDeviceName;
       _autoDiscoveryEnabled = prefs.getBool('auto_discovery_enabled') ?? true;
       _currentAvatar = avatar;
+      _avatarMode = avatarMode;
     });
   }
 
@@ -180,7 +187,7 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
 
   Widget _buildProfileSection() {
     return FutureBuilder<Map<String, dynamic>?>(
-      future: SupabaseService().getUserProfile(),
+      future: FirebaseService().getUserProfile(),
       builder: (context, snapshot) {
         final profile = snapshot.data;
         final avatarUrl =
@@ -222,7 +229,10 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
                     child: Stack(
                       children: [
                         CustomAvatarWidget(
-                          avatarId: _currentAvatar ?? avatarUrl,
+                          avatarId:
+                              _avatarMode == 'image'
+                                  ? avatarUrl
+                                  : (_currentAvatar ?? avatarUrl),
                           size: 70,
                           useBackground: true, // Ensuring premium bubble look
                         ),
@@ -277,8 +287,36 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
               if (_currentUser != null) ...[
                 const SizedBox(height: 20),
                 Container(height: 1, color: Colors.white.withOpacity(0.05)),
-                const SizedBox(height: 16),
-
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Use Google Photo as Local Avatar',
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    Switch(
+                      value: _avatarMode == 'image',
+                      activeColor: const Color(0xFFFFD600),
+                      onChanged: (val) async {
+                        final mode = val ? 'image' : 'emoji';
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setString('p2p_avatar_mode', mode);
+                        setState(() {
+                          _avatarMode = mode;
+                        });
+                        // Restart discovery to broadcast new avatar immediately
+                        DeviceDiscoveryService().start();
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Container(height: 1, color: Colors.white.withOpacity(0.05)),
                 const SizedBox(height: 16),
 
                 // Logout Button
@@ -335,20 +373,32 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
 
                       if (confirmed == true) {
                         try {
-                          await SupabaseService().signOut();
+                          await FirebaseService().signOut();
                           if (mounted) {
-                            setState(() {
-                              _currentUser = null;
-                            });
-                            // Show success message
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Signed out successfully',
-                                  style: GoogleFonts.outfit(),
+                            Navigator.of(context).pushAndRemoveUntil(
+                              MaterialPageRoute(
+                                builder: (context) => FirstTimeSetupScreen(
+                                    onSetupComplete: () async {
+                                      final prefs = await SharedPreferences.getInstance();
+                                      await prefs.setBool('first_run_complete', true);
+                                      Widget homeScreen;
+                                      if (Platform.isWindows) {
+                                        homeScreen = const WindowsHomeScreen();
+                                      } else if (Platform.isLinux) {
+                                        homeScreen = const LinuxHomeScreen();
+                                      } else {
+                                        homeScreen = const AndroidHomeScreen();
+                                      }
+                                      Navigator.of(context).pushAndRemoveUntil(
+                                        MaterialPageRoute(
+                                          builder: (context) => homeScreen,
+                                        ),
+                                        (route) => false,
+                                      );
+                                    },
                                 ),
-                                backgroundColor: Colors.green,
                               ),
+                              (route) => false,
                             );
                           }
                         } catch (e) {
@@ -403,7 +453,7 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
                       ).then((_) {
                         // Refresh the UI after returning from login
                         setState(() {
-                          _currentUser = SupabaseService().currentUser;
+                          _currentUser = FirebaseService().currentUser;
                         });
                       });
                     },
