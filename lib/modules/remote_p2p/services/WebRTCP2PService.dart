@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import '../../../Constants/AppLogger.dart';
 import 'TransferResumeStore.dart';
 
 class WebRTCP2PService {
@@ -31,6 +33,9 @@ class WebRTCP2PService {
   Completer<void>? _bufferLowCompleter;
   Completer<int>? _resumeOfferCompleter;
   Completer<void>? _fileCompleteCompleter;
+  bool _receiverSupportsAck = false;
+  int _ackedBytes = 0;
+  Completer<void>? _ackCompleter;
 
   // Receiver-side persistent state fields
   IOSink? _fileSink;
@@ -42,6 +47,17 @@ class WebRTCP2PService {
   int _activeConnectionGeneration = 0;
   int? _fileSinkGeneration;
   bool _isCheckpointing = false;
+
+  Timer? _stallTimer;
+  DateTime? _lastActivityAt;
+  bool isTransferActive = false;
+  Completer<void>? _pongCompleter;
+
+  // Adaptive window sizing constants
+  static const int _outstandingFloor = 512 * 1024;
+  static const int _outstandingCeiling = 4 * 1024 * 1024;
+  int _maxOutstanding = _outstandingFloor;
+
   // Keep the native WebRTC queue deliberately small.  Large queues look fast
   // locally but are a common cause of mobile memory pressure and SCTP channel
   // resets during long transfers.
@@ -49,7 +65,7 @@ class WebRTCP2PService {
   // staying well below platform SCTP queue limits.
   static const int _highWaterMark = 2 * 1024 * 1024;
   static const int _lowWaterMark = 512 * 1024;
-  static const int _dataChunkSize = 16 * 1024;
+  static const int _dataChunkSize = 64 * 1024;
   static const Duration _progressInterval = Duration(milliseconds: 400);
   DateTime _lastIncomingProgressAt = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastOutgoingProgressAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -82,6 +98,8 @@ class WebRTCP2PService {
     Function(Map<String, dynamic> sdp) onSdpGenerated,
     int connectionGeneration,
   ) async {
+    isTransferActive = false;
+    _lastActivityAt = null;
     try {
       _activeConnectionGeneration = connectionGeneration;
       // Clean up previous peer connection and data channel to avoid resource leaks and conflicts
@@ -127,12 +145,19 @@ class WebRTCP2PService {
                 RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
             state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
             state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+          isTransferActive = false;
+          _lastActivityAt = null;
+
           if (_fileSink != null) {
             try {
               await _fileSink!.flush();
-              print("💾 [WebRTC] Disconnected: Flushed _fileSink.");
+              AppLogger.i("DATACHANNEL", "Disconnected: Flushed _fileSink.");
             } catch (e) {
-              print("⚠️ Error flushing _fileSink on disconnect: $e");
+              AppLogger.w(
+                "DATACHANNEL",
+                "Error flushing _fileSink on disconnect",
+                e,
+              );
             }
           }
           if (_incomingTransferId != null && _tempFile != null) {
@@ -143,14 +168,40 @@ class WebRTCP2PService {
               receivedBytes: _receivedBytes,
               partialFilePath: _tempFile!.path,
             );
-            print(
-              "💾 [WebRTC] Saved partial transfer checkpoint at $_receivedBytes bytes.",
+            AppLogger.i(
+              "TRANSFER",
+              "Saved partial transfer checkpoint at $_receivedBytes bytes.",
             );
           }
           if (_bufferLowCompleter != null &&
               !_bufferLowCompleter!.isCompleted) {
             _bufferLowCompleter!.completeError(
-              Exception("Connection state changed to $state"),
+              ConnectionStateChangedException(
+                "Connection state changed to $state",
+              ),
+            );
+          }
+          if (_fileCompleteCompleter != null &&
+              !_fileCompleteCompleter!.isCompleted) {
+            _fileCompleteCompleter!.completeError(
+              ConnectionStateChangedException(
+                "Connection state changed to $state",
+              ),
+            );
+          }
+          if (_resumeOfferCompleter != null &&
+              !_resumeOfferCompleter!.isCompleted) {
+            _resumeOfferCompleter!.completeError(
+              ConnectionStateChangedException(
+                "Connection state changed to $state",
+              ),
+            );
+          }
+          if (_ackCompleter != null && !_ackCompleter!.isCompleted) {
+            _ackCompleter!.completeError(
+              ConnectionStateChangedException(
+                "Connection state changed to $state",
+              ),
             );
           }
         }
@@ -177,21 +228,30 @@ class WebRTCP2PService {
         final currentGen = _activeConnectionGeneration;
         peerConnection!.onDataChannel = (RTCDataChannel channel) {
           if (currentGen != _activeConnectionGeneration) {
-            print("🗑️ Ignoring onDataChannel for stale generation $currentGen");
+            AppLogger.d(
+              "DATACHANNEL",
+              "Ignoring onDataChannel for stale generation $currentGen",
+            );
             return;
           }
           dataChannel = channel;
           _setupDataChannelListeners(currentGen);
         };
       }
+      _startStallTimer();
     } catch (e) {
-      print("Error initializing WebRTC: $e");
+      AppLogger.e("ICE", "Error initializing WebRTC", e);
       rethrow;
     }
   }
 
   void _setupDataChannelListeners(int generation) {
     if (dataChannel == null) return;
+
+    dataChannel!.onDataChannelState = (RTCDataChannelState state) {
+      if (generation != _activeConnectionGeneration) return;
+      AppLogger.i("DATACHANNEL", "Data channel state changed: ${state.name}");
+    };
 
     try {
       dataChannel!.bufferedAmountLowThreshold = _lowWaterMark;
@@ -202,10 +262,15 @@ class WebRTCP2PService {
         }
       };
     } catch (e) {
-      print("Error setting bufferedAmount settings on dataChannel: $e");
+      AppLogger.e(
+        "DATACHANNEL",
+        "Error setting bufferedAmount settings on dataChannel",
+        e,
+      );
     }
 
     dataChannel!.onMessage = (RTCDataChannelMessage message) async {
+      _lastActivityAt = DateTime.now();
       if (generation != _activeConnectionGeneration) {
         return;
       }
@@ -215,11 +280,38 @@ class WebRTCP2PService {
             return;
           }
           final bytes = message.binary;
-          _fileSink?.add(bytes);
+          if (_fileSink == null) {
+            AppLogger.e(
+              "TRANSFER",
+              "File sink is null during binary data receipt. Forcing reconnect.",
+            );
+            unawaited(_forceConnectionClose());
+            onConnectionStateChanged?.call(
+              RTCPeerConnectionState.RTCPeerConnectionStateFailed,
+            );
+            return;
+          }
+          _fileSink!.add(bytes);
 
           final previousMB = _receivedBytes ~/ (2 * 1024 * 1024);
+          final previous128K = _receivedBytes ~/ (128 * 1024);
           _receivedBytes += bytes.length;
           final currentMB = _receivedBytes ~/ (2 * 1024 * 1024);
+          final current128K = _receivedBytes ~/ (128 * 1024);
+
+          // Send ACK every 128KB to avoid channel congestion while ensuring steady backpressure,
+          // or send immediate final ACK when all bytes are received.
+          if (_receivedBytes >= _incomingFileSize) {
+            sendControlMessage({
+              'type': 'transfer_ack',
+              'receivedBytes': _receivedBytes,
+            });
+          } else if (current128K > previous128K) {
+            sendControlMessage({
+              'type': 'transfer_ack',
+              'receivedBytes': _receivedBytes,
+            });
+          }
 
           if (_incomingFileSize > 0 && _shouldReportIncomingProgress()) {
             onFileProgress?.call(_receivedBytes / _incomingFileSize);
@@ -248,7 +340,7 @@ class WebRTCP2PService {
                   partialFilePath: path,
                 );
               } catch (e) {
-                print("⚠️ Error during async checkpoint: $e");
+                AppLogger.w("TRANSFER", "Error during async checkpoint", e);
               } finally {
                 _isCheckpointing = false;
               }
@@ -262,6 +354,14 @@ class WebRTCP2PService {
         final type = json['type'] as String?;
 
         switch (type) {
+          case 'ping':
+            sendControlMessage({'type': 'pong'});
+            break;
+          case 'pong':
+            if (_pongCompleter != null && !_pongCompleter!.isCompleted) {
+              _pongCompleter!.complete();
+            }
+            break;
           case 'text':
             onMessageReceived?.call(json['content'] ?? '');
             break;
@@ -274,6 +374,9 @@ class WebRTCP2PService {
             _incomingTransferId = json['transferId'] as String?;
             _receivedBytes = 0;
             _fileSinkGeneration = generation;
+
+            isTransferActive = true;
+            _lastActivityAt = DateTime.now();
 
             try {
               if (_fileSink != null) {
@@ -288,7 +391,7 @@ class WebRTCP2PService {
                 try {
                   targetPath = await getSavePath!(_incomingFileName);
                 } catch (e) {
-                  print("Error getting target save path: $e");
+                  AppLogger.e("TRANSFER", "Error getting target save path", e);
                 }
               }
 
@@ -321,16 +424,34 @@ class WebRTCP2PService {
                   final partialFile = File(recordedPath);
                   if (await partialFile.exists()) {
                     final actualLength = await partialFile.length();
-                    if (actualLength == recordedReceived) {
-                      _tempFile = partialFile;
-                      _receivedBytes = recordedReceived;
-                      isResuming = true;
-                      print("🔄 Resuming P2P transfer at offset $_receivedBytes");
-                    } else {
-                      print(
-                        "⚠️ Offset mismatch: actualLength ($actualLength) != recordedReceived ($recordedReceived)",
+                    int targetOffset = recordedReceived;
+                    if (actualLength != targetOffset) {
+                      AppLogger.w(
+                        "RESUME",
+                        "Offset mismatch: actualLength ($actualLength) != recordedReceived ($targetOffset). Adjusting...",
                       );
+                      if (actualLength > targetOffset) {
+                        try {
+                          final raf = await partialFile.open(
+                            mode: FileMode.writeOnlyAppend,
+                          );
+                          await raf.truncate(targetOffset);
+                          await raf.close();
+                        } catch (e) {
+                          AppLogger.e("RESUME", "Failed to truncate file", e);
+                          targetOffset = actualLength;
+                        }
+                      } else {
+                        targetOffset = actualLength;
+                      }
                     }
+                    _tempFile = partialFile;
+                    _receivedBytes = targetOffset;
+                    isResuming = true;
+                    AppLogger.i(
+                      "RESUME",
+                      "Resuming P2P transfer at offset $_receivedBytes",
+                    );
                   }
                 }
               }
@@ -345,14 +466,14 @@ class WebRTCP2PService {
                     _tempFile!.deleteSync();
                   }
                 } catch (e) {
-                  print("Error creating fresh file: $e");
+                  AppLogger.w("TRANSFER", "Error creating fresh file", e);
                 }
                 _fileSink = _tempFile!.openWrite();
               } else {
                 _fileSink = _tempFile!.openWrite(mode: FileMode.append);
               }
             } catch (e) {
-              print("⚠️ Error closing or opening file sink (recoverable): $e");
+              AppLogger.w("TRANSFER", "Error closing or opening file sink", e);
             }
 
             onFileIncoming?.call(_incomingFileName, _incomingFileSize);
@@ -364,6 +485,7 @@ class WebRTCP2PService {
               'type': 'resume_offer',
               'transferId': _incomingTransferId ?? '',
               'receivedBytes': _receivedBytes,
+              'supportsAck': true,
             });
 
             if (_incomingTransferId != null) {
@@ -380,8 +502,10 @@ class WebRTCP2PService {
             try {
               await _fileSink?.flush();
             } catch (e) {
-              print("Error flushing sink in file_end: $e");
+              AppLogger.e("TRANSFER", "Error flushing sink in file_end", e);
             }
+            isTransferActive = false;
+            _lastActivityAt = null;
             if (_receivedBytes != _incomingFileSize) {
               // Keep the partial file and its exact durable offset.  The
               // sender will time out waiting for completion and reconnect,
@@ -396,8 +520,9 @@ class WebRTCP2PService {
                   partialFilePath: _tempFile!.path,
                 );
               }
-              print(
-                '⚠️ Incomplete file_end: $_receivedBytes / $_incomingFileSize bytes',
+              AppLogger.w(
+                "TRANSFER",
+                'Incomplete file_end: $_receivedBytes / $_incomingFileSize bytes',
               );
               break;
             }
@@ -417,9 +542,17 @@ class WebRTCP2PService {
             break;
           case 'resume_offer':
             final rBytes = json['receivedBytes'] as int? ?? 0;
+            _receiverSupportsAck = json['supportsAck'] == true;
             if (_resumeOfferCompleter != null &&
                 !_resumeOfferCompleter!.isCompleted) {
               _resumeOfferCompleter!.complete(rBytes);
+            }
+            break;
+          case 'transfer_ack':
+            final rBytes = json['receivedBytes'] as int? ?? 0;
+            _ackedBytes = rBytes;
+            if (_ackCompleter != null && !_ackCompleter!.isCompleted) {
+              _ackCompleter!.complete();
             }
             break;
           case 'file_complete':
@@ -430,7 +563,7 @@ class WebRTCP2PService {
             break;
         }
       } catch (e) {
-        print("DataChannel message parsing error: $e");
+        AppLogger.e("DATACHANNEL", "DataChannel message parsing error", e);
       }
     };
   }
@@ -448,7 +581,7 @@ class WebRTCP2PService {
       await peerConnection!.setLocalDescription(description);
       return {'type': description.type, 'sdp': description.sdp};
     } catch (e) {
-      print("Error creating WebRTC offer: $e");
+      AppLogger.e("ICE", "Error creating WebRTC offer", e);
       rethrow;
     }
   }
@@ -464,7 +597,7 @@ class WebRTCP2PService {
       await peerConnection!.setLocalDescription(description);
       return {'type': description.type, 'sdp': description.sdp};
     } catch (e) {
-      print("Error creating WebRTC answer: $e");
+      AppLogger.e("ICE", "Error creating WebRTC answer", e);
       rethrow;
     }
   }
@@ -477,7 +610,7 @@ class WebRTCP2PService {
       _hasRemoteDescription = true;
       await _applyPendingRemoteCandidates();
     } catch (e) {
-      print("Error setting WebRTC answer: $e");
+      AppLogger.e("ICE", "Error setting WebRTC answer", e);
       rethrow;
     }
   }
@@ -505,7 +638,7 @@ class WebRTCP2PService {
       );
       await peerConnection!.addCandidate(candidate);
     } catch (e) {
-      print("Error applying ICE candidate: $e");
+      AppLogger.e("ICE", "Error applying ICE candidate", e);
     }
   }
 
@@ -520,7 +653,7 @@ class WebRTCP2PService {
       }
       await _renegotiate();
     } catch (e) {
-      print("Audio sharing capture error: $e");
+      AppLogger.e("TRANSFER", "Audio sharing capture error", e);
       rethrow;
     }
   }
@@ -536,7 +669,7 @@ class WebRTCP2PService {
       }
       await _renegotiate();
     } catch (e) {
-      print("Screen sharing capture error: $e");
+      AppLogger.e("TRANSFER", "Screen sharing capture error", e);
       rethrow;
     }
   }
@@ -551,7 +684,7 @@ class WebRTCP2PService {
         localStream = null;
       }
     } catch (e) {
-      print("Error stopping capture stream: $e");
+      AppLogger.e("TRANSFER", "Error stopping capture stream", e);
     }
   }
 
@@ -568,9 +701,10 @@ class WebRTCP2PService {
       if (dataChannel != null &&
           dataChannel!.state == RTCDataChannelState.RTCDataChannelOpen) {
         dataChannel!.send(RTCDataChannelMessage(jsonEncode(messageMap)));
+        _lastActivityAt = DateTime.now();
       }
     } catch (e) {
-      print("Error sending control message: $e");
+      AppLogger.e("DATACHANNEL", "Error sending control message", e);
     }
   }
 
@@ -587,7 +721,7 @@ class WebRTCP2PService {
     }
     if (dataChannel == null ||
         dataChannel!.state != RTCDataChannelState.RTCDataChannelOpen) {
-      throw Exception(
+      throw DataChannelClosedException(
         "Data channel not open (timed out waiting for open state)",
       );
     }
@@ -623,9 +757,115 @@ class WebRTCP2PService {
       try {
         await _bufferLowCompleter!.future.timeout(const Duration(seconds: 45));
       } on TimeoutException {
-        throw Exception("P2P transfer stalled — buffer never drained");
+        throw BufferStalledException(
+          "P2P transfer stalled — buffer never drained",
+        );
       } finally {
         fallbackTimer.cancel();
+      }
+    }
+  }
+
+  Future<void> _waitIfOutstandingTooHigh(int sentBytes) async {
+    if (!_receiverSupportsAck) {
+      // Fallback: yield CPU execution block by block to prevent CPU-bound choking
+      await Future.delayed(Duration.zero);
+      await _waitIfBufferFull();
+      return;
+    }
+
+    if (sentBytes - _ackedBytes > _maxOutstanding) {
+      _lastActivityAt = DateTime.now();
+
+      final keepAliveTimer = Timer.periodic(const Duration(seconds: 1), (
+        timer,
+      ) {
+        _lastActivityAt = DateTime.now();
+      });
+
+      try {
+        while (sentBytes - _ackedBytes > _maxOutstanding) {
+          _ackCompleter = Completer<void>();
+          final waitStart = DateTime.now();
+          try {
+            await _ackCompleter!.future.timeout(const Duration(seconds: 15));
+            // Acknowledged!
+            final waitDuration = DateTime.now().difference(waitStart);
+            if (waitDuration < const Duration(seconds: 2)) {
+              // Additive Increase
+              _maxOutstanding = min(
+                _outstandingCeiling,
+                _maxOutstanding + 128 * 1024,
+              );
+            } else if (waitDuration > const Duration(seconds: 10)) {
+              // Multiplicative Decrease
+              _maxOutstanding = max(_outstandingFloor, _maxOutstanding ~/ 2);
+            }
+          } on TimeoutException {
+            // Multiplicative Decrease
+            _maxOutstanding = max(_outstandingFloor, _maxOutstanding ~/ 2);
+
+            final isAlive = await _checkLiveness();
+            if (!isAlive) {
+              throw DataChannelClosedException(
+                "Data channel connection dropped during transfer",
+              );
+            }
+            AppLogger.i(
+              "TRANSFER",
+              "Liveness check succeeded — resetting ack-wait timer. Outstanding window decreased to ${_maxOutstanding ~/ 1024} KB.",
+            );
+            _lastActivityAt = DateTime.now();
+          } finally {
+            _ackCompleter = null;
+          }
+        }
+      } finally {
+        keepAliveTimer.cancel();
+      }
+    } else {
+      // Yield to the event loop periodically to process incoming ACKs and avoid blocking the UI thread
+      // We do this every 256 KB of sent data
+      if (sentBytes % (256 * 1024) < _dataChunkSize) {
+        await Future.delayed(Duration.zero);
+      }
+    }
+  }
+
+  Future<void> _waitForAllAcks(int totalBytes) async {
+    if (!_receiverSupportsAck) {
+      // Fallback: wait for buffer to drain completely
+      await _waitIfBufferFull();
+      return;
+    }
+
+    while (_ackedBytes < totalBytes) {
+      if (dataChannel == null ||
+          dataChannel!.state != RTCDataChannelState.RTCDataChannelOpen) {
+        throw DataChannelClosedException(
+          "Data channel closed while waiting for final ACK",
+        );
+      }
+
+      _ackCompleter = Completer<void>();
+      _lastActivityAt = DateTime.now();
+
+      try {
+        await _ackCompleter!.future.timeout(const Duration(seconds: 15));
+      } on TimeoutException {
+        final isAlive = await _checkLiveness();
+        if (!isAlive) {
+          throw DataChannelClosedException(
+            "Data channel connection dropped while waiting for final ACK",
+          );
+        }
+        AppLogger.i(
+          "TRANSFER",
+          "Liveness check succeeded while waiting for final ACK — resetting timer",
+        );
+        _lastActivityAt = DateTime.now();
+      } finally {
+        _ackCompleter = null;
       }
     }
   }
@@ -660,7 +900,9 @@ class WebRTCP2PService {
     try {
       await _fileCompleteCompleter!.future.timeout(const Duration(seconds: 60));
     } on TimeoutException {
-      throw Exception('Receiver did not confirm durable file completion');
+      throw FileDurableCompletionException(
+        'Receiver did not confirm durable file completion',
+      );
     } finally {
       _fileCompleteCompleter = null;
     }
@@ -671,6 +913,8 @@ class WebRTCP2PService {
     String name,
     Function(double progress) onProgress,
   ) async {
+    isTransferActive = true;
+    _lastActivityAt = DateTime.now();
     try {
       await _ensureDataChannelOpen();
 
@@ -679,6 +923,9 @@ class WebRTCP2PService {
       final hash = Object.hashAll(sampleBytes);
       final transferId =
           "${name.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')}_${fileBytes.length}_$hash";
+      _receiverSupportsAck = false;
+      _ackedBytes = 0;
+      _maxOutstanding = _outstandingFloor;
       _resumeOfferCompleter = Completer<int>();
 
       // Send header
@@ -695,10 +942,16 @@ class WebRTCP2PService {
           const Duration(seconds: 15),
         );
       } catch (_) {
-        print("Timeout or error waiting for resume_offer, starting from 0");
+        AppLogger.w(
+          "RESUME",
+          "Timeout or error waiting for resume_offer, starting from 0",
+        );
       } finally {
         _resumeOfferCompleter = null;
       }
+
+      _ackedBytes = startOffset;
+      AppLogger.i("RESUME", "Resuming P2P transfer at offset: $startOffset");
 
       const int chunkSize = _dataChunkSize;
       int offset = startOffset;
@@ -708,7 +961,9 @@ class WebRTCP2PService {
       while (offset < fileBytes.length) {
         if (dataChannel == null ||
             dataChannel!.state != RTCDataChannelState.RTCDataChannelOpen) {
-          throw Exception("Data channel closed during transfer");
+          throw DataChannelClosedException(
+            "Data channel closed during transfer",
+          );
         }
 
         int end = offset + chunkSize;
@@ -717,17 +972,25 @@ class WebRTCP2PService {
         final chunk = fileBytes.sublist(offset, end);
 
         dataChannel!.send(RTCDataChannelMessage.fromBinary(chunk));
+        _lastActivityAt = DateTime.now();
         offset = end;
         _reportOutgoingProgress(offset, fileBytes.length, onProgress);
 
-        // Native flow control using bufferedAmount
-        await _waitIfBufferFull();
+        // Flow control using ACK pacing or native bufferedAmount fallback
+        await _waitIfOutstandingTooHigh(offset);
       }
 
+      await _waitForAllAcks(fileBytes.length);
+
+      isTransferActive = false;
+      _lastActivityAt = null;
       await _finishTransfer();
     } catch (e) {
-      print("Error sending file: $e");
+      AppLogger.e("TRANSFER", "Error sending file", e);
       rethrow;
+    } finally {
+      isTransferActive = false;
+      _lastActivityAt = null;
     }
   }
 
@@ -736,6 +999,8 @@ class WebRTCP2PService {
     String name,
     Function(double progress) onProgress,
   ) async {
+    isTransferActive = true;
+    _lastActivityAt = DateTime.now();
     try {
       await _ensureDataChannelOpen();
 
@@ -745,6 +1010,9 @@ class WebRTCP2PService {
       final transferId =
           "${name.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')}_${totalSize}_${lastModified.millisecondsSinceEpoch}";
 
+      _receiverSupportsAck = false;
+      _ackedBytes = 0;
+      _maxOutstanding = _outstandingFloor;
       _resumeOfferCompleter = Completer<int>();
 
       // Send header
@@ -761,10 +1029,16 @@ class WebRTCP2PService {
           const Duration(seconds: 15),
         );
       } catch (_) {
-        print("Timeout or error waiting for resume_offer, starting from 0");
+        AppLogger.w(
+          "RESUME",
+          "Timeout or error waiting for resume_offer, starting from 0",
+        );
       } finally {
         _resumeOfferCompleter = null;
       }
+
+      _ackedBytes = startOffset;
+      AppLogger.i("RESUME", "Resuming P2P transfer at offset: $startOffset");
 
       // Stream file using openRead to get automatic double-buffering (read-ahead)
       final stream = file.openRead(startOffset);
@@ -775,7 +1049,9 @@ class WebRTCP2PService {
       await for (final chunk in stream) {
         if (dataChannel == null ||
             dataChannel!.state != RTCDataChannelState.RTCDataChannelOpen) {
-          throw Exception("Data channel closed during transfer");
+          throw DataChannelClosedException(
+            "Data channel closed during transfer",
+          );
         }
 
         // Slice chunk if it exceeds 16KB
@@ -785,7 +1061,9 @@ class WebRTCP2PService {
         while (chunkOffset < uint8ListChunk.length) {
           if (dataChannel == null ||
               dataChannel!.state != RTCDataChannelState.RTCDataChannelOpen) {
-            throw Exception("Data channel closed during transfer");
+            throw DataChannelClosedException(
+              "Data channel closed during transfer",
+            );
           }
 
           final end =
@@ -796,19 +1074,27 @@ class WebRTCP2PService {
           final slice = uint8ListChunk.sublist(chunkOffset, end);
 
           dataChannel!.send(RTCDataChannelMessage.fromBinary(slice));
+          _lastActivityAt = DateTime.now();
           sentBytes += slice.length;
           chunkOffset += slice.length;
           _reportOutgoingProgress(sentBytes, totalSize, onProgress);
 
-          // Flow control
-          await _waitIfBufferFull();
+          // Flow control using ACK pacing or native bufferedAmount fallback
+          await _waitIfOutstandingTooHigh(sentBytes);
         }
       }
 
+      await _waitForAllAcks(totalSize);
+
+      isTransferActive = false;
+      _lastActivityAt = null;
       await _finishTransfer();
     } catch (e) {
-      print("Error sending file stream: $e");
+      AppLogger.e("TRANSFER", "Error sending file stream", e);
       rethrow;
+    } finally {
+      isTransferActive = false;
+      _lastActivityAt = null;
     }
   }
 
@@ -816,14 +1102,21 @@ class WebRTCP2PService {
     String uri,
     String name,
     int size,
-    Function(double progress) onProgress,
-  ) async {
+    Function(double progress) onProgress, {
+    String? transferId,
+  }) async {
+    isTransferActive = true;
+    _lastActivityAt = DateTime.now();
     try {
       await _ensureDataChannelOpen();
 
       final sanitizedUri = uri.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
-      final transferId =
+      final actualTransferId =
+          transferId ??
           "${name.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')}_${size}_$sanitizedUri";
+      _receiverSupportsAck = false;
+      _ackedBytes = 0;
+      _maxOutstanding = _outstandingFloor;
       _resumeOfferCompleter = Completer<int>();
 
       // Send header
@@ -831,7 +1124,7 @@ class WebRTCP2PService {
         'type': 'file_header',
         'name': name,
         'size': size,
-        'transferId': transferId,
+        'transferId': actualTransferId,
       });
 
       int startOffset = 0;
@@ -840,15 +1133,21 @@ class WebRTCP2PService {
           const Duration(seconds: 15),
         );
       } catch (_) {
-        print("Timeout or error waiting for resume_offer, starting from 0");
+        AppLogger.w(
+          "RESUME",
+          "Timeout or error waiting for resume_offer, starting from 0",
+        );
       } finally {
         _resumeOfferCompleter = null;
       }
 
+      _ackedBytes = startOffset;
+      AppLogger.i("RESUME", "Resuming P2P transfer at offset: $startOffset");
+
       const channel = MethodChannel('zapshare.saf');
       final result = await channel.invokeMethod('openReadStream', {'uri': uri});
       if (result == null) {
-        throw Exception('Failed to open stream for URI: $uri');
+        throw FileStreamException('Failed to open stream for URI: $uri');
       }
       final streamId = result.toString();
 
@@ -860,13 +1159,16 @@ class WebRTCP2PService {
             'position': startOffset,
           });
           if (seekRes != true) {
-            throw Exception(
+            throw SeekFailedException(
               'Failed to seek native SAF stream to position $startOffset',
             );
           }
         } catch (seekErr) {
-          print('⚠️ Native seekStream failed: $seekErr');
-          throw Exception('SAF Seek failed: $seekErr');
+          AppLogger.w("RESUME", "Native seekStream failed", seekErr);
+          if (seekErr is TransferException) {
+            rethrow;
+          }
+          throw SeekFailedException('SAF Seek failed: $seekErr');
         }
       }
 
@@ -882,7 +1184,9 @@ class WebRTCP2PService {
         while (sentBytes < size) {
           if (dataChannel == null ||
               dataChannel!.state != RTCDataChannelState.RTCDataChannelOpen) {
-            throw Exception("Data channel closed during transfer");
+            throw DataChannelClosedException(
+              "Data channel closed during transfer",
+            );
           }
 
           final bytesToRead =
@@ -903,7 +1207,9 @@ class WebRTCP2PService {
           while (blockOffset < block.length) {
             if (dataChannel == null ||
                 dataChannel!.state != RTCDataChannelState.RTCDataChannelOpen) {
-              throw Exception("Data channel closed during transfer");
+              throw DataChannelClosedException(
+                "Data channel closed during transfer",
+              );
             }
 
             final end =
@@ -914,12 +1220,13 @@ class WebRTCP2PService {
             final chunk = block.sublist(blockOffset, end);
 
             dataChannel!.send(RTCDataChannelMessage.fromBinary(chunk));
+            _lastActivityAt = DateTime.now();
             sentBytes += chunk.length;
             blockOffset += chunk.length;
             _reportOutgoingProgress(sentBytes, size, onProgress);
 
-            // Flow control
-            await _waitIfBufferFull();
+            // Flow control using ACK pacing or native bufferedAmount fallback
+            await _waitIfOutstandingTooHigh(sentBytes);
           }
         }
       } finally {
@@ -929,21 +1236,124 @@ class WebRTCP2PService {
             'streamId': streamId,
           });
         } catch (e) {
-          print("Error closing stream: $e");
+          AppLogger.e("TRANSFER", "Error closing stream", e);
         }
       }
 
+      await _waitForAllAcks(size);
+
+      isTransferActive = false;
+      _lastActivityAt = null;
       await _finishTransfer();
     } catch (e) {
-      print("Error sending file stream from URI: $e");
+      AppLogger.e("TRANSFER", "Error sending file stream from URI", e);
       rethrow;
+    } finally {
+      isTransferActive = false;
+      _lastActivityAt = null;
+    }
+  }
+
+  void _startStallTimer() {
+    _stallTimer?.cancel();
+    _stallTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+      if (!isTransferActive) return;
+      final now = DateTime.now();
+
+      if (_lastActivityAt != null) {
+        if (now.difference(_lastActivityAt!) > const Duration(seconds: 30)) {
+          AppLogger.w(
+            "TRANSFER",
+            "Stall detected: no connection activity for 30 seconds. Forcing rebuild.",
+          );
+          unawaited(_forceConnectionClose());
+          onConnectionStateChanged?.call(
+            RTCPeerConnectionState.RTCPeerConnectionStateFailed,
+          );
+        }
+      }
+    });
+  }
+
+  Future<bool> _checkLiveness() async {
+    if (dataChannel == null ||
+        dataChannel!.state != RTCDataChannelState.RTCDataChannelOpen) {
+      return false;
+    }
+
+    _pongCompleter = Completer<void>();
+    try {
+      sendControlMessage({'type': 'ping'});
+      await _pongCompleter!.future.timeout(const Duration(seconds: 3));
+      return true;
+    } catch (_) {
+      AppLogger.w("TRANSFER", "Liveness check failed — ping timed out");
+      return false;
+    } finally {
+      _pongCompleter = null;
+    }
+  }
+
+  Future<void> _forceConnectionClose() async {
+    if (isTransferActive && _incomingTransferId != null && _tempFile != null) {
+      final transferId = _incomingTransferId!;
+      final name = _incomingFileName;
+      final size = _incomingFileSize;
+      final received = _receivedBytes;
+      final path = _tempFile!.path;
+      final sink = _fileSink;
+
+      try {
+        await sink?.flush();
+        await TransferResumeStore.persist(
+          transferId: transferId,
+          name: name,
+          size: size,
+          receivedBytes: received,
+          partialFilePath: path,
+        );
+        AppLogger.i(
+          "TRANSFER",
+          "Saved partial transfer checkpoint at $received bytes during stall force-close.",
+        );
+      } catch (e) {
+        AppLogger.w(
+          "TRANSFER",
+          "Error saving checkpoint during force-close: $e",
+        );
+      }
+    }
+
+    isTransferActive = false;
+    _lastActivityAt = null;
+    try {
+      await dataChannel?.close();
+    } catch (e) {
+      AppLogger.w(
+        "DATACHANNEL",
+        "Error closing data channel during force-close: $e",
+      );
+    }
+    try {
+      await peerConnection?.close();
+    } catch (e) {
+      AppLogger.w(
+        "SIGNALING",
+        "Error closing peer connection during force-close: $e",
+      );
     }
   }
 
   Future<void> dispose() async {
     try {
+      _stallTimer?.cancel();
+      isTransferActive = false;
+      _lastActivityAt = null;
+
       if (_bufferLowCompleter != null && !_bufferLowCompleter!.isCompleted) {
-        _bufferLowCompleter!.completeError(Exception("Disposed"));
+        _bufferLowCompleter!.completeError(
+          TransferDisposedException("Disposed"),
+        );
       }
       if (_fileSink != null) {
         try {
@@ -954,15 +1364,69 @@ class WebRTCP2PService {
       _tempFile = null;
       _incomingTransferId = null;
       await stopSharing();
-      await dataChannel?.close();
-      await peerConnection?.close();
+      try {
+        await dataChannel?.close();
+      } catch (e) {
+        AppLogger.w(
+          "DATACHANNEL",
+          "Error closing data channel during dispose: $e",
+        );
+      }
+      try {
+        await peerConnection?.close();
+      } catch (e) {
+        AppLogger.w(
+          "SIGNALING",
+          "Error closing peer connection during dispose: $e",
+        );
+      }
       peerConnection = null;
       dataChannel = null;
       _pendingRemoteCandidates.clear();
       _hasRemoteDescription = false;
       _onSdpGenerated = null;
     } catch (e) {
-      print("Error disposing WebRTC service: $e");
+      AppLogger.e("STARTUP", "Error disposing WebRTC service", e);
     }
   }
+}
+
+abstract class TransferException implements Exception {
+  final String message;
+  TransferException(this.message);
+
+  @override
+  String toString() => message;
+}
+
+class AckTimeoutException extends TransferException {
+  AckTimeoutException(super.message);
+}
+
+class DataChannelClosedException extends TransferException {
+  DataChannelClosedException(super.message);
+}
+
+class BufferStalledException extends TransferException {
+  BufferStalledException(super.message);
+}
+
+class ConnectionStateChangedException extends TransferException {
+  ConnectionStateChangedException(super.message);
+}
+
+class FileDurableCompletionException extends TransferException {
+  FileDurableCompletionException(super.message);
+}
+
+class SeekFailedException extends TransferException {
+  SeekFailedException(super.message);
+}
+
+class FileStreamException extends TransferException {
+  FileStreamException(super.message);
+}
+
+class TransferDisposedException extends TransferException {
+  TransferDisposedException(super.message);
 }

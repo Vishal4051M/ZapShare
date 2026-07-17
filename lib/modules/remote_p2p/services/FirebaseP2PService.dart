@@ -172,6 +172,32 @@ class FirebaseP2PService {
 
   // Clipboard Sync API
 
+  Future<void> _pruneClipboard(String userId) async {
+    try {
+      final ref = database.ref('clipboards/$userId');
+      final snapshot = await ref.orderByChild('timestamp').get();
+      if (snapshot.exists && snapshot.value != null) {
+        final Map<dynamic, dynamic> items = snapshot.value as Map;
+        if (items.length > 30) {
+          final sortedKeys = items.keys.toList()
+            ..sort((a, b) {
+              final aTime = (items[a] as Map)['timestamp'] ?? 0;
+              final bTime = (items[b] as Map)['timestamp'] ?? 0;
+              return aTime.compareTo(bTime);
+            });
+          final keysToDelete = sortedKeys.sublist(0, sortedKeys.length - 30);
+          final Map<String, dynamic> updates = {};
+          for (final key in keysToDelete) {
+            updates[key] = null;
+          }
+          await ref.update(updates);
+        }
+      }
+    } catch (e) {
+      print("Error pruning clipboard: $e");
+    }
+  }
+
   Future<void> syncClipboard(String userId, String encryptedContent) async {
     try {
       final ref = database.ref('clipboards/$userId').push();
@@ -179,6 +205,7 @@ class FirebaseP2PService {
         'content': encryptedContent,
         'timestamp': ServerValue.timestamp,
       });
+      unawaited(_pruneClipboard(userId));
     } catch (e) {
       print("Error syncing clipboard: $e");
       rethrow;

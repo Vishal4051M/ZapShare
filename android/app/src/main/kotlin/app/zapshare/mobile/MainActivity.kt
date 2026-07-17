@@ -306,13 +306,26 @@ class MainActivity : FlutterActivity() {
                         if (newStream != null) {
                             val bufferedStream = java.io.BufferedInputStream(newStream)
                             var skipped = 0L
+                            val tempBuffer = ByteArray(4096)
                             while (skipped < position) {
-                                val skipSize = bufferedStream.skip(position - skipped)
-                                if (skipSize <= 0) break
+                                val toSkip = position - skipped
+                                var skipSize = bufferedStream.skip(toSkip)
+                                if (skipSize <= 0) {
+                                    val readSize = bufferedStream.read(tempBuffer, 0, Math.min(tempBuffer.size.toLong(), toSkip).toInt())
+                                    if (readSize <= 0) {
+                                        break
+                                    }
+                                    skipSize = readSize.toLong()
+                                }
                                 skipped += skipSize
                             }
-                            inputStreams[id] = bufferedStream
-                            result.success(true)
+                            if (skipped == position) {
+                                inputStreams[id] = bufferedStream
+                                result.success(true)
+                            } else {
+                                bufferedStream.close()
+                                result.error("SEEK_FAIL", "Skipped only $skipped of $position bytes", null)
+                            }
                         } else {
                             result.error("REOPEN_FAIL", "Failed to reopen stream", null)
                         }

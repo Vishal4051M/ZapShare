@@ -30,6 +30,9 @@ class _RemoteSendViewState extends State<RemoteSendView> {
   List<PlatformFile> _selectedFiles = [];
   bool _isSending = false;
   bool _isCurrentlySendingFiles = false;
+  // A connected-state update can rebuild this view several times before the
+  // post-frame callback runs.  Keep the automatic send a one-shot action.
+  bool _hasScheduledSelectedTransfer = false;
   String _customAvatar = 'face_1';
   late final Stream<List<Map<String, dynamic>>> _friendsStream;
   late final Stream<List<Map<String, dynamic>>> _friendRequestsStream;
@@ -121,6 +124,7 @@ class _RemoteSendViewState extends State<RemoteSendView> {
           }
           setState(() {
             _selectedFiles = pickedFiles;
+            _hasScheduledSelectedTransfer = false;
           });
         }
       } else {
@@ -128,6 +132,7 @@ class _RemoteSendViewState extends State<RemoteSendView> {
         if (result != null) {
           setState(() {
             _selectedFiles = result.files;
+            _hasScheduledSelectedTransfer = false;
           });
         }
       }
@@ -802,9 +807,11 @@ class _RemoteSendViewState extends State<RemoteSendView> {
   Widget _buildSendingProgressView(P2PSessionModel session) {
     // Automatically trigger sending picked files if we are host and just connected
     if (session.connectionState == P2PConnectionState.connected &&
-        _selectedFiles.isNotEmpty) {
+        _selectedFiles.isNotEmpty &&
+        !_hasScheduledSelectedTransfer) {
+      _hasScheduledSelectedTransfer = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _sendFiles();
+        if (mounted) _sendFiles();
       });
     }
 

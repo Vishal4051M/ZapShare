@@ -45,7 +45,7 @@
     "semantic_hash": ""
   },
   "android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java": {
-    "mtime": 1784115897.520166,
+    "mtime": 1784185895.899538,
     "ast_hash": "0fb210039063688563b434e27dc87267",
     "semantic_hash": ""
   },
@@ -230,8 +230,8 @@
     "semantic_hash": ""
   },
   "lib/Screens/android/AndroidHomeScreen.dart": {
-    "mtime": 1784099921.6080103,
-    "ast_hash": "69c35a564785fcc1cf2a869d52873536",
+    "mtime": 1784123219.7178278,
+    "ast_hash": "5b161bf17be808beddf9ea6d1fc4607e",
     "semantic_hash": ""
   },
   "lib/Screens/android/AndroidHttpFileShareScreen.dart": {
@@ -285,8 +285,8 @@
     "semantic_hash": ""
   },
   "lib/Screens/linux/LinuxHomeScreen.dart": {
-    "mtime": 1782021876.4244149,
-    "ast_hash": "9fc8f9445b700631d3948c79d5bdc04d",
+    "mtime": 1784123148.4416685,
+    "ast_hash": "21f2e8ac125c8edc39740befe9823fb8",
     "semantic_hash": ""
   },
   "lib/Screens/linux/LinuxReceiveScreen.dart": {
@@ -310,8 +310,8 @@
     "semantic_hash": ""
   },
   "lib/Screens/shared/FirstTimeSetupScreen.dart": {
-    "mtime": 1782571444.3333056,
-    "ast_hash": "5889b976e4317db86a2e0808edf0e135",
+    "mtime": 1784122959.1438406,
+    "ast_hash": "80f287b473a9766abeeee08084448055",
     "semantic_hash": ""
   },
   "lib/Screens/shared/NativeVideoPlayerScreen.dart": {
@@ -415,8 +415,8 @@
     "semantic_hash": ""
   },
   "lib/Screens/windows/WindowsHomeScreen.dart": {
-    "mtime": 1784099921.7934444,
-    "ast_hash": "c41dd877d017d15941e5448a9b0b6bce",
+    "mtime": 1784165086.7725987,
+    "ast_hash": "7614030ea8d17e82a4e63a77a0c39c41",
     "semantic_hash": ""
   },
   "lib/Screens/windows/WindowsReceiveScreen.dart": {
@@ -510,13 +510,13 @@
     "semantic_hash": ""
   },
   "lib/main.dart": {
-    "mtime": 1784091373.1508012,
-    "ast_hash": "e56e4a57c9caa4ff8e1deeac2fedae68",
+    "mtime": 1784165000.3258233,
+    "ast_hash": "72d8ce3cd23c2dae80db28d971960ccd",
     "semantic_hash": ""
   },
   "lib/modules/remote_p2p/controllers/RemoteP2PController.dart": {
-    "mtime": 1784112430.9424324,
-    "ast_hash": "04c79530998316cc34a0b96830592794",
+    "mtime": 1784187313.6979754,
+    "ast_hash": "3140ffeda9ad030d83789c16069f20fd",
     "semantic_hash": ""
   },
   "lib/modules/remote_p2p/models/P2PSessionModel.dart": {
@@ -535,8 +535,8 @@
     "semantic_hash": ""
   },
   "lib/modules/remote_p2p/services/WebRTCP2PService.dart": {
-    "mtime": 1784116591.763475,
-    "ast_hash": "1240d84ed181028bb7d5d16e16d211ec",
+    "mtime": 1784189527.3071387,
+    "ast_hash": "042e5c7a3082b119b6c5410c0d2050c7",
     "semantic_hash": ""
   },
   "lib/modules/remote_p2p/views/AvatarSelectionDialog.dart": {
@@ -560,8 +560,8 @@
     "semantic_hash": ""
   },
   "lib/modules/remote_p2p/views/RemoteSendView.dart": {
-    "mtime": 1784099921.3393312,
-    "ast_hash": "56a4064c9d8050873d5618434eac1d3b",
+    "mtime": 1784174030.8496356,
+    "ast_hash": "1aacfc81cecb12e16b9f5619a312c4a1",
     "semantic_hash": ""
   },
   "lib/modules/remote_p2p/views/RemoteTransferDialog.dart": {
@@ -585,8 +585,8 @@
     "semantic_hash": ""
   },
   "lib/services/device_discovery_service.dart": {
-    "mtime": 1783611496.8763437,
-    "ast_hash": "03497e682602ba696d4a2be42ebcd678",
+    "mtime": 1784164499.3136427,
+    "ast_hash": "be0f9cdf6200a0de63f878e019b13a81",
     "semantic_hash": ""
   },
   "lib/services/encryption_service.dart": {
@@ -595,8 +595,8 @@
     "semantic_hash": ""
   },
   "lib/services/firebase_service.dart": {
-    "mtime": 1784120003.1535602,
-    "ast_hash": "0420a67a8aea51af12a9e71ca38050bd",
+    "mtime": 1784123388.015897,
+    "ast_hash": "18c74d67b3cc5ea01bb62492801da269",
     "semantic_hash": ""
   },
   "lib/services/p2p_service.dart": {
@@ -1545,8 +1545,8 @@
     "semantic_hash": ""
   },
   "lib/modules/remote_p2p/services/RemoteTransferService.dart": {
-    "mtime": 1784107869.897935,
-    "ast_hash": "8bf1ec94bef7a561146d01b738bc231d",
+    "mtime": 1784176189.0790608,
+    "ast_hash": "aafa90706906f23e18fe0625fd9ef00c",
     "semantic_hash": ""
   },
   "vercel/.vercel/project.json": {
@@ -1582,6 +1582,16 @@
   "lib/modules/remote_p2p/services/TransferResumeStore.dart": {
     "mtime": 1784092518.7231014,
     "ast_hash": "ff909eaede0705ee2d09d8a4920cf3d6",
+    "semantic_hash": ""
+  },
+  "lib/services/EnvService.dart": {
+    "mtime": 1784123302.845891,
+    "ast_hash": "2c21340cc8c5886c24d04ca4ed6bcaaa",
+    "semantic_hash": ""
+  },
+  "lib/Constants/AppLogger.dart": {
+    "mtime": 1784164782.532619,
+    "ast_hash": "ff006d8b5470487e1ccd089a76012bfb",
     "semantic_hash": ""
   }
 }

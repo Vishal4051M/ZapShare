@@ -421,6 +421,32 @@ class FirebaseService {
     return FirebaseDatabase.instance;
   }
 
+  Future<void> _pruneClipboard(String userId) async {
+    try {
+      final ref = _db.ref('clipboards/$userId');
+      final snapshot = await ref.orderByChild('timestamp').get();
+      if (snapshot.exists && snapshot.value != null) {
+        final Map<dynamic, dynamic> items = snapshot.value as Map;
+        if (items.length > 30) {
+          final sortedKeys = items.keys.toList()
+            ..sort((a, b) {
+              final aTime = (items[a] as Map)['timestamp'] ?? 0;
+              final bTime = (items[b] as Map)['timestamp'] ?? 0;
+              return aTime.compareTo(bTime);
+            });
+          final keysToDelete = sortedKeys.sublist(0, sortedKeys.length - 30);
+          final Map<String, dynamic> updates = {};
+          for (final key in keysToDelete) {
+            updates[key] = null;
+          }
+          await ref.update(updates);
+        }
+      }
+    } catch (e) {
+      print("Error pruning clipboard: $e");
+    }
+  }
+
   Future<void> addClipboardItem(String content) async {
     final user = currentUser;
     final uid = _firebaseUid;
@@ -432,6 +458,7 @@ class FirebaseService {
         'content': encryptedContent,
         'timestamp': ServerValue.timestamp,
       });
+      unawaited(_pruneClipboard(uid));
     } catch (e) {
       print("Error adding clipboard item: $e");
       rethrow;
@@ -540,29 +567,44 @@ class FirebaseService {
 
     final controller = StreamController<List<Map<String, dynamic>>>.broadcast();
     final ref = _db.ref('clipboards/$uid');
-    final subscription = ref.onValue.listen((event) {
-      if (event.snapshot.exists && event.snapshot.value != null) {
-        final List<Map<String, dynamic>> list = [];
-        final Map<dynamic, dynamic> items = event.snapshot.value as Map;
-        items.forEach((key, val) {
-          final data = Map<String, dynamic>.from(val as Map);
-          final encrypted = data['content'] as String?;
-          if (encrypted != null) {
-            list.add({
-              'content': EncryptionService.decrypt(encrypted, user.id),
-              'created_at':
-                  DateTime.fromMillisecondsSinceEpoch(
-                    data['timestamp'] ?? 0,
-                  ).toIso8601String(),
-            });
+    final List<Map<String, dynamic>> clipboardList = [];
+
+    final subscription = ref
+        .orderByChild('timestamp')
+        .limitToLast(20)
+        .onChildAdded
+        .listen((event) {
+          if (event.snapshot.exists && event.snapshot.value != null) {
+            final data = Map<String, dynamic>.from(event.snapshot.value as Map);
+            final encrypted = data['content'] as String?;
+            if (encrypted != null) {
+              final newItem = {
+                'id': event.snapshot.key,
+                'content': EncryptionService.decrypt(encrypted, user.id),
+                'created_at': DateTime.fromMillisecondsSinceEpoch(
+                  data['timestamp'] ?? 0,
+                ).toIso8601String(),
+              };
+
+              final existingIndex = clipboardList.indexWhere((item) => item['id'] == newItem['id']);
+              if (existingIndex != -1) {
+                clipboardList[existingIndex] = newItem;
+              } else {
+                clipboardList.add(newItem);
+              }
+
+              clipboardList.sort((a, b) => b['created_at'].compareTo(a['created_at']));
+
+              if (clipboardList.length > 20) {
+                clipboardList.removeRange(20, clipboardList.length);
+              }
+
+              if (!controller.isClosed) {
+                controller.add(List.from(clipboardList));
+              }
+            }
           }
         });
-        list.sort((a, b) => b['created_at'].compareTo(a['created_at']));
-        controller.add(list);
-      } else {
-        controller.add([]);
-      }
-    });
 
     controller.onCancel = () {
       subscription.cancel();
@@ -1295,25 +1337,35 @@ class FallbackDatabaseRef {
     return Map.fromEntries(entries);
   }
 
-  Future<FallbackDataSnapshot> get([String? queryParams, bool forceNoFilters = false]) async {
+  Future<FallbackDataSnapshot> get([String? queryParams, bool forceNoFilters = false, String? ifNoneMatch]) async {
     final url = await _getUrl(queryParams, forceNoFilters);
-    final res = await _client.get(Uri.parse(url));
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+    };
+    if (ifNoneMatch != null) {
+      headers['If-None-Match'] = ifNoneMatch;
+    }
+    final res = await _client.get(Uri.parse(url), headers: headers);
+    if (res.statusCode == 304) {
+      return FallbackDataSnapshot(null, notModified: true);
+    }
     if (res.statusCode != 200) {
       if (!forceNoFilters && res.statusCode == 400 && res.body.contains("Index not defined")) {
         // Fallback: Fetch without server filters, and apply them client-side
-        return get(null, true);
+        return get(null, true, ifNoneMatch);
       }
       throw Exception("REST get failed: status ${res.statusCode}, body: ${res.body}");
     }
+    final etag = res.headers['etag'];
     if (res.body == 'null') {
-      return FallbackDataSnapshot(null);
+      return FallbackDataSnapshot(null, etag: etag);
     }
     final decoded = jsonDecode(res.body);
     if (forceNoFilters || (queryParams == null && (orderByVal != null || limitToLastVal != null))) {
       final filtered = _applyClientSideFilters(decoded);
-      return FallbackDataSnapshot(filtered);
+      return FallbackDataSnapshot(filtered, etag: etag);
     }
-    return FallbackDataSnapshot(decoded);
+    return FallbackDataSnapshot(decoded, etag: etag);
   }
 
   FallbackDatabaseRef orderByChild(String child) {
@@ -1330,12 +1382,28 @@ class FallbackDatabaseRef {
     final controller = StreamController<FallbackDatabaseEvent>.broadcast();
     Timer? timer;
     bool isPolling = false;
+    String? lastETag;
+
+    Duration pollInterval = const Duration(milliseconds: 3000);
+    final lowerPath = path.toLowerCase();
+    if (lowerPath.contains('friend_requests') ||
+        lowerPath.contains('clipboards') ||
+        lowerPath.contains('transfers') ||
+        lowerPath.contains('cast_requests')) {
+      pollInterval = const Duration(seconds: 12);
+    }
 
     void poll() async {
       if (isPolling) return;
       isPolling = true;
       try {
-        final snapshot = await get();
+        final snapshot = await get(null, false, lastETag);
+        if (snapshot.notModified) {
+          return;
+        }
+        if (snapshot.etag != null) {
+          lastETag = snapshot.etag;
+        }
         if (!controller.isClosed) {
           controller.add(FallbackDatabaseEvent(snapshot));
         }
@@ -1347,7 +1415,7 @@ class FallbackDatabaseRef {
     }
 
     poll();
-    timer = Timer.periodic(const Duration(milliseconds: 3000), (_) => poll());
+    timer = Timer.periodic(pollInterval, (_) => poll());
 
     controller.onCancel = () {
       timer?.cancel();
@@ -1363,6 +1431,16 @@ class FallbackDatabaseRef {
     final Set<String> seenKeys = {};
     String? lastKey;
     bool isPolling = false;
+    String? lastETag;
+
+    Duration pollInterval = const Duration(milliseconds: 3000);
+    final lowerPath = path.toLowerCase();
+    if (lowerPath.contains('friend_requests') ||
+        lowerPath.contains('clipboards') ||
+        lowerPath.contains('transfers') ||
+        lowerPath.contains('cast_requests')) {
+      pollInterval = const Duration(seconds: 12);
+    }
 
     void poll() async {
       if (isPolling) return;
@@ -1372,7 +1450,13 @@ class FallbackDatabaseRef {
         if (lastKey != null) {
           queryParams = 'orderBy=%22%24key%22&startAt=%22$lastKey%22';
         }
-        final snapshot = await get(queryParams);
+        final snapshot = await get(queryParams, false, lastETag);
+        if (snapshot.notModified) {
+          return;
+        }
+        if (snapshot.etag != null) {
+          lastETag = snapshot.etag;
+        }
         if (controller.isClosed) return;
 
         if (snapshot.exists && snapshot.value is Map) {
@@ -1391,6 +1475,7 @@ class FallbackDatabaseRef {
           // Node has been deleted (e.g. clearSignaling), reset polling state
           seenKeys.clear();
           lastKey = null;
+          lastETag = null;
         }
       } catch (e) {
         print("REST poll error: $e");
@@ -1400,7 +1485,7 @@ class FallbackDatabaseRef {
     }
 
     poll();
-    timer = Timer.periodic(const Duration(milliseconds: 3000), (_) => poll());
+    timer = Timer.periodic(pollInterval, (_) => poll());
 
     controller.onCancel = () {
       timer?.cancel();
@@ -1414,7 +1499,9 @@ class FallbackDatabaseRef {
 class FallbackDataSnapshot {
   final dynamic value;
   final String? key;
-  FallbackDataSnapshot(this.value, {this.key});
+  final String? etag;
+  final bool notModified;
+  FallbackDataSnapshot(this.value, {this.key, this.etag, this.notModified = false});
   bool get exists => value != null;
 }
 

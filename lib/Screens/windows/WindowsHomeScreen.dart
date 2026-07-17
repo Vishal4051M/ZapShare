@@ -9,6 +9,7 @@ import 'package:zap_share/Screens/windows/WindowsFileShareScreen.dart';
 import 'package:zap_share/Screens/windows/WindowsReceiveScreen.dart';
 import 'package:zap_share/blocs/navigation/smooth_page_route.dart';
 import 'package:zap_share/Screens/windows/WindowsCastSelectionScreen.dart';
+import 'package:zap_share/main.dart';
 import 'dart:math';
 import '../../services/device_discovery_service.dart';
 import 'package:zap_share/services/firebase_service.dart';
@@ -19,6 +20,7 @@ import 'package:zap_share/modules/remote_p2p/views/RemoteSendView.dart';
 import 'package:zap_share/modules/remote_p2p/views/RemoteReceiveView.dart';
 import 'package:window_manager/window_manager.dart';
 import 'dart:async';
+import '../../Constants/AppLogger.dart';
 
 class WindowsHomeScreen extends StatefulWidget {
   const WindowsHomeScreen({super.key});
@@ -71,7 +73,9 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
 
   void _subscribeToCloudClipboard() {
     _cloudClipboardSubscription?.cancel();
+    _cloudClipboardSubscription = null;
     _clipboardInsertSubscription?.cancel();
+    _clipboardInsertSubscription = null;
 
     // Only subscribe if we are logged in
     final service = FirebaseService();
@@ -82,6 +86,7 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
     // 1. Subscribe to the LIST (Base Stream)
     // This connects the Firebase stream to our UI controller
     _cloudClipboardSubscription = service.getClipboardStream().listen((items) {
+      if (!mounted) return;
       if (!_uiStreamController.isClosed) {
         _uiStreamController.add(items);
       }
@@ -94,6 +99,7 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
     // This is the efficient "Push" notification for updates
     _clipboardInsertSubscription = service.subscribeToClipboardUpdates().listen(
       (newItem) async {
+        if (!mounted) return;
         if (DateTime.now().difference(subscriptionTime).inMilliseconds < 1500) {
           return;
         }
@@ -106,6 +112,7 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
         // Retrieve the latest full list to ensure the UI is perfect
         try {
           final history = await service.fetchClipboardHistory();
+          if (!mounted) return;
           if (!_uiStreamController.isClosed) {
             _uiStreamController.add(history);
           }
@@ -129,19 +136,29 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
     // Sync if content is different from what's currently on the clipboard
     // OR if we haven't tracked it as the last cloud content yet.
     if (kDebugMode) {
-      print("📋 [Clipboard] Processing incoming cloud content: '${content.substring(0, min(15, content.length))}'...");
+      AppLogger.d(
+        "FIREBASE",
+        "📋 [Clipboard] Processing incoming cloud content: '${content.substring(0, min(15, content.length))}'...",
+      );
     }
 
     if (content != _lastClipboardContent) {
       if (kDebugMode) {
-        print("📋 [Clipboard] Applying new content to system clipboard: '${content.substring(0, min(15, content.length))}'");
+        AppLogger.i(
+          "FIREBASE",
+          "📋 [Clipboard] Applying new content to system clipboard: '${content.substring(0, min(15, content.length))}'",
+        );
       }
       // Sync FROM Cloud TO Windows Clipboard (works in background if app is minimized)
       try {
         await Clipboard.setData(ClipboardData(text: content));
       } catch (e) {
         if (kDebugMode) {
-          print("⚠️ [Clipboard] Failed to write to system clipboard: $e");
+          AppLogger.e(
+            "FIREBASE",
+            "📋 [Clipboard] Failed to write to system clipboard",
+            e,
+          );
         }
       }
 
@@ -161,7 +178,10 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
       }
     } else {
       if (kDebugMode) {
-        print("📋 [Clipboard] Ignored cloud content (already matches local tracker)");
+        AppLogger.d(
+          "FIREBASE",
+          "📋 [Clipboard] Ignored cloud content (already matches local tracker)",
+        );
       }
       // Even if it matches, ensure our tracking var is up to date
       _lastCloudContent = content;
@@ -177,7 +197,7 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
         await _discoveryService.start();
       }
     } catch (e) {
-      print("Error ensuring discovery in Home: $e");
+      AppLogger.e("STARTUP", "Error ensuring discovery in Home", e);
     }
   }
 
@@ -219,7 +239,10 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
           // In that case, we MUST NOT send it back to the cloud.
           if (currentText == _lastCloudContent) {
             if (kDebugMode) {
-              print("📋 [Clipboard] Filtered echo loop: System clipboard matches last cloud content");
+              AppLogger.d(
+                "FIREBASE",
+                "📋 [Clipboard] Filtered echo loop: System clipboard matches last cloud content",
+              );
             }
             // Just update local tracker so we don't check this again
             _lastClipboardContent = currentText;
@@ -230,7 +253,8 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
           _lastClipboardContent = currentText;
 
           if (kDebugMode) {
-            print(
+            AppLogger.i(
+              "FIREBASE",
               "📋 [Clipboard] New local copy detected: ${currentText.substring(0, min(15, currentText.length))}...",
             );
           }
@@ -256,7 +280,7 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
                 );
               }
             } catch (e) {
-              if (kDebugMode) print("Sync Error: $e");
+              if (kDebugMode) AppLogger.e("FIREBASE", "Sync Error", e);
             }
           }
         }
@@ -1325,7 +1349,7 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
     try {
       await FirebaseService().initialize();
     } catch (e) {
-      print("Error initializing FirebaseService: $e");
+      AppLogger.e("STARTUP", "Error initializing FirebaseService", e);
     }
 
     if (mounted) {
@@ -1344,8 +1368,9 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
       ) {
         if (mounted) {
           final isLoggedIn = FirebaseService().currentUser != null;
-          print(
-            "DEBUG: WindowsHomeScreen authStateChanges - isLoggedIn: $isLoggedIn, currentUser: ${FirebaseService().currentUser?.email}",
+          AppLogger.d(
+            "FIREBASE",
+            "WindowsHomeScreen authStateChanges - isLoggedIn: $isLoggedIn, currentUser: ${FirebaseService().currentUser?.email}",
           );
           setState(() {
             _isAnywhereMode = isLoggedIn;
@@ -1435,18 +1460,20 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
 
   void _subscribeToTransfers() {
     _transfersSubscription?.cancel();
+    _transfersSubscription = null;
     final user = FirebaseService().currentUser;
     if (user == null) return;
 
     _transfersSubscription = FirebaseService()
         .getIncomingTransfersStream()
         .listen((transfers) {
+          if (!mounted) return;
           if (transfers.isNotEmpty) {
             final pending = transfers.firstWhere(
               (t) => t['status'] == 'pending',
               orElse: () => <String, dynamic>{},
             );
-            if (pending.isNotEmpty && mounted) {
+            if (pending.isNotEmpty) {
               _showIncomingTransferDialog(pending);
             }
           }
@@ -1455,18 +1482,20 @@ class _WindowsHomeScreenState extends State<WindowsHomeScreen>
 
   void _subscribeToFriendRequests() {
     _friendRequestsSubscription?.cancel();
+    _friendRequestsSubscription = null;
     final user = FirebaseService().currentUser;
     if (user == null) return;
 
     _friendRequestsSubscription = FirebaseService()
         .getIncomingFriendRequestsStream()
         .listen((requests) {
+          if (!mounted) return;
           if (requests.isNotEmpty) {
             final pending = requests.firstWhere(
               (r) => r['status'] == 'pending',
               orElse: () => <String, dynamic>{},
             );
-            if (pending.isNotEmpty && mounted) {
+            if (pending.isNotEmpty) {
               _showIncomingFriendRequestDialog(pending);
             }
           }
@@ -1759,7 +1788,7 @@ class _RippleEffect extends StatefulWidget {
 }
 
 class _RippleEffectState extends State<_RippleEffect>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, RouteAware {
   late final AnimationController _controller;
 
   // Constants
@@ -1768,14 +1797,36 @@ class _RippleEffectState extends State<_RippleEffect>
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: _duration)
-      ..repeat();
+    _controller = AnimationController(vsync: this, duration: _duration);
+    _controller.repeat();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      routeObserver.subscribe(this, route);
+    }
   }
 
   @override
   void dispose() {
+    routeObserver.unsubscribe(this);
     _controller.dispose();
     super.dispose();
+  }
+
+  @override
+  void didPushNext() {
+    _controller.stop();
+  }
+
+  @override
+  void didPopNext() {
+    if (mounted && !_controller.isAnimating) {
+      _controller.repeat();
+    }
   }
 
   @override
@@ -1846,14 +1897,13 @@ class _PulsePainter extends CustomPainter {
     final breathe = (0.5 + 0.5 * 0.5 * sin(progress * 2 * 3.14159)).abs();
     final dotR = size.width * 0.05 * (0.9 + breathe * 0.2);
 
-    // Glow
-    canvas.drawCircle(
-      center,
-      dotR * 1.6,
-      Paint()
-        ..color = color.withOpacity(0.12)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
-    );
+    // Glow using hardware-accelerated RadialGradient instead of expensive CPU blur
+    final glowPaint =
+        Paint()
+          ..shader = RadialGradient(
+            colors: [color.withOpacity(0.12), color.withOpacity(0.0)],
+          ).createShader(Rect.fromCircle(center: center, radius: dotR * 1.6));
+    canvas.drawCircle(center, dotR * 1.6, glowPaint);
 
     // Dot
     canvas.drawCircle(center, dotR, Paint()..color = color.withOpacity(0.3));

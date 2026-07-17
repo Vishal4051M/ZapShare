@@ -7,6 +7,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../Constants/AppLogger.dart';
 import '../models/P2PSessionModel.dart';
 import '../models/RemoteMessageModel.dart';
 import '../services/FirebaseP2PService.dart';
@@ -29,6 +30,12 @@ class RemoteP2PController {
   Future<void> _signalingQueue = Future.value();
   bool _isReconnecting = false;
   int _reconnectAttempts = 0;
+  int _totalRecoveryAttempts = 0;
+  int _transferRetryCount = 0;
+  // Invalidates recovery work that was already in flight when WebRTC reports a
+  // successful connection.  Cancelling a Timer alone cannot stop an async ICE
+  // restart that has already passed its await points.
+  int _recoveryGeneration = 0;
   double _lastTransferProgress = 0;
   Timer? _reconnectTimer;
   bool isHost = false;
@@ -65,7 +72,7 @@ class RemoteP2PController {
       });
       await _googleSignIn.signInSilently();
     } catch (e) {
-      print("Error initializing RemoteP2PController: $e");
+      AppLogger.e("STARTUP", "Error initializing RemoteP2PController", e);
     }
   }
 
@@ -76,7 +83,7 @@ class RemoteP2PController {
       notifyUI();
       return account != null;
     } catch (e) {
-      print("Google Sign-In failed: $e");
+      AppLogger.e("FIREBASE", "Google Sign-In failed", e);
       return false;
     }
   }
@@ -87,7 +94,7 @@ class RemoteP2PController {
       currentUser = null;
       notifyUI();
     } catch (e) {
-      print("Google Sign-Out failed: $e");
+      AppLogger.e("FIREBASE", "Google Sign-Out failed", e);
     }
   }
 
@@ -100,7 +107,7 @@ class RemoteP2PController {
       await prefs.setString('p2p_custom_emoji', emoji);
       notifyUI();
     } catch (e) {
-      print("Failed to save avatar settings: $e");
+      AppLogger.e("STARTUP", "Failed to save avatar settings", e);
     }
   }
 
@@ -145,7 +152,7 @@ class RemoteP2PController {
       _setupWebRTC(true, code);
       return code;
     } catch (e) {
-      print("Error hosting room: $e");
+      AppLogger.e("SIGNALING", "Error hosting room", e);
       rethrow;
     }
   }
@@ -173,15 +180,17 @@ class RemoteP2PController {
       _setupWebRTC(false, roomId);
       return true;
     } catch (e) {
-      print("Error joining room: $e");
+      AppLogger.e("SIGNALING", "Error joining room", e);
       return false;
     }
   }
 
   void _setupWebRTC(bool isHost, String roomId) async {
     try {
+      _recoveryGeneration++;
       _isReconnecting = false;
       _reconnectAttempts = 0;
+      _totalRecoveryAttempts = 0;
       _reconnectTimer?.cancel();
       _connectionGeneration++;
       _signalingQueue = Future.value();
@@ -218,7 +227,7 @@ class RemoteP2PController {
         await _firebaseService.sendSignal(roomId, isHost, offer);
       }
     } catch (e) {
-      print("Error in WebRTC negotiation loop: $e");
+      AppLogger.e("SIGNALING", "Error in WebRTC negotiation loop", e);
     }
   }
 
@@ -231,9 +240,14 @@ class RemoteP2PController {
     };
 
     _webrtcService.onConnectionStateChanged = (state) {
+      AppLogger.i("SIGNALING", "WebRTC connection state changed: ${state.name}");
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        _recoveryGeneration++;
         _isReconnecting = false;
         _reconnectAttempts = 0;
+        _totalRecoveryAttempts = 0;
+        _reconnectTimer?.cancel();
+        _reconnectTimer = null;
         activeSession = activeSession?.copyWith(
           connectionState: P2PConnectionState.connected,
         );
@@ -332,6 +346,7 @@ class RemoteP2PController {
   }
 
   void _startReconnectionLoop(bool isHost, String roomId) async {
+    final recoveryGeneration = ++_recoveryGeneration;
     _reconnectTimer?.cancel();
     unawaited(
       RemoteTransferService.updateStatus('Reconnecting secure transfer…'),
@@ -339,38 +354,56 @@ class RemoteP2PController {
 
     // 1. Try ICE restart first (quick check)
     try {
-      print("🔄 [P2P] Attempting ICE restart recovery...");
+      _totalRecoveryAttempts++;
+      AppLogger.i("ICE", "Attempting ICE restart recovery... (Total recovery attempts: $_totalRecoveryAttempts/10)");
       if (isHost) {
         final offer = await _webrtcService.createOffer(iceRestart: true);
+        if (recoveryGeneration != _recoveryGeneration || !_isReconnecting) {
+          return;
+        }
         await _firebaseService.sendSignal(roomId, isHost, offer);
+      } else {
+        await _firebaseService.sendSignal(roomId, isHost, {'type': 'request_renegotiation'});
       }
 
       // A peer connection is usable only once its data channel is open.
       await Future.delayed(const Duration(seconds: 3));
+      if (recoveryGeneration != _recoveryGeneration || !_isReconnecting) {
+        return;
+      }
       if (activeSession?.connectionState == P2PConnectionState.connected &&
           _webrtcService.isDataChannelOpen) {
-        print("✅ [P2P] ICE restart successfully recovered connection!");
+        AppLogger.i("ICE", "ICE restart successfully recovered connection!");
         return;
       }
     } catch (e) {
-      print("⚠️ [P2P] ICE restart attempt failed: $e");
+      AppLogger.w("ICE", "ICE restart attempt failed: $e");
     }
 
     // 2. Rebuild connection loop with exponential backoff
-    _rebuildConnectionAttempt(isHost, roomId);
+    if (recoveryGeneration == _recoveryGeneration && _isReconnecting) {
+      _rebuildConnectionAttempt(isHost, roomId, recoveryGeneration);
+    }
   }
 
-  void _rebuildConnectionAttempt(bool isHost, String roomId) async {
-    if (activeSession == null ||
+  void _rebuildConnectionAttempt(
+    bool isHost,
+    String roomId,
+    int recoveryGeneration,
+  ) async {
+    if (recoveryGeneration != _recoveryGeneration ||
+        !_isReconnecting ||
+        activeSession == null ||
         (activeSession!.connectionState == P2PConnectionState.connected &&
             _webrtcService.isDataChannelOpen)) {
       _isReconnecting = false;
       return;
     }
 
-    if (_reconnectAttempts >= 10) {
-      print(
-        "❌ [P2P] Reconnection attempts exhausted. Marking session disconnected.",
+    if (_totalRecoveryAttempts >= 10) {
+      AppLogger.e(
+        "SIGNALING",
+        "Total recovery attempts exhausted ($_totalRecoveryAttempts/10). Marking session disconnected.",
       );
       _isReconnecting = false;
       activeSession = activeSession?.copyWith(
@@ -384,30 +417,38 @@ class RemoteP2PController {
     }
 
     _reconnectAttempts++;
+    _totalRecoveryAttempts++;
     final delaySeconds = min(30, pow(2, _reconnectAttempts).toInt());
     unawaited(
       RemoteTransferService.updateStatus(
-        'Reconnecting transfer (attempt $_reconnectAttempts of 5)…',
+        'Reconnecting transfer (attempt $_reconnectAttempts of 10)…',
       ),
     );
-    print(
-      "🔄 [P2P] Reconnection attempt $_reconnectAttempts/5 in ${delaySeconds}s...",
+    AppLogger.w(
+      "SIGNALING",
+      "Reconnection attempt: $_reconnectAttempts, Transfer retry: $_transferRetryCount, Total recovery attempts: $_totalRecoveryAttempts/10. Next try in ${delaySeconds}s.",
     );
 
     _reconnectTimer = Timer(Duration(seconds: delaySeconds), () async {
       try {
-        if (activeSession == null ||
+        if (recoveryGeneration != _recoveryGeneration ||
+            !_isReconnecting ||
+            activeSession == null ||
             (activeSession!.connectionState == P2PConnectionState.connected &&
                 _webrtcService.isDataChannelOpen)) {
           return;
         }
 
-        print("🔄 [P2P] Rebuilding peer connection...");
+        AppLogger.i("SIGNALING", "Rebuilding peer connection...");
         _connectionGeneration++;
         _signalingQueue = Future.value();
 
         if (isHost) {
           await _firebaseService.clearSignaling(roomId);
+        }
+
+        if (recoveryGeneration != _recoveryGeneration || !_isReconnecting) {
+          return;
         }
 
         // Re-initialize webrtc connection (do NOT leave room)
@@ -420,15 +461,22 @@ class RemoteP2PController {
 
         if (isHost) {
           final offer = await _webrtcService.createOffer();
+          if (recoveryGeneration != _recoveryGeneration || !_isReconnecting) {
+            return;
+          }
           await _firebaseService.sendSignal(roomId, isHost, offer);
+        } else {
+          await _firebaseService.sendSignal(roomId, isHost, {'type': 'request_renegotiation'});
         }
       } catch (e) {
-        print("⚠️ [P2P] Reconnection rebuild attempt failed: $e");
+        AppLogger.w("SIGNALING", "Reconnection rebuild attempt failed: $e");
       }
 
       // Schedule next attempt if not connected yet
-      if (activeSession?.connectionState == P2PConnectionState.reconnecting) {
-        _rebuildConnectionAttempt(isHost, roomId);
+      if (recoveryGeneration == _recoveryGeneration &&
+          _isReconnecting &&
+          activeSession?.connectionState == P2PConnectionState.reconnecting) {
+        _rebuildConnectionAttempt(isHost, roomId, recoveryGeneration);
       }
     });
   }
@@ -438,15 +486,16 @@ class RemoteP2PController {
     _signalingQueue = _signalingQueue
         .then((_) {
           if (gen != _connectionGeneration) {
-            print(
-              "🗑️ [P2P] Ignoring stale signal from generation $gen (current: $_connectionGeneration)",
+            AppLogger.d(
+              "SIGNALING",
+              "Ignoring stale signal from generation $gen (current: $_connectionGeneration)",
             );
             return Future<void>.value();
           }
           return _handleSignal(roomId, isHost, signal);
         })
         .catchError((Object error, StackTrace stackTrace) {
-          debugPrint('Error handling remote P2P signal: $error');
+          AppLogger.e("SIGNALING", "Error handling remote P2P signal: $error", error, stackTrace);
         });
   }
 
@@ -463,6 +512,35 @@ class RemoteP2PController {
       await _webrtcService.setAnswer(signal);
     } else if (type == 'candidate') {
       await _webrtcService.addCandidate(signal);
+    } else if (type == 'request_renegotiation' && isHost) {
+      AppLogger.i("SIGNALING", "Received request_renegotiation signal on host side.");
+      _triggerHostRenegotiation(roomId);
+    }
+  }
+
+  void _triggerHostRenegotiation(String roomId) {
+    if (activeSession == null ||
+        activeSession!.connectionState == P2PConnectionState.disconnected) {
+      return;
+    }
+
+    if (!_isReconnecting) {
+      _isReconnecting = true;
+      _reconnectAttempts = 0;
+      activeSession = activeSession?.copyWith(
+        connectionState: P2PConnectionState.reconnecting,
+      );
+      unawaited(
+        RemoteTransferService.updateStatus(
+          'Renegotiation requested; reconnecting…',
+        ),
+      );
+      notifyUI();
+      _startReconnectionLoop(true, roomId);
+    } else {
+      final recoveryGeneration = ++_recoveryGeneration;
+      _reconnectTimer?.cancel();
+      _rebuildConnectionAttempt(true, roomId, recoveryGeneration);
     }
   }
 
@@ -499,7 +577,7 @@ class RemoteP2PController {
 
       final targetPath = '$targetFolder/$fileName';
       if (tempPath == targetPath) {
-        print("File was already written directly to: $targetPath");
+        AppLogger.i("TRANSFER", "File was already written directly to: $targetPath");
         return;
       }
       final tempFile = File(tempPath);
@@ -509,9 +587,9 @@ class RemoteP2PController {
         await destFile.delete();
       }
       await tempFile.rename(targetPath);
-      print("File permanently saved to: $targetPath");
+      AppLogger.i("TRANSFER", "File permanently saved to: $targetPath");
     } catch (e) {
-      print("Error renaming file, falling back to copy/delete: $e");
+      AppLogger.w("TRANSFER", "Error renaming file, falling back to copy/delete: $e");
       try {
         final prefs = await SharedPreferences.getInstance();
         final customFolder = prefs.getString('custom_save_folder');
@@ -521,7 +599,7 @@ class RemoteP2PController {
         await tempFile.copy(targetPath);
         await tempFile.delete();
       } catch (copyErr) {
-        print("Fallback copy failed: $copyErr");
+        AppLogger.e("TRANSFER", "Fallback copy failed: $copyErr", copyErr);
       }
     }
   }
@@ -596,8 +674,11 @@ class RemoteP2PController {
     required int size,
     int retryCount = 0,
   }) async {
+    _transferRetryCount = retryCount;
     if (retryCount == 0) {
       _lastTransferProgress = 0;
+      _totalRecoveryAttempts = 0;
+      _reconnectAttempts = 0;
       _appendMessage(RemoteMessageType.fileHeader, "$name|$size", false);
     }
     // Start foreground service on sender side
@@ -630,37 +711,22 @@ class RemoteP2PController {
       _appendMessage(RemoteMessageType.fileAck, "Transfer Completed", false);
     } catch (e) {
       final errStr = e.toString();
-      final isRecoverable =
-          errStr.contains("Data channel closed during transfer") ||
-          errStr.contains("Connection state changed") ||
-          errStr.contains("DataChannel closed") ||
-          errStr.contains("Data channel not open") ||
-          errStr.contains("timed out waiting for open state") ||
-          errStr.contains("buffer never drained") ||
-          errStr.contains("Receiver did not confirm durable file completion");
-      if (isRecoverable && retryCount < 12) {
-        print(
-          "⚠️ [P2P] Transfer interrupted or data channel failed to open. Initiating recovery...",
+      final isRecoverable = e is TransferException;
+      if (isRecoverable && _totalRecoveryAttempts < 10 && retryCount < 12) {
+        AppLogger.w(
+          "TRANSFER",
+          "Transfer interrupted or data channel failed to open. Initiating recovery... (Attempt ${retryCount + 1}/12, total recovery attempts: $_totalRecoveryAttempts/10)",
         );
 
         // If the peer connection is 'connected' but the data channel failed to open,
         // the connection state is out of sync. Force a new reconnection attempt.
-        if (activeSession != null) {
-          if (activeSession!.connectionState == P2PConnectionState.connected) {
-            activeSession = activeSession!.copyWith(
-              connectionState: P2PConnectionState.reconnecting,
-            );
-            notifyUI();
-            _startReconnectionLoop(isHost, activeSession!.roomId);
-          } else if (!_isReconnecting) {
-            _isReconnecting = true;
-            _reconnectAttempts = 0;
-            activeSession = activeSession!.copyWith(
-              connectionState: P2PConnectionState.reconnecting,
-            );
-            notifyUI();
-            _startReconnectionLoop(isHost, activeSession!.roomId);
-          }
+        if (activeSession != null && !_isReconnecting) {
+          _isReconnecting = true;
+          activeSession = activeSession!.copyWith(
+            connectionState: P2PConnectionState.reconnecting,
+          );
+          notifyUI();
+          _startReconnectionLoop(isHost, activeSession!.roomId);
         }
 
         _appendMessage(
@@ -698,7 +764,7 @@ class RemoteP2PController {
         }
 
         if (reconnected && activeSession != null) {
-          print("✅ [P2P] Reconnected! Auto-resuming transfer...");
+          AppLogger.i("TRANSFER", "Reconnected! Auto-resuming transfer...");
           // Remove the "Connection lost, waiting to resume..." message
           if (messages.isNotEmpty &&
               messages.last.type == RemoteMessageType.fileAck) {
@@ -718,11 +784,14 @@ class RemoteP2PController {
         }
       }
 
-      if (isRecoverable && retryCount >= 12) {
-        print('❌ [P2P] Transfer recovery limit reached after 12 attempts.');
+      if (isRecoverable && (_totalRecoveryAttempts >= 10 || retryCount >= 12)) {
+        AppLogger.e(
+          "TRANSFER",
+          "Transfer recovery limit reached (total attempts: $_totalRecoveryAttempts/10, retryCount: $retryCount/12).",
+        );
       }
 
-      print("Error during remote file transfer: $e");
+      AppLogger.e("TRANSFER", "Error during remote file transfer", e);
       // Remove any temporary status message
       if (messages.isNotEmpty &&
           messages.last.type == RemoteMessageType.fileAck) {
@@ -760,7 +829,9 @@ class RemoteP2PController {
 
   Future<void> disconnect() async {
     try {
+      _recoveryGeneration++;
       _reconnectTimer?.cancel();
+      _reconnectTimer = null;
       _isReconnecting = false;
       _reconnectAttempts = 0;
       if (activeSession != null) {
@@ -773,7 +844,7 @@ class RemoteP2PController {
       messages.clear();
       notifyUI();
     } catch (e) {
-      print("Error disconnecting session: $e");
+      AppLogger.e("SIGNALING", "Error disconnecting session", e);
     }
   }
 }

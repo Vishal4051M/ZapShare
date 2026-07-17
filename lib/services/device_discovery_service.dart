@@ -403,7 +403,7 @@ class DeviceDiscoveryService {
         final bool active = call.arguments['active'] ?? false;
         _audioForegroundActive = active;
         _audioActiveController.add(active);
-        print('🎵 [Discovery] Native audio state changed: active=$active');
+        // print('🎵 [Discovery] Native audio state changed: active=$active');
       } else if (call.method == 'remoteCommand') {
         final action = call.arguments['action'] as String?;
         if (action == null) return null;
@@ -416,13 +416,20 @@ class DeviceDiscoveryService {
               sendCastControl(activeCastTargetIp!, 'pause');
               break;
             case 'zapshare.ACTION_FORWARD':
-              sendCastControl(activeCastTargetIp!, 'seek', seekPosition: activeCastPosition + 30);
+              sendCastControl(
+                activeCastTargetIp!,
+                'seek',
+                seekPosition: activeCastPosition + 30,
+              );
               break;
             case 'zapshare.ACTION_REWIND':
               sendCastControl(
                 activeCastTargetIp!,
                 'seek',
-                seekPosition: (activeCastPosition - 30).clamp(0, activeCastDuration),
+                seekPosition: (activeCastPosition - 30).clamp(
+                  0,
+                  activeCastDuration,
+                ),
               );
               break;
             case 'seek':
@@ -576,17 +583,17 @@ class DeviceDiscoveryService {
         final timestamp = DateTime.now().millisecondsSinceEpoch;
         final ipHash = currentIp.replaceAll('.', '');
         _myDeviceId = '${ipHash}_$timestamp';
-        print('🆔 Generated IP-based device ID: $_myDeviceId (IP: $currentIp)');
+        // print('🆔 Generated IP-based device ID: $_myDeviceId (IP: $currentIp)');
       } else {
         // Fallback to timestamp + random if IP not available
         final timestamp = DateTime.now().millisecondsSinceEpoch;
         final random = (timestamp % 100000);
         _myDeviceId = '${timestamp}_$random';
-        print('🆔 Generated timestamp-based device ID: $_myDeviceId');
+        // print('🆔 Generated timestamp-based device ID: $_myDeviceId');
       }
       await prefs.setString('device_id', _myDeviceId!);
     } else {
-      print('🆔 Loaded existing device ID: $_myDeviceId');
+      // print('🆔 Loaded existing device ID: $_myDeviceId');
     }
 
     // Set default device name if not exists
@@ -605,9 +612,9 @@ class DeviceDiscoveryService {
         _myDeviceName = 'ZapShare Device';
       }
       await prefs.setString('device_name', _myDeviceName!);
-      print('📛 Generated new device name: $_myDeviceName');
+      // print('📛 Generated new device name: $_myDeviceName');
     } else {
-      print('📛 Loaded existing device name: $_myDeviceName');
+      // print('📛 Loaded existing device name: $_myDeviceName');
     }
   }
 
@@ -623,7 +630,7 @@ class DeviceDiscoveryService {
         }
       }
     } catch (e) {
-      print('Error getting IP address: $e');
+      // print('Error getting IP address: $e');
     }
     return null;
   }
@@ -651,14 +658,14 @@ class DeviceDiscoveryService {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final ipHash = currentIp.replaceAll('.', '');
       _myDeviceId = '${ipHash}_$timestamp';
-      print(
-        '🆔 Force regenerated IP-based device ID: $_myDeviceId (IP: $currentIp)',
-      );
+      // print(
+      // '🆔 Force regenerated IP-based device ID: $_myDeviceId (IP: $currentIp)',
+      // );
     } else {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final random = (timestamp % 100000);
       _myDeviceId = '${timestamp}_$random';
-      print('🆔 Force regenerated timestamp-based device ID: $_myDeviceId');
+      // print('🆔 Force regenerated timestamp-based device ID: $_myDeviceId');
     }
 
     await prefs.setString('device_id', _myDeviceId!);
@@ -679,7 +686,7 @@ class DeviceDiscoveryService {
         device.isFavorite = true;
         _discoveredDevices[device.deviceId] = device;
       } catch (e) {
-        print('Error loading favorite device: $e');
+        // print('Error loading favorite device: $e');
       }
     }
   }
@@ -691,9 +698,9 @@ class DeviceDiscoveryService {
       _audioRenderer = RTCVideoRenderer();
       await _audioRenderer!.initialize();
       _webRtcReady = true;
-      print('✅ WebRTC audio renderer ready');
+      // print('✅ WebRTC audio renderer ready');
     } catch (e) {
-      print('❌ WebRTC audio init failed: $e');
+      // print('❌ WebRTC audio init failed: $e');
     } finally {
       _webRtcInitInProgress = false;
     }
@@ -701,34 +708,34 @@ class DeviceDiscoveryService {
 
   Future<void> _startAudioForeground() async {
     if (!Platform.isAndroid) return;
-    print(
-      '🚀 [Discovery] _startAudioForeground called. Active status: $_audioForegroundActive',
-    );
+    // print(
+    // '🚀 [Discovery] _startAudioForeground called. Active status: $_audioForegroundActive',
+    // );
     if (_audioForegroundActive) return;
     try {
-      print(
-        '🚀 [Discovery] Invoking native startForegroundService with useMediaProjection = true',
-      );
+      // print(
+      // '🚀 [Discovery] Invoking native startForegroundService with useMediaProjection = true',
+      // );
       await _nativeChannel.invokeMethod('startForegroundService', {
         'title': 'ZapShare Audio',
         'content': 'Interactive low-latency audio active',
         'useMediaProjection': true,
       });
       _audioForegroundActive = true;
-      print('✅ [Discovery] Foreground service started successfully');
+      // print('✅ [Discovery] Foreground service started successfully');
     } catch (e) {
-      print('⚠️  Could not start audio foreground: $e');
+      // print('⚠️  Could not start audio foreground: $e');
     }
   }
 
   Future<void> _stopAudioForeground() async {
     if (!Platform.isAndroid) return;
-    print('🛑 [Discovery] _stopAudioForeground called');
+    // print('🛑 [Discovery] _stopAudioForeground called');
     try {
       await _nativeChannel.invokeMethod('stopForegroundService');
       await _nativeChannel.invokeMethod('stopLanAudioSender');
     } catch (e) {
-      print('⚠️  Could not stop audio foreground: $e');
+      // print('⚠️  Could not stop audio foreground: $e');
     } finally {
       _audioForegroundActive = false;
     }
@@ -739,7 +746,7 @@ class DeviceDiscoveryService {
     try {
       await _nativeChannel.invokeMethod('stopLanAudioSender');
     } catch (e) {
-      print('⚠️  Error stopping LAN audio sender: $e');
+      // print('⚠️  Error stopping LAN audio sender: $e');
     }
   }
 
@@ -755,7 +762,7 @@ class DeviceDiscoveryService {
         }
       }
     } catch (e) {
-      print('⚠️  Error starting LAN audio sender: $e');
+      // print('⚠️  Error starting LAN audio sender: $e');
     }
   }
 
@@ -765,7 +772,7 @@ class DeviceDiscoveryService {
       await _nativeChannel.invokeMethod('stopLanAudioReceiver');
       await _stopAudioForeground();
     } catch (e) {
-      print('⚠️  Error stopping LAN audio receiver: $e');
+      // print('⚠️  Error stopping LAN audio receiver: $e');
     }
   }
 
@@ -779,11 +786,11 @@ class DeviceDiscoveryService {
         'port': port,
         'cushionMs': cushionMs,
       });
-      print(
-        '✅ Requested native LAN audio receiver start on port $port with ${cushionMs}ms cushion',
-      );
+      // print(
+      // '✅ Requested native LAN audio receiver start on port $port with ${cushionMs}ms cushion',
+      // );
     } catch (e) {
-      print('⚠️  Error starting LAN audio receiver: $e');
+      // print('⚠️  Error starting LAN audio receiver: $e');
     }
   }
 
@@ -826,7 +833,7 @@ class DeviceDiscoveryService {
 
       // Get all network interfaces
       final interfaces = await NetworkInterface.list();
-      print('📡 Found ${interfaces.length} network interfaces');
+      // print('📡 Found ${interfaces.length} network interfaces');
 
       // Clear previous interface info
       _networkInterfaces.clear();
@@ -843,9 +850,9 @@ class DeviceDiscoveryService {
               !Platform.isAndroid, // Avoid on Android too to be safe
         );
       } catch (e) {
-        print(
-          '⚠️  Initial bind with reusePort failed, retrying without it: $e',
-        );
+        // print(
+        // '⚠️  Initial bind with reusePort failed, retrying without it: $e',
+        // );
         mainSocket = await RawDatagramSocket.bind(
           InternetAddress.anyIPv4,
           DISCOVERY_PORT,
@@ -877,9 +884,9 @@ class DeviceDiscoveryService {
           // Join multicast group ON THIS SPECIFIC INTERFACE on our main socket
           mainSocket.joinMulticast(InternetAddress(MULTICAST_GROUP), interface);
 
-          print('✅ Joined multicast $MULTICAST_GROUP on ${interface.name}');
+          // print('✅ Joined multicast $MULTICAST_GROUP on ${interface.name}');
         } catch (e) {
-          print('⚠️  Could not join multicast on ${interface.name}: $e');
+          // print('⚠️  Could not join multicast on ${interface.name}: $e');
         }
       }
 
@@ -894,11 +901,11 @@ class DeviceDiscoveryService {
           }
         },
         onError: (error) {
-          print('❌ Main socket error: $error');
+          // print('❌ Main socket error: $error');
           Future.delayed(Duration(seconds: 1), () => _handleSocketError(error));
         },
         onDone: () {
-          print('⚠️  Main discovery socket closed');
+          // print('⚠️  Main discovery socket closed');
           if (_isRunning && !_isStopping) {
             Future.delayed(Duration(seconds: 2), () => _handleSocketClosed());
           }
@@ -911,8 +918,8 @@ class DeviceDiscoveryService {
         throw Exception('Failed to bind to any network interface');
       }
 
-      print('✅ Successfully created ${_sockets.length} receiver socket(s)');
-      print('   Tracking ${_networkInterfaces.length} network interface(s)');
+      // print('✅ Successfully created ${_sockets.length} receiver socket(s)');
+      // print('   Tracking ${_networkInterfaces.length} network interface(s)');
 
       _isRunning = true;
 
@@ -937,9 +944,9 @@ class DeviceDiscoveryService {
         });
       }
 
-      print('✅ Device discovery started successfully');
+      // print('✅ Device discovery started successfully');
     } catch (e) {
-      print('❌ Error starting device discovery: $e');
+      // print('❌ Error starting device discovery: $e');
       _isRunning = false;
       rethrow;
     }
@@ -953,13 +960,13 @@ class DeviceDiscoveryService {
     if (_isPaused) return;
     _isPaused = true;
     _broadcastTimer?.cancel();
-    print(
-      '⏸️ Discovery broadcasts PAUSED (saving resources for video playback)',
-    );
+    // print(
+    // '⏸️ Discovery broadcasts PAUSED (saving resources for video playback)',
+    // );
   }
 
   void resumeDiscovery() {
-    print('▶️ Discovery RESUMING (Force Re-initialization)');
+    // print('▶️ Discovery RESUMING (Force Re-initialization)');
     _isPaused = false;
     // Forcing a full start() ensure a fresh device list (wipe stale)
     // and new sockets as requested by the user.
@@ -993,7 +1000,7 @@ class DeviceDiscoveryService {
 
   void _broadcastPresence() async {
     if (!_isRunning || _networkInterfaces.isEmpty) {
-      print('⚠️  Broadcast skipped - not running or no interfaces');
+      // print('⚠️  Broadcast skipped - not running or no interfaces');
       return;
     }
 
@@ -1002,16 +1009,16 @@ class DeviceDiscoveryService {
     if (currentIp != null &&
         _lastKnownIp != null &&
         currentIp != _lastKnownIp) {
-      print(
-        '🔄 IP change detected in discovery: $_lastKnownIp -> $currentIp. Restarting...',
-      );
+      // print(
+      // '🔄 IP change detected in discovery: $_lastKnownIp -> $currentIp. Restarting...',
+      // );
       _lastKnownIp = currentIp;
       Future.microtask(() async {
         try {
           await stop();
           await start();
         } catch (e) {
-          print('Error restarting discovery on IP change: $e');
+          // print('Error restarting discovery on IP change: $e');
         }
       });
       return;
@@ -1032,11 +1039,11 @@ class DeviceDiscoveryService {
       } else {
         avatarUrl = prefs.getString('custom_avatar');
       }
-      print('🔍 Custom avatar selected: $avatarUrl (mode: $avatarMode)');
+      // print('🔍 Custom avatar selected: $avatarUrl (mode: $avatarMode)');
 
-      print(
-        '🔍 Final avatar before broadcast: $avatarUrl, userName: $userName',
-      );
+      // print(
+      // '🔍 Final avatar before broadcast: $avatarUrl, userName: $userName',
+      // );
 
       final message = jsonEncode({
         'type': 'ZAPSHARE_DISCOVERY',
@@ -1050,9 +1057,9 @@ class DeviceDiscoveryService {
       });
 
       // Debug: Log what we're broadcasting
-      print(
-        '📡 Broadcasting discovery with avatar: $avatarUrl, userName: $userName',
-      );
+      // print(
+      // '📡 Broadcasting discovery with avatar: $avatarUrl, userName: $userName',
+      // );
 
       final data = utf8.encode(message);
 
@@ -1105,26 +1112,26 @@ class DeviceDiscoveryService {
 
           totalBytesSent += bytesSent1 + bytesSent2 + bytesSent3;
         } catch (e) {
-          print('❌ Error broadcasting on ${interfaceInfo.interface.name}: $e');
+          // print('❌ Error broadcasting on ${interfaceInfo.interface.name}: $e');
         } finally {
           tempSocket?.close();
         }
       }
 
-      print(
-        '📡 Broadcasting presence: $totalBytesSent bytes total across ${_networkInterfaces.length} interfaces',
-      );
+      // print(
+      // '📡 Broadcasting presence: $totalBytesSent bytes total across ${_networkInterfaces.length} interfaces',
+      // );
     } catch (e) {
-      print('❌ Error broadcasting presence: $e');
+      // print('❌ Error broadcasting presence: $e');
       // If broadcasting fails, try to restart the service
       _handleBroadcastError(e);
     }
   }
 
   void _handleBroadcastError(dynamic error) {
-    print('⚠️  Broadcast error detected, attempting to recover...');
+    // print('⚠️  Broadcast error detected, attempting to recover...');
     if (_isRestarting) {
-      print('⏭️  Restart already in progress, skipping...');
+      // print('⏭️  Restart already in progress, skipping...');
       return;
     }
 
@@ -1132,13 +1139,13 @@ class DeviceDiscoveryService {
     // Schedule a restart of the discovery service
     Future.delayed(Duration(seconds: 2), () async {
       if (_isRunning) {
-        print('🔄 Restarting discovery service...');
+        // print('🔄 Restarting discovery service...');
         try {
           await stop();
           await start();
-          print('✅ Discovery service restarted successfully');
+          // print('✅ Discovery service restarted successfully');
         } catch (e) {
-          print('❌ Failed to restart discovery service: $e');
+          // print('❌ Failed to restart discovery service: $e');
         } finally {
           _isRestarting = false;
         }
@@ -1156,14 +1163,14 @@ class DeviceDiscoveryService {
     int port,
   ) async {
     if (_sockets.isEmpty) {
-      print('ERROR: Cannot send connection request - no sockets available');
+      // print('ERROR: Cannot send connection request - no sockets available');
       return;
     }
 
     if (_myDeviceId == null || _myDeviceName == null) {
-      print(
-        'ERROR: Cannot send connection request - device info not initialized',
-      );
+      // print(
+      // 'ERROR: Cannot send connection request - device info not initialized',
+      // );
       return;
     }
 
@@ -1197,13 +1204,13 @@ class DeviceDiscoveryService {
         }
       }
 
-      print('✅ Sent connection request to $targetIp ($totalBytesSent bytes)');
-      print('   Device: $_myDeviceName ($_myDeviceId)');
-      print(
-        '   Files: ${fileNames.length} files, ${(totalSize / 1024 / 1024).toStringAsFixed(2)} MB',
-      );
+      // print('✅ Sent connection request to $targetIp ($totalBytesSent bytes)');
+      // print('   Device: $_myDeviceName ($_myDeviceId)');
+      // print(
+      // '   Files: ${fileNames.length} files, ${(totalSize / 1024 / 1024).toStringAsFixed(2)} MB',
+      // );
     } catch (e) {
-      print('❌ Error sending connection request: $e');
+      // print('❌ Error sending connection request: $e');
     }
   }
 
@@ -1231,9 +1238,9 @@ class DeviceDiscoveryService {
         }
       }
 
-      print('Sent connection response to $targetIp: $accepted');
+      // print('Sent connection response to $targetIp: $accepted');
     } catch (e) {
-      print('Error sending connection response: $e');
+      // print('Error sending connection response: $e');
     }
   }
 
@@ -1246,9 +1253,9 @@ class DeviceDiscoveryService {
       final messageType = data['type'] as String?;
 
       if (messageType != 'ZAPSHARE_DISCOVERY') {
-        print(
-          '📡 [Discovery] Incoming: $messageType from ${datagram.address.address}',
-        );
+        // print(
+        // '📡 [Discovery] Incoming: $messageType from ${datagram.address.address}',
+        // );
       }
 
       // Ignore our own broadcasts
@@ -1264,13 +1271,13 @@ class DeviceDiscoveryService {
         case 'ZAPSHARE_BYE':
           final byeId = data['deviceId'] as String?;
           if (byeId != null) {
-            print('👋 [Discovery] Device $byeId is going offline');
+            // print('👋 [Discovery] Device $byeId is going offline');
             _discoveredDevices.remove(byeId);
             _notifyListeners();
           }
           break;
         case 'ZAPSHARE_CONNECTION_REQUEST':
-          print('   🎯 Handling connection request...');
+          // print('   🎯 Handling connection request...');
           _handleConnectionRequest(data, datagram.address.address);
           break;
         case 'ZAPSHARE_CONNECTION_RESPONSE':
@@ -1298,9 +1305,9 @@ class DeviceDiscoveryService {
           _handleAudioIce(data, datagram.address.address);
           break;
         case 'ZAPSHARE_AUDIO_STOP':
-          print(
-            '🔴 [WEB-RTC] Audio stop request from ${datagram.address.address}',
-          );
+          // print(
+          // '🔴 [WEB-RTC] Audio stop request from ${datagram.address.address}',
+          // );
           stopWebRtcAudio(datagram.address.address, false);
           break;
         case 'ZAPSHARE_SCREEN_MIRROR':
@@ -1349,9 +1356,9 @@ class DeviceDiscoveryService {
 
     // If found duplicate by IP, remove the old entry
     if (duplicateByIp != null && duplicateKey != null) {
-      print(
-        '🔄 Removing duplicate device: $duplicateKey (same IP: $ipAddress)',
-      );
+      // print(
+      // '🔄 Removing duplicate device: $duplicateKey (same IP: $ipAddress)',
+      // );
       _discoveredDevices.remove(duplicateKey);
     }
 
@@ -1380,11 +1387,11 @@ class DeviceDiscoveryService {
     final deviceId = data['deviceId'] as String;
     final deviceName = data['deviceName'] as String;
 
-    print('📩 Received connection request from $ipAddress');
-    print('   Device: $deviceName ($deviceId)');
-    print(
-      '   Files: ${data['fileCount']} files, ${(data['totalSize'] / 1024 / 1024).toStringAsFixed(2)} MB',
-    );
+    // print('📩 Received connection request from $ipAddress');
+    // print('   Device: $deviceName ($deviceId)');
+    // print(
+    // '   Files: ${data['fileCount']} files, ${(data['totalSize'] / 1024 / 1024).toStringAsFixed(2)} MB',
+    // );
 
     // DEDUPLICATION: Check if we've already received a request from this device recently
     final now = DateTime.now();
@@ -1393,19 +1400,19 @@ class DeviceDiscoveryService {
     if (lastRequestTime != null) {
       final timeSinceLastRequest = now.difference(lastRequestTime);
       if (timeSinceLastRequest < _requestDeduplicationWindow) {
-        print(
-          '   ⏭️  IGNORING duplicate request (received ${timeSinceLastRequest.inSeconds}s ago)',
-        );
-        print('   This prevents multiple connection dialogs from appearing');
+        // print(
+        // '   ⏭️  IGNORING duplicate request (received ${timeSinceLastRequest.inSeconds}s ago)',
+        // );
+        // print('   This prevents multiple connection dialogs from appearing');
         return; // Ignore duplicate request
       }
     }
 
     // Record this request
     _recentConnectionRequests[deviceId] = now;
-    print(
-      '   ✅ First request from this device (or outside deduplication window)',
-    );
+    // print(
+    // '   ✅ First request from this device (or outside deduplication window)',
+    // );
 
     // Clean up old entries from deduplication map (keep it from growing indefinitely)
     _recentConnectionRequests.removeWhere((key, timestamp) {
@@ -1427,16 +1434,16 @@ class DeviceDiscoveryService {
     // Check if controller is closed before adding
     if (!_connectionRequestController.isClosed) {
       _connectionRequestController.add(request);
-      print('✅ Connection request added to stream (will show dialog)');
+      // print('✅ Connection request added to stream (will show dialog)');
     } else {
-      print('⚠️  Connection request controller is closed, skipping');
+      // print('⚠️  Connection request controller is closed, skipping');
     }
   }
 
   void _handleConnectionResponse(Map<String, dynamic> data, String ipAddress) {
-    print('📨 Received connection response from $ipAddress');
-    print('   Device: ${data['deviceName']} (${data['deviceId']})');
-    print('   Accepted: ${data['accepted']}');
+    // print('📨 Received connection response from $ipAddress');
+    // print('   Device: ${data['deviceName']} (${data['deviceId']})');
+    // print('   Accepted: ${data['accepted']}');
 
     final response = ConnectionResponse(
       deviceId: data['deviceId'] as String,
@@ -1449,9 +1456,9 @@ class DeviceDiscoveryService {
     // Check if controller is closed before adding
     if (!_connectionResponseController.isClosed) {
       _connectionResponseController.add(response);
-      print('✅ Connection response added to stream');
+      // print('✅ Connection response added to stream');
     } else {
-      print('⚠️  Connection response controller is closed, skipping');
+      // print('⚠️  Connection response controller is closed, skipping');
     }
   }
 
@@ -1485,9 +1492,9 @@ class DeviceDiscoveryService {
           // Ignore errors
         }
       }
-      print('✅ Sent cast URL to $targetIp: $url (sub: $subtitleUrl)');
+      // print('✅ Sent cast URL to $targetIp: $url (sub: $subtitleUrl)');
     } catch (e) {
-      print('❌ Error sending cast URL: $e');
+      // print('❌ Error sending cast URL: $e');
     }
   }
 
@@ -1509,14 +1516,14 @@ class DeviceDiscoveryService {
       // Deduplication
       final messageId = '${deviceId}_$timestamp';
       if (_lastCastMessageId == messageId) {
-        print('⏭️ Skipping duplicate Cast URL message');
+        // print('⏭️ Skipping duplicate Cast URL message');
         return;
       }
       _lastCastMessageId = messageId;
 
-      print(
-        '🎬 Received Cast URL: $url (file: $fileName, sub: $subtitleUrl, from: $senderName)',
-      );
+      // print(
+      // '🎬 Received Cast URL: $url (file: $fileName, sub: $subtitleUrl, from: $senderName)',
+      // );
 
       // Try to find device name from discovered devices, fall back to sender name
       String deviceName = senderName ?? 'Unknown Device';
@@ -1538,11 +1545,11 @@ class DeviceDiscoveryService {
             duration: (data['duration'] as num?)?.toDouble(),
           ),
         );
-        print(
-          '✅ Cast request added to stream (platform: ${Platform.operatingSystem})',
-        );
+        // print(
+        // '✅ Cast request added to stream (platform: ${Platform.operatingSystem})',
+        // );
       } else {
-        print('⚠️  Cast request controller is closed, skipping');
+        // print('⚠️  Cast request controller is closed, skipping');
       }
     }
   }
@@ -1738,7 +1745,7 @@ class DeviceDiscoveryService {
   void _handleCastAck(Map<String, dynamic> data, String senderIp) {
     final accepted = data['accepted'] as bool? ?? false;
     final deviceName = data['deviceName'] as String? ?? 'Unknown';
-    print('🎬 Cast ACK received from $senderIp: accepted=$accepted');
+    // print('🎬 Cast ACK received from $senderIp: accepted=$accepted');
 
     if (!_castAckController.isClosed) {
       _castAckController.add(
@@ -1751,7 +1758,7 @@ class DeviceDiscoveryService {
   final Map<String, DateTime> _recentAudioOffers = {};
 
   void _handleAudioOffer(Map<String, dynamic> data, String senderIp) {
-    print('📡 [Discovery] Received ZAPSHARE_AUDIO_OFFER from $senderIp');
+    // print('📡 [Discovery] Received ZAPSHARE_AUDIO_OFFER from $senderIp');
     final sdp = data['sdp'] as String?;
     if (sdp == null || sdp.isEmpty) return;
     final deviceId = data['deviceId'] as String? ?? 'unknown';
@@ -1761,7 +1768,7 @@ class DeviceDiscoveryService {
     final now = DateTime.now();
     final lastOffer = _recentAudioOffers[senderIp];
     if (lastOffer != null && now.difference(lastOffer).inSeconds < 5) {
-      print('⏭️  Ignoring duplicate audio offer from $senderIp');
+      // print('⏭️  Ignoring duplicate audio offer from $senderIp');
       return;
     }
     _recentAudioOffers[senderIp] = now;
@@ -1782,9 +1789,9 @@ class DeviceDiscoveryService {
           ) ??
           _preferredCushionMs;
 
-      print(
-        '🎵 [Discovery] LAN Audio offer from $senderIp on port $port — starting native receiver',
-      );
+      // print(
+      // '🎵 [Discovery] LAN Audio offer from $senderIp on port $port — starting native receiver',
+      // );
       if (Platform.isAndroid) {
         // Stop any running sender first so we don't send and receive simultaneously
         stopLanAudioSender();
@@ -1878,9 +1885,9 @@ class DeviceDiscoveryService {
               (candidateData['sdpMLineIndex'] as int?) ?? 0,
             ),
           );
-          print('❄️ [WEB-RTC] Added trickled ICE candidate from $senderIp');
+          // print('❄️ [WEB-RTC] Added trickled ICE candidate from $senderIp');
         } catch (e) {
-          print('❌ [WEB-RTC] Error adding trickled ICE candidate: $e');
+          // print('❌ [WEB-RTC] Error adding trickled ICE candidate: $e');
         }
       }
     }
@@ -1922,7 +1929,7 @@ class DeviceDiscoveryService {
           socket.send(data, InternetAddress(targetIp), DISCOVERY_PORT);
         } catch (_) {}
       }
-      print('✅ Sent cast ACK to $targetIp: accepted=$accepted');
+      // print('✅ Sent cast ACK to $targetIp: accepted=$accepted');
     } catch (_) {}
   }
 
@@ -1934,7 +1941,7 @@ class DeviceDiscoveryService {
     required List<Map<String, dynamic>> iceCandidates,
   }) async {
     if (_sockets.isEmpty) {
-      print('❌ [Discovery] No sockets available to send AUDIO_OFFER');
+      // print('❌ [Discovery] No sockets available to send AUDIO_OFFER');
       return;
     }
     try {
@@ -1947,13 +1954,13 @@ class DeviceDiscoveryService {
         'timestamp': DateTime.now().millisecondsSinceEpoch,
       });
       final data = utf8.encode(message);
-      print('📡 [Discovery] Sending AUDIO_OFFER to $targetIp');
+      // print('📡 [Discovery] Sending AUDIO_OFFER to $targetIp');
       for (int attempt = 0; attempt < 3; attempt++) {
         for (final socket in _sockets) {
           try {
             socket.send(data, InternetAddress(targetIp), DISCOVERY_PORT);
           } catch (e) {
-            print('❌ [Discovery] Failed to send AUDIO_OFFER on socket: $e');
+            // print('❌ [Discovery] Failed to send AUDIO_OFFER on socket: $e');
           }
         }
         if (attempt < 2) {
@@ -1961,7 +1968,7 @@ class DeviceDiscoveryService {
         }
       }
     } catch (e) {
-      print('❌ [Discovery] Error in sendAudioOffer: $e');
+      // print('❌ [Discovery] Error in sendAudioOffer: $e');
     }
   }
 
@@ -2000,7 +2007,7 @@ class DeviceDiscoveryService {
     String targetIp, {
     bool systemAudio = false,
   }) async {
-    debugPrint('🔥 [WEB-RTC] STARTING AUDIO SHARE FOR: $targetIp');
+    // debugPrint('🔥 [WEB-RTC] STARTING AUDIO SHARE FOR: $targetIp');
 
     // Pause background discovery during high-bandwidth audio sessions
     // This dramatically reduces CPU/Network jitter
@@ -2013,7 +2020,7 @@ class DeviceDiscoveryService {
 
     await _initWebRtcAudio();
     if (!_webRtcReady) {
-      debugPrint('❌ [WEB-RTC] WebRtc not ready, aborting');
+      // debugPrint('❌ [WEB-RTC] WebRtc not ready, aborting');
       return false;
     }
 
@@ -2024,7 +2031,7 @@ class DeviceDiscoveryService {
     }
 
     try {
-      debugPrint('🔥 [WEB-RTC] Creating Peer Connection...');
+      // debugPrint('🔥 [WEB-RTC] Creating Peer Connection...');
       final pc = await _createAudioPeer();
       final session = _AudioSession(
         peerIp: targetIp,
@@ -2041,7 +2048,7 @@ class DeviceDiscoveryService {
       if (_currentAudioStream != null &&
           _currentStreamIsSystem == useSystemAudio) {
         stream = _currentAudioStream!;
-        debugPrint('🔥 [WEB-RTC] Reusing existing stream');
+        // debugPrint('🔥 [WEB-RTC] Reusing existing stream');
       } else {
         await _currentAudioStream?.dispose();
 
@@ -2051,9 +2058,9 @@ class DeviceDiscoveryService {
           'autoGainControl': false,
         };
 
-        debugPrint(
-          '🔥 [WEB-RTC] Requesting MediaStream (Permission Dialog should show)...',
-        );
+        // debugPrint(
+        // '🔥 [WEB-RTC] Requesting MediaStream (Permission Dialog should show)...',
+        // );
         if (useSystemAudio) {
           if (Platform.isAndroid) {
             await _startAudioForeground();
@@ -2064,9 +2071,9 @@ class DeviceDiscoveryService {
               'audio': audioConstraints,
               'video': true,
             });
-            debugPrint(
-              '🔥 [WEB-RTC] capture successful, checking for audio track...',
-            );
+            // debugPrint(
+            // '🔥 [WEB-RTC] capture successful, checking for audio track...',
+            // );
             // CRITICAL: We keep the video track alive but disabled to satisfy
             // Android's MediaProjection requirements, but we WON'T send it.
             for (final track in stream.getVideoTracks()) {
@@ -2079,9 +2086,9 @@ class DeviceDiscoveryService {
                 'video': false,
               });
             } catch (e) {
-              debugPrint(
-                '🔥 [WEB-RTC] System audio capture failed, falling back to mic: $e',
-              );
+              // debugPrint(
+              // '🔥 [WEB-RTC] System audio capture failed, falling back to mic: $e',
+              // );
               useSystemAudio = false;
               stream = await navigator.mediaDevices.getUserMedia({
                 'audio': audioConstraints,
@@ -2090,44 +2097,44 @@ class DeviceDiscoveryService {
             }
           }
         } else {
-          debugPrint('🔥 [WEB-RTC] Requesting Microphone MediaStream...');
+          // debugPrint('🔥 [WEB-RTC] Requesting Microphone MediaStream...');
           stream = await navigator.mediaDevices.getUserMedia({
             'audio': audioConstraints,
             'video': false,
           });
-          debugPrint(
-            '🔥 [WEB-RTC] Microphone capture successful. Tracks: ${stream.getAudioTracks().length}',
-          );
+          // debugPrint(
+          // '🔥 [WEB-RTC] Microphone capture successful. Tracks: ${stream.getAudioTracks().length}',
+          // );
         }
         _currentAudioStream = stream;
         _currentStreamIsSystem = useSystemAudio;
       }
 
       session.localStream = stream;
-      debugPrint(
-        '🔥 [WEB-RTC] Stream captured. Tracks: ${stream.getTracks().length}',
-      );
+      // debugPrint(
+      // '🔥 [WEB-RTC] Stream captured. Tracks: ${stream.getTracks().length}',
+      // );
       bool foundAudio = false;
       for (final track in stream.getTracks()) {
-        debugPrint(
-          '🔥 [WEB-RTC]   - Checking track: ${track.kind}, id: ${track.id}',
-        );
+        // debugPrint(
+        // '🔥 [WEB-RTC]   - Checking track: ${track.kind}, id: ${track.id}',
+        // );
 
         // ONLY send audio tracks for Audio Share feature
         if (track.kind == 'audio') {
-          debugPrint('🔥 [WEB-RTC]     -> Adding AUDIO track to connection');
+          // debugPrint('🔥 [WEB-RTC]     -> Adding AUDIO track to connection');
           await pc.addTrack(track, stream);
           foundAudio = true;
         } else {
-          debugPrint('🔥 [WEB-RTC]     -> Skipping non-audio track');
+          // debugPrint('🔥 [WEB-RTC]     -> Skipping non-audio track');
         }
       }
 
       // Fallback to microphone if system audio capture failed to return an audio track
       if (!foundAudio && systemAudio) {
-        debugPrint(
-          '🔥 [WEB-RTC] System audio track missing. Falling back to Microphone...',
-        );
+        // debugPrint(
+        // '🔥 [WEB-RTC] System audio track missing. Falling back to Microphone...',
+        // );
         try {
           // Dispose the video-only stream since it doesn't have what we need
           for (final track in stream.getTracks()) {
@@ -2149,15 +2156,15 @@ class DeviceDiscoveryService {
         _currentStreamIsSystem = false;
         session.localStream = stream;
 
-        debugPrint(
-          '🔥 [WEB-RTC] Fallback stream captured. Tracks: ${stream.getTracks().length}',
-        );
+        // debugPrint(
+        // '🔥 [WEB-RTC] Fallback stream captured. Tracks: ${stream.getTracks().length}',
+        // );
         for (final track in stream.getTracks()) {
-          debugPrint(
-            '🔥 [WEB-RTC]   - Checking fallback track: ${track.kind}, id: ${track.id}',
-          );
+          // debugPrint(
+          // '🔥 [WEB-RTC]   - Checking fallback track: ${track.kind}, id: ${track.id}',
+          // );
           if (track.kind == 'audio') {
-            debugPrint('🔥 [WEB-RTC]     -> Adding AUDIO track to connection');
+            // debugPrint('🔥 [WEB-RTC]     -> Adding AUDIO track to connection');
             await pc.addTrack(track, stream);
             foundAudio = true;
           }
@@ -2170,16 +2177,16 @@ class DeviceDiscoveryService {
       }
 
       pc.onIceGatheringState = (state) async {
-        debugPrint('🔥 [WEB-RTC] ICE State: $state');
+        // debugPrint('🔥 [WEB-RTC] ICE State: $state');
         if (state == RTCIceGatheringState.RTCIceGatheringStateComplete &&
             !session.offerSent) {
           session.offerSent = true;
-          debugPrint('🔥 [WEB-RTC] Gathering complete, sending offer');
+          // debugPrint('🔥 [WEB-RTC] Gathering complete, sending offer');
           await _sendAudioOfferPayload(targetIp, session);
         }
       };
 
-      debugPrint('🔥 [WEB-RTC] Creating SDP Offer...');
+      // debugPrint('🔥 [WEB-RTC] Creating SDP Offer...');
       RTCSessionDescription offer = await pc.createOffer({
         'offerToReceiveAudio': true,
       });
@@ -2188,11 +2195,11 @@ class DeviceDiscoveryService {
       String mungedSdp = _mungeAudioSdp(offer.sdp ?? '');
       offer = RTCSessionDescription(mungedSdp, offer.type);
 
-      debugPrint(
-        '🔥 [WEB-RTC] Setting Local Description (Munged for Low Latency)...',
-      );
+      // debugPrint(
+      // '🔥 [WEB-RTC] Setting Local Description (Munged for Low Latency)...',
+      // );
       await pc.setLocalDescription(offer);
-      debugPrint('🔥 [WEB-RTC] Local Description DONE');
+      // debugPrint('🔥 [WEB-RTC] Local Description DONE');
 
       // Send offer immediately for dynamic trickle ICE
       session.offerSent = true;
@@ -2201,7 +2208,7 @@ class DeviceDiscoveryService {
       // Heavy backup: If no offer sent in 1.5s, force it
       Future.delayed(const Duration(milliseconds: 1500), () async {
         if (!session.closed && !session.offerSent) {
-          debugPrint('🔥 [WEB-RTC] TIMEOUT: Forcing offer send to $targetIp');
+          // debugPrint('🔥 [WEB-RTC] TIMEOUT: Forcing offer send to $targetIp');
           session.offerSent = true;
           await _sendAudioOfferPayload(targetIp, session);
         }
@@ -2211,7 +2218,7 @@ class DeviceDiscoveryService {
       _audioActiveController.add(true);
       return true;
     } catch (e) {
-      print('❌ startWebRtcAudio failed: $e');
+      // print('❌ startWebRtcAudio failed: $e');
       await stopWebRtcAudio(targetIp);
       return false;
     }
@@ -2224,7 +2231,7 @@ class DeviceDiscoveryService {
     if (targetIp != null) {
       // 1. Notify peer to stop their side too (Signaling)
       if (notifyPeer) {
-        print('📡 [Discovery] Sending AUDIO_STOP signal to $targetIp');
+        // print('📡 [Discovery] Sending AUDIO_STOP signal to $targetIp');
         await _sendAudioStopSignal(targetIp);
       }
 
@@ -2289,7 +2296,7 @@ class DeviceDiscoveryService {
     int port, {
     int cushionMs = 20,
   }) async {
-    print('🔥 [AudioShare] Sending LAN Audio Offer to $targetIp on port $port');
+    // print('🔥 [AudioShare] Sending LAN Audio Offer to $targetIp on port $port');
 
     // NOTE: We no longer call pauseDiscovery() here.
     // Pausing discovery was preventing the receiving device from seeing our
@@ -2313,18 +2320,18 @@ class DeviceDiscoveryService {
         try {
           socket.send(msgData, InternetAddress(targetIp), DISCOVERY_PORT);
         } catch (e) {
-          print('⚠️  Error sending over a socket: $e');
+          // print('⚠️  Error sending over a socket: $e');
         }
       }
       if (attempt < 2) {
         await Future.delayed(const Duration(milliseconds: 300));
       }
     }
-    print('✅ [AudioShare] LAN Audio Offer sent (3 attempts) to $targetIp');
+    // print('✅ [AudioShare] LAN Audio Offer sent (3 attempts) to $targetIp');
   }
 
   Future<void> sendHttpAudioOffer(String targetIp, String audioUrl) async {
-    print('🔥 [AudioShare] Sending HTTP Audio Offer to $targetIp at $audioUrl');
+    // print('🔥 [AudioShare] Sending HTTP Audio Offer to $targetIp at $audioUrl');
 
     final payload = {
       'type': 'ZAPSHARE_AUDIO_OFFER',
@@ -2339,14 +2346,14 @@ class DeviceDiscoveryService {
         try {
           socket.send(msgData, InternetAddress(targetIp), DISCOVERY_PORT);
         } catch (e) {
-          print('⚠️  Error sending over a socket: $e');
+          // print('⚠️  Error sending over a socket: $e');
         }
       }
       if (attempt < 2) {
         await Future.delayed(const Duration(milliseconds: 300));
       }
     }
-    print('✅ [AudioShare] HTTP Audio Offer sent (3 attempts) to $targetIp');
+    // print('✅ [AudioShare] HTTP Audio Offer sent (3 attempts) to $targetIp');
   }
 
   Future<RTCPeerConnection> _createAudioPeer() async {
@@ -2370,100 +2377,100 @@ class DeviceDiscoveryService {
     final pc = session.pc;
     pc.onIceCandidate = (candidate) {
       if (candidate == null) {
-        print(
-          '❄️ [WEB-RTC] ICE Candidate gathering complete for ${session.peerIp}',
-        );
+        // print(
+        // '❄️ [WEB-RTC] ICE Candidate gathering complete for ${session.peerIp}',
+        // );
         return;
       }
-      print('❄️ [WEB-RTC] Generated ICE candidate: ${candidate.candidate}');
+      // print('❄️ [WEB-RTC] Generated ICE candidate: ${candidate.candidate}');
       session.iceCandidates.add(candidate.toMap());
       sendAudioIce(session.peerIp, candidate);
     };
 
     pc.onTrack = (event) async {
       final track = event.track;
-      debugPrint(
-        '🔊 [WEB-RTC] onTrack event: kind=${track.kind}, id=${track.id}, label=${track.label}',
-      );
+      // debugPrint(
+      // '🔊 [WEB-RTC] onTrack event: kind=${track.kind}, id=${track.id}, label=${track.label}',
+      // );
 
       if (track.kind != 'audio') {
-        debugPrint(
-          '⏭️ [WEB-RTC] Ignoring non-audio track of kind: ${track.kind}',
-        );
+        // debugPrint(
+        // '⏭️ [WEB-RTC] Ignoring non-audio track of kind: ${track.kind}',
+        // );
         return;
       }
       if (event.streams.isEmpty) {
-        debugPrint(
-          '⚠️ [WEB-RTC] Audio track received but event.streams is empty!',
-        );
+        // debugPrint(
+        // '⚠️ [WEB-RTC] Audio track received but event.streams is empty!',
+        // );
         return;
       }
 
       session.remoteStream = event.streams.first;
-      debugPrint(
-        '🎧 [WEB-RTC] Stream received. Tracks count: ${session.remoteStream?.getTracks().length}',
-      );
+      // debugPrint(
+      // '🎧 [WEB-RTC] Stream received. Tracks count: ${session.remoteStream?.getTracks().length}',
+      // );
       await _initWebRtcAudio();
 
       try {
-        debugPrint('🎧 [WEB-RTC] Attaching remote stream to _audioRenderer...');
+        // debugPrint('🎧 [WEB-RTC] Attaching remote stream to _audioRenderer...');
         _audioRenderer?.srcObject = session.remoteStream;
         await _audioRenderer?.setVolume(1.0);
-        debugPrint('✅ [WEB-RTC] Stream attached and volume set to 1.0');
+        // debugPrint('✅ [WEB-RTC] Stream attached and volume set to 1.0');
 
         // Start foreground service on receiver end too
         await _startAudioForeground();
         _audioActiveController.add(true);
 
         if (Platform.isAndroid) {
-          debugPrint('📱 [WEB-RTC] Forcing speaker ON for Android');
+          // debugPrint('📱 [WEB-RTC] Forcing speaker ON for Android');
           const MethodChannel(
             'zapshare.saf',
           ).invokeMethod('setSpeakerOn', {'enabled': true});
         }
       } catch (e) {
-        debugPrint('❌ [WEB-RTC] Error attaching remote audio stream: $e');
+        // debugPrint('❌ [WEB-RTC] Error attaching remote audio stream: $e');
       }
     };
 
     // Fallback for older onAddStream callback
     pc.onAddStream = (stream) async {
-      debugPrint('🔊 [WEB-RTC] onAddStream event: streamId=${stream.id}');
+      // debugPrint('🔊 [WEB-RTC] onAddStream event: streamId=${stream.id}');
       session.remoteStream = stream;
       await _initWebRtcAudio();
       try {
         _audioRenderer?.srcObject = stream;
-        debugPrint(
-          '✅ [WEB-RTC] onAddStream: Stream attached to _audioRenderer',
-        );
+        // debugPrint(
+        // '✅ [WEB-RTC] onAddStream: Stream attached to _audioRenderer',
+        // );
       } catch (e) {
-        debugPrint('❌ [WEB-RTC] onAddStream error: $e');
+        // debugPrint('❌ [WEB-RTC] onAddStream error: $e');
       }
     };
 
     pc.onConnectionState = (state) async {
-      print(
-        '🔥 [WEB-RTC] PeerConnection State changed: $state for ${session.peerIp}',
-      );
+      // print(
+      // '🔥 [WEB-RTC] PeerConnection State changed: $state for ${session.peerIp}',
+      // );
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
-        print(
-          '🚨 [WEB-RTC] Connection lost or closed. Stopping audio sharing...',
-        );
+        // print(
+        // '🚨 [WEB-RTC] Connection lost or closed. Stopping audio sharing...',
+        // );
         await stopWebRtcAudio(session.peerIp, false);
       }
     };
 
     pc.onIceConnectionState = (state) async {
-      print(
-        '❄️ [WEB-RTC] ICE Connection State changed: $state for ${session.peerIp}',
-      );
+      // print(
+      // '❄️ [WEB-RTC] ICE Connection State changed: $state for ${session.peerIp}',
+      // );
     };
 
     pc.onSignalingState = (state) async {
-      print(
-        '📣 [WEB-RTC] Signaling State changed: $state for ${session.peerIp}',
-      );
+      // print(
+      // '📣 [WEB-RTC] Signaling State changed: $state for ${session.peerIp}',
+      // );
     };
   }
 
@@ -2473,12 +2480,12 @@ class DeviceDiscoveryService {
   ) async {
     final desc = await session.pc.getLocalDescription();
     if (desc == null) {
-      print('❌ [Discovery] Failed to get LocalDescription for offer');
+      // print('❌ [Discovery] Failed to get LocalDescription for offer');
       return;
     }
-    print(
-      '📡 [Discovery] Preparing AUDIO_OFFER payload for $targetIp. SDP length: ${desc.sdp?.length}',
-    );
+    // print(
+    // '📡 [Discovery] Preparing AUDIO_OFFER payload for $targetIp. SDP length: ${desc.sdp?.length}',
+    // );
     await sendAudioOffer(
       targetIp,
       sdp: desc.sdp ?? '',
@@ -2492,12 +2499,12 @@ class DeviceDiscoveryService {
   ) async {
     final desc = await session.pc.getLocalDescription();
     if (desc == null) {
-      print('❌ [Discovery] Failed to get LocalDescription for answer');
+      // print('❌ [Discovery] Failed to get LocalDescription for answer');
       return;
     }
-    print(
-      '📡 [Discovery] Preparing AUDIO_ANSWER payload for $targetIp. SDP length: ${desc.sdp?.length}',
-    );
+    // print(
+    // '📡 [Discovery] Preparing AUDIO_ANSWER payload for $targetIp. SDP length: ${desc.sdp?.length}',
+    // );
     await sendAudioAnswer(
       targetIp,
       sdp: desc.sdp ?? '',
@@ -2507,7 +2514,7 @@ class DeviceDiscoveryService {
 
   Future<void> processIncomingAudioOffer(AudioOffer offer) async {
     if (offer.sdp.startsWith('LAN_AUDIO_STREAM_PORT:')) {
-      print('ℹ️ [WEB-RTC] Ignoring LAN Audio offer in WebRTC handler');
+      // print('ℹ️ [WEB-RTC] Ignoring LAN Audio offer in WebRTC handler');
       return;
     }
 
@@ -2547,7 +2554,7 @@ class DeviceDiscoveryService {
       }
 
       pc.onIceGatheringState = (state) async {
-        debugPrint('🔥 [WEB-RTC] Responder ICE State: $state');
+        // debugPrint('🔥 [WEB-RTC] Responder ICE State: $state');
         if (state == RTCIceGatheringState.RTCIceGatheringStateComplete &&
             !session.offerSent) {
           session.offerSent = true;
@@ -2565,14 +2572,14 @@ class DeviceDiscoveryService {
       // Answer fallback
       Future.delayed(const Duration(milliseconds: 1500), () async {
         if (!session.offerSent) {
-          debugPrint('🔥 [WEB-RTC] Responder TIMEOUT: Forcing answer send');
+          // debugPrint('🔥 [WEB-RTC] Responder TIMEOUT: Forcing answer send');
           session.offerSent = true;
           await _sendAudioAnswerPayload(offer.senderIp, session);
         }
       });
       await _startAudioForeground();
     } catch (e) {
-      print('❌ Failed to process audio offer: $e');
+      // print('❌ Failed to process audio offer: $e');
       await stopWebRtcAudio(offer.senderIp);
     }
   }
@@ -2584,9 +2591,9 @@ class DeviceDiscoveryService {
       // Check state to avoid "Called in wrong state: stable" error
       final state = session.pc.signalingState;
       if (state != RTCSignalingState.RTCSignalingStateHaveLocalOffer) {
-        debugPrint(
-          '⏭️ [WEB-RTC] Ignoring redundant audio answer (State: $state)',
-        );
+        // debugPrint(
+        // '⏭️ [WEB-RTC] Ignoring redundant audio answer (State: $state)',
+        // );
         return;
       }
 
@@ -2608,7 +2615,7 @@ class DeviceDiscoveryService {
         }
       }
     } catch (e) {
-      print('❌ Failed to apply audio answer: $e');
+      // print('❌ Failed to apply audio answer: $e');
       await stopWebRtcAudio(answer.senderIp);
     }
   }
@@ -2622,17 +2629,17 @@ class DeviceDiscoveryService {
     double? width,
     double? height,
   }) async {
-    print('\n📡 [Discovery] sendScreenMirrorRequest called');
-    print('📡 [Discovery]   targetIp: $targetIp');
-    print('📡 [Discovery]   streamUrl: $streamUrl');
-    print('📡 [Discovery]   _sockets count: ${_sockets.length}');
-    print('📡 [Discovery]   _myDeviceId: $_myDeviceId');
-    print('📡 [Discovery]   _myDeviceName: $_myDeviceName');
-    print('📡 [Discovery]   DISCOVERY_PORT: $DISCOVERY_PORT');
+    // print('\n📡 [Discovery] sendScreenMirrorRequest called');
+    // print('📡 [Discovery]   targetIp: $targetIp');
+    // print('📡 [Discovery]   streamUrl: $streamUrl');
+    // print('📡 [Discovery]   _sockets count: ${_sockets.length}');
+    // print('📡 [Discovery]   _myDeviceId: $_myDeviceId');
+    // print('📡 [Discovery]   _myDeviceName: $_myDeviceName');
+    // print('📡 [Discovery]   DISCOVERY_PORT: $DISCOVERY_PORT');
     if (_sockets.isEmpty) {
-      print(
-        '❌ [Discovery] sendScreenMirrorRequest ABORTED - no sockets available!',
-      );
+      // print(
+      // '❌ [Discovery] sendScreenMirrorRequest ABORTED - no sockets available!',
+      // );
       return;
     }
     try {
@@ -2646,9 +2653,9 @@ class DeviceDiscoveryService {
         'timestamp': DateTime.now().millisecondsSinceEpoch,
       };
       final message = jsonEncode(payload);
-      print(
-        '📡 [Discovery] Encoded message (${message.length} bytes): $message',
-      );
+      // print(
+      // '📡 [Discovery] Encoded message (${message.length} bytes): $message',
+      // );
       final data = utf8.encode(message);
       // Send 3 times with short delays for UDP reliability
       int totalSent = 0;
@@ -2658,23 +2665,23 @@ class DeviceDiscoveryService {
           try {
             _sockets[i].send(data, InternetAddress(targetIp), DISCOVERY_PORT);
             totalSent++;
-            print(
-              '📡 [Discovery]   Attempt $attempt, socket $i -> sent to $targetIp:$DISCOVERY_PORT ✅',
-            );
+            // print(
+            // '📡 [Discovery]   Attempt $attempt, socket $i -> sent to $targetIp:$DISCOVERY_PORT ✅',
+            // );
           } catch (e) {
             totalFailed++;
-            print('📡 [Discovery]   Attempt $attempt, socket $i -> FAILED: $e');
+            // print('📡 [Discovery]   Attempt $attempt, socket $i -> FAILED: $e');
           }
         }
         if (attempt < 2) {
           await Future.delayed(const Duration(milliseconds: 100));
         }
       }
-      print(
-        '📡 [Discovery] sendScreenMirrorRequest DONE: $totalSent sent, $totalFailed failed',
-      );
+      // print(
+      // '📡 [Discovery] sendScreenMirrorRequest DONE: $totalSent sent, $totalFailed failed',
+      // );
     } catch (e) {
-      print('❌ [Discovery] sendScreenMirrorRequest EXCEPTION: $e');
+      // print('❌ [Discovery] sendScreenMirrorRequest EXCEPTION: $e');
     }
   }
 
@@ -2682,26 +2689,26 @@ class DeviceDiscoveryService {
   final Set<String> _recentScreenMirrorIds = {};
 
   void _handleScreenMirror(Map<String, dynamic> data, String senderIp) {
-    print('\n📺 [Discovery] _handleScreenMirror called from $senderIp');
-    print('📺 [Discovery]   Full data: $data');
+    // print('\n📺 [Discovery] _handleScreenMirror called from $senderIp');
+    // print('📺 [Discovery]   Full data: $data');
     final streamUrl = data['streamUrl'] as String?;
     final timestamp = data['timestamp'] as int?;
     final deviceId = data['deviceId'] as String?;
     final senderName = data['deviceName'] as String?;
-    print('📺 [Discovery]   streamUrl: $streamUrl');
-    print('📺 [Discovery]   timestamp: $timestamp');
-    print('📺 [Discovery]   deviceId: $deviceId');
-    print('📺 [Discovery]   senderName: $senderName');
+    // print('📺 [Discovery]   streamUrl: $streamUrl');
+    // print('📺 [Discovery]   timestamp: $timestamp');
+    // print('📺 [Discovery]   deviceId: $deviceId');
+    // print('📺 [Discovery]   senderName: $senderName');
 
     if (streamUrl != null && streamUrl.isNotEmpty) {
       // Deduplication using a set (handles multiple senders correctly)
       final messageId = '${deviceId}_$timestamp';
-      print('📺 [Discovery]   messageId for dedup: $messageId');
-      print('📺 [Discovery]   existing dedup IDs: $_recentScreenMirrorIds');
+      // print('📺 [Discovery]   messageId for dedup: $messageId');
+      // print('📺 [Discovery]   existing dedup IDs: $_recentScreenMirrorIds');
       if (_recentScreenMirrorIds.contains(messageId)) {
-        print(
-          '⏭️ [Discovery] Skipping DUPLICATE screen mirror message (messageId=$messageId)',
-        );
+        // print(
+        // '⏭️ [Discovery] Skipping DUPLICATE screen mirror message (messageId=$messageId)',
+        // );
         return;
       }
       _recentScreenMirrorIds.add(messageId);
@@ -2710,21 +2717,21 @@ class DeviceDiscoveryService {
         _recentScreenMirrorIds.remove(_recentScreenMirrorIds.first);
       }
 
-      print(
-        '📺 [Discovery] ✅ NEW screen mirror request: $streamUrl from $senderName ($senderIp)',
-      );
+      // print(
+      // '📺 [Discovery] ✅ NEW screen mirror request: $streamUrl from $senderName ($senderIp)',
+      // );
 
       String deviceName = senderName ?? 'Unknown Device';
       if (deviceId != null && _discoveredDevices.containsKey(deviceId)) {
         deviceName = _discoveredDevices[deviceId]!.deviceName;
-        print(
-          '📺 [Discovery]   Resolved device name from discovered devices: $deviceName',
-        );
+        // print(
+        // '📺 [Discovery]   Resolved device name from discovered devices: $deviceName',
+        // );
       }
 
-      print(
-        '📺 [Discovery]   _screenMirrorRequestController.isClosed: ${_screenMirrorRequestController.isClosed}',
-      );
+      // print(
+      // '📺 [Discovery]   _screenMirrorRequestController.isClosed: ${_screenMirrorRequestController.isClosed}',
+      // );
       if (!_screenMirrorRequestController.isClosed) {
         final request = ScreenMirrorRequest(
           deviceId: deviceId ?? 'unknown',
@@ -2735,22 +2742,22 @@ class DeviceDiscoveryService {
           width: (data['width'] as num?)?.toDouble(),
           height: (data['height'] as num?)?.toDouble(),
         );
-        print(
-          '📺 [Discovery]   Adding ScreenMirrorRequest to stream: deviceName=$deviceName, streamUrl=$streamUrl',
-        );
+        // print(
+        // '📺 [Discovery]   Adding ScreenMirrorRequest to stream: deviceName=$deviceName, streamUrl=$streamUrl',
+        // );
         _screenMirrorRequestController.add(request);
-        print(
-          '📺 [Discovery] ✅ Screen mirror request ADDED to stream successfully',
-        );
+        // print(
+        // '📺 [Discovery] ✅ Screen mirror request ADDED to stream successfully',
+        // );
       } else {
-        print(
-          '❌ [Discovery] _screenMirrorRequestController is CLOSED! Cannot add request.',
-        );
+        // print(
+        // '❌ [Discovery] _screenMirrorRequestController is CLOSED! Cannot add request.',
+        // );
       }
     } else {
-      print(
-        '❌ [Discovery] _handleScreenMirror: streamUrl is null or empty! Ignoring.',
-      );
+      // print(
+      // '❌ [Discovery] _handleScreenMirror: streamUrl is null or empty! Ignoring.',
+      // );
     }
   }
 
@@ -2846,27 +2853,27 @@ class DeviceDiscoveryService {
 
   void _checkServiceHealth() {
     if (!_isRunning) {
-      print('⚠️  Service should be running but _isRunning is false');
+      // print('⚠️  Service should be running but _isRunning is false');
       return;
     }
 
     if (_sockets.isEmpty) {
-      print('⚠️  Service health check failed: no sockets available');
+      // print('⚠️  Service health check failed: no sockets available');
       _handleSocketError('No sockets available during health check');
       return;
     }
 
     if (_broadcastTimer == null || !_broadcastTimer!.isActive) {
-      print('⚠️  Service health check failed: broadcast timer not active');
+      // print('⚠️  Service health check failed: broadcast timer not active');
       _startBroadcasting();
     }
 
     if (_cleanupTimer == null || !_cleanupTimer!.isActive) {
-      print('⚠️  Service health check failed: cleanup timer not active');
+      // print('⚠️  Service health check failed: cleanup timer not active');
       _startCleanupTimer();
     }
 
-    print('✅ Service health check passed');
+    // print('✅ Service health check passed');
   }
 
   void _cleanupStaleDevices() {
@@ -2885,14 +2892,14 @@ class DeviceDiscoveryService {
     if (staleDevices.isNotEmpty) {
       staleDevices.forEach(_discoveredDevices.remove);
       _notifyListeners();
-      print('🧹 Cleaned up ${staleDevices.length} stale devices');
+      // print('🧹 Cleaned up ${staleDevices.length} stale devices');
     }
   }
 
   void _handleSocketError(dynamic error) {
-    print('⚠️  Socket error detected: $error');
+    // print('⚠️  Socket error detected: $error');
     if (_isRestarting) {
-      print('⏭️  Restart already in progress, skipping...');
+      // print('⏭️  Restart already in progress, skipping...');
       return;
     }
 
@@ -2900,13 +2907,13 @@ class DeviceDiscoveryService {
     // Try to recover by restarting the service
     Future.delayed(Duration(seconds: 2), () async {
       if (_isRunning) {
-        print('🔄 Attempting to recover from socket error...');
+        // print('🔄 Attempting to recover from socket error...');
         try {
           await stop();
           await start();
-          print('✅ Recovery successful');
+          // print('✅ Recovery successful');
         } catch (e) {
-          print('❌ Recovery failed: $e');
+          // print('❌ Recovery failed: $e');
         } finally {
           _isRestarting = false;
         }
@@ -2925,13 +2932,13 @@ class DeviceDiscoveryService {
     // Rate-limit restarts during playback or high-load
     if (_lastRestartAttempt != null &&
         DateTime.now().difference(_lastRestartAttempt!).inSeconds < 10) {
-      print('⏭️  Discovery restart rate-limited (cooldown active)');
+      // print('⏭️  Discovery restart rate-limited (cooldown active)');
       return;
     }
 
-    print('⚠️  Socket closed unexpectedly');
+    // print('⚠️  Socket closed unexpectedly');
     if (_isRestarting) {
-      print('⏭️  Restart already in progress, skipping...');
+      // print('⏭️  Restart already in progress, skipping...');
       return;
     }
 
@@ -2941,14 +2948,14 @@ class DeviceDiscoveryService {
     Future.delayed(Duration(seconds: 5), () async {
       if (_isRunning && !_isStopping) {
         if (!_isPaused) {
-          print('🔄 Attempting to restart after socket closure...');
+          // print('🔄 Attempting to restart after socket closure...');
         }
         try {
           await stop();
           await start();
-          if (!_isPaused) print('✅ Restart successful');
+          // if (!_isPaused) // print('✅ Restart successful');
         } catch (e) {
-          if (!_isPaused) print('❌ Restart failed: $e');
+          // if (!_isPaused) // print('❌ Restart failed: $e');
         } finally {
           _isRestarting = false;
         }
@@ -3019,7 +3026,7 @@ class DeviceDiscoveryService {
       _sockets.clear();
       _networkInterfaces.clear();
     } catch (e) {
-      print('Error closing sockets: $e');
+      // print('Error closing sockets: $e');
     }
 
     // Explicitly kill any remaining audio foreground bits
@@ -3038,7 +3045,7 @@ class DeviceDiscoveryService {
     _lastCastTrackSignature.clear();
     _notifyListeners();
 
-    print('Device discovery stopped');
+    // print('Device discovery stopped');
     _isStopping = false; // Reset for future start()
   }
 
@@ -3060,29 +3067,29 @@ class DeviceDiscoveryService {
 
       // Check if multicast lock is already held
       final isHeld = await channel.invokeMethod<bool>('checkMulticastLock');
-      print(
-        '🔒 Multicast lock status: ${isHeld == true ? "HELD ✅" : "NOT HELD ❌"}',
-      );
+      // print(
+      // '🔒 Multicast lock status: ${isHeld == true ? "HELD ✅" : "NOT HELD ❌"}',
+      // );
 
       if (isHeld != true) {
         // Try to acquire multicast lock
-        print('🔓 Attempting to acquire multicast lock...');
+        // print('🔓 Attempting to acquire multicast lock...');
         final success = await channel.invokeMethod<bool>(
           'acquireMulticastLock',
         );
         if (success == true) {
-          print('✅ Multicast lock ACQUIRED successfully');
+          // print('✅ Multicast lock ACQUIRED successfully');
         } else {
-          print('❌ Failed to acquire multicast lock');
+          // print('❌ Failed to acquire multicast lock');
         }
       } else {
-        print('✅ Multicast lock already held');
+        // print('✅ Multicast lock already held');
       }
     } catch (e) {
-      print('❌ Error checking/acquiring multicast lock: $e');
-      print(
-        '⚠️  WARNING: Multicast reception may not work (hotspot mode affected)',
-      );
+      // print('❌ Error checking/acquiring multicast lock: $e');
+      // print(
+      // '⚠️  WARNING: Multicast reception may not work (hotspot mode affected)',
+      // );
     }
   }
 
@@ -3098,7 +3105,7 @@ class DeviceDiscoveryService {
     ServerSocket.bind(InternetAddress.anyIPv4, tcpControlPort, shared: true)
         .then((server) {
           _tcpControlServer = server;
-          print('✅ TCP cast control server listening on port $tcpControlPort');
+          // print('✅ TCP cast control server listening on port $tcpControlPort');
           server.listen(
             (Socket client) {
               final buffer = StringBuffer();
@@ -3113,7 +3120,7 @@ class DeviceDiscoveryService {
                     final type = parsed['type'] as String?;
                     final senderIp = client.remoteAddress.address;
                     if (type == 'ZAPSHARE_CAST_CONTROL') {
-                      print('📡 [TCP] Received cast control from $senderIp');
+                      // print('📡 [TCP] Received cast control from $senderIp');
                       _handleCastControl(parsed, senderIp);
                     } else if (type == 'ZAPSHARE_CAST_STATUS') {
                       _handleCastStatus(parsed, senderIp);
@@ -3128,13 +3135,13 @@ class DeviceDiscoveryService {
               );
             },
             onError: (e) {
-              print('⚠️  TCP control server error: $e');
+              // print('⚠️  TCP control server error: $e');
             },
             cancelOnError: false,
           );
         })
         .catchError((e) {
-          print('⚠️  Could not start TCP control server: $e');
+          // print('⚠️  Could not start TCP control server: $e');
         });
   }
 
@@ -3188,7 +3195,7 @@ class DeviceDiscoveryService {
   DateTime? _lastCastStatusTime;
 
   void startCastSession(String targetIp, String targetName, String fileName) {
-    print('🎬 [DiscoveryService] Starting persistent cast session: targetIp=$targetIp name=$targetName file=$fileName');
+    // print('🎬 [DiscoveryService] Starting persistent cast session: targetIp=$targetIp name=$targetName file=$fileName');
     activeCastTargetIp = targetIp;
     activeCastTargetName = targetName;
     activeCastFileName = fileName;
@@ -3233,7 +3240,7 @@ class DeviceDiscoveryService {
           'isPlaying': false,
         });
       } catch (e) {
-        print('⚠️ Foreground service start warning: $e');
+        // print('⚠️ Foreground service start warning: $e');
       }
     }
 
@@ -3243,7 +3250,7 @@ class DeviceDiscoveryService {
       final now = DateTime.now();
       if (_lastCastStatusTime != null &&
           now.difference(_lastCastStatusTime!) > const Duration(seconds: 30)) {
-        print('⏳ [DiscoveryService] Lost connection to cast receiver (30s timeout), stopping session');
+        // print('⏳ [DiscoveryService] Lost connection to cast receiver (30s timeout), stopping session');
         stopCastSession();
       }
     });
@@ -3251,7 +3258,7 @@ class DeviceDiscoveryService {
 
   void stopCastSession() {
     if (activeCastTargetIp == null) return;
-    print('🛑 [DiscoveryService] Stopping persistent cast session');
+    // print('🛑 [DiscoveryService] Stopping persistent cast session');
     _castStatusSubPersistent?.cancel();
     _castStatusSubPersistent = null;
     _castWatchdogTimer?.cancel();

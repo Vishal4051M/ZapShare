@@ -50,6 +50,8 @@ import 'package:zap_share/Screens/android/AndroidCastScreen.dart';
 
 const Color kAccentYellow = Color(0xFFFFD600);
 
+final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
+
 @pragma('vm:entry-point')
 Future<void> zapShareBackgroundMessageHandler(RemoteMessage message) async {
   // Android displays FCM notification payloads while the app is closed. The
@@ -1524,6 +1526,7 @@ class _DataRushAppState extends State<DataRushApp>
     }
     return MaterialApp(
       navigatorKey: navigatorKey,
+      navigatorObservers: [routeObserver],
       theme: ThemeData(
         brightness: Brightness.dark,
         primaryColor: const Color(0xFFFFD600),
